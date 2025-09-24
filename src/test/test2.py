@@ -3,8 +3,8 @@ import numpy as np
 from ultralytics import YOLO
 import torch
 
-video_path = "input.mp4" 
-model_path = "yolov5su.pt"    
+video_path = "data/input.mp4" 
+model_path = "yolov8n.pt"    
 resize_width = 640               
 resize_height = 360             
 skip_frames = 0                
@@ -20,7 +20,7 @@ except Exception as e:
     print("CUDA not available, using CPU")
     model.to("cpu")
 
-cap = cv2.VideoCapture(video_path)
+cap = cv2.VideoCapture(0)
 cv2.namedWindow("YOLO Counter", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("YOLO Counter", 960, 540)
 

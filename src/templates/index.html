@@ -1,0 +1,1346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>People Counting Dashboard</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      color: #333;
+    }
+
+    .dashboard { display: grid; grid-template-columns: 350px 1fr; min-height: 100vh; }
+
+    .sidebar {
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(10px);
+      padding: 20px; overflow-y: auto; box-shadow: 2px 0 20px rgba(0,0,0,0.1);
+    }
+    .sidebar h1 { color: #4a5568; margin-bottom: 20px; font-size: 22px; text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
+
+    .control-section { margin-bottom: 18px; background: #fff; padding: 16px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.08); }
+    .control-section h3 { color: #2d3748; margin-bottom: 12px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; margin-bottom: 6px; font-weight: 600; color: #4a5568; font-size: 13px; }
+    .form-control { width: 100%; padding: 9px 11px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 14px; transition: border-color .2s ease; }
+    .form-control:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102,126,234,0.1); }
+
+    .inline { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
+    .range-row { display: grid; grid-template-columns: 1fr 60px; gap: 8px; align-items: center; }
+
+    .btn { padding: 10px 14px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: transform .15s ease, filter .15s ease; display: inline-flex; align-items: center; gap: 8px; text-decoration: none; }
+    .btn:hover { transform: translateY(-1px); filter: brightness(1.02); }
+    .btn:active { transform: translateY(0); }
+    .btn-primary { background: #667eea; color: #fff; }
+    .btn-success { background: #48bb78; color: #fff; }
+    .btn-warning { background: #ed8936; color: #fff; }
+    .btn-info { background: #38b2ac; color: #fff; }
+    .btn-danger { background: #f56565; color: #fff; }
+    .btn-secondary { background: #4a5568; color: #fff; }
+    .btn-block { width: 100%; justify-content: center; }
+
+    .main-content { padding: 20px; overflow-y: auto; }
+
+    .cameras-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 20px; }
+
+    .camera-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-radius: 16px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,0.1); transition: transform .2s ease; }
+    .camera-card:hover { transform: translateY(-2px); }
+    .camera-header { background: linear-gradient(45deg, #667eea, #764ba2); color: #fff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }
+    .camera-title { font-size: 17px; font-weight: 700; display:flex; align-items:center; gap:10px; }
+    .camera-status { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .camera-status.online { background: #48bb78; }
+    .camera-status.offline { background: #f56565; }
+
+    .camera-body { padding: 14px; }
+
+    .camera-canvas-container { position: relative; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.12); margin-bottom: 14px; }
+    .video-container { position: relative; width: 100%; }
+    .camera-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; pointer-events: auto; z-index: 2; }
+    .canvas-overlay { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.72); color: #fff; padding: 8px 10px; border-radius: 6px; font-size: 12px; pointer-events: none; max-width: 70%; }
+
+    .camera-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap: 10px; }
+    .stat-card { background: #f7fafc; padding: 12px; border-radius: 10px; text-align: center; border: 2px solid #e2e8f0; }
+    .stat-value { font-size: 22px; font-weight: 800; color: #2d3748; margin-bottom: 4px; }
+    .stat-label { font-size: 11px; color: #718096; text-transform: uppercase; font-weight: 800; letter-spacing: .3px; }
+
+    .input-group { margin-bottom: 12px; transition: all .2s ease; }
+    .hidden { display: none !important; }
+
+    .debug-info { background: #e7f3ff; border: 1px solid #b3d9ff; padding: 8px; margin-top: 8px; border-radius: 6px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; color: #005cbd; }
+
+    @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+    .loading { display:inline-block; width:20px; height:20px; border:3px solid #f3f3f3; border-top:3px solid #667eea; border-radius:50%; animation:spin 1s linear infinite; }
+
+    @media (max-width: 1024px) {
+      .dashboard { grid-template-columns: 1fr; }
+      .sidebar { order: 2; }
+      .main-content { order: 1; }
+    }
+    @media (max-width: 768px) {
+      .cameras-grid { grid-template-columns: 1fr; }
+      .camera-controls { grid-template-columns: 1fr; }
+    }
+
+    /* Collapsible Section Styles */
+    .collapsible-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      padding: 4px 0;
+      transition: all 0.2s ease;
+    }
+
+    .collapsible-header:hover {
+      color: #667eea;
+    }
+
+    .collapsible-header .expand-icon {
+      transition: transform 0.3s ease;
+      font-size: 14px;
+      color: #a0aec0;
+    }
+
+    .collapsible-header.expanded .expand-icon {
+      transform: rotate(180deg);
+      color: #667eea;
+    }
+
+    .collapsible-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+      padding: 0;
+    }
+
+    .collapsible-content.expanded {
+      max-height: 1000px;
+      padding: 15px 0;
+    }
+
+    @keyframes slideDown {
+      from { max-height: 0; }
+      to { max-height: 1000px; }
+    }
+
+    @keyframes slideUp {
+      from { max-height: 1000px; }
+      to { max-height: 0; }
+    }
+
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.7; }
+      100% { opacity: 1; }
+    }
+
+    .task-option {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin-bottom: 8px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: #fff;
+    }
+
+    .task-option:hover {
+      border-color: #667eea;
+      background-color: #f7faff;
+      transform: translateY(-1px);
+    }
+
+    .task-option.selected {
+      border-color: #667eea;
+      background-color: #667eea;
+      color: white;
+    }
+
+    .task-icon {
+      font-size: 20px;
+      margin-right: 12px;
+      width: 30px;
+      text-align: center;
+    }
+
+    .task-info h4 {
+      margin: 0 0 3px 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .task-info p {
+      margin: 0;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <h1><i class="fas fa-video"></i> Camera Dashboard</h1>
+
+      <!-- Task Selection -->
+      <section class="control-section" aria-labelledby="task-selection-title">
+        <div class="collapsible-header" onclick="toggleTaskSelection()">
+          <h3 id="task-selection-title"><i class="fas fa-tasks"></i> Chọn Task để vẽ</h3>
+          <i class="fas fa-chevron-down expand-icon"></i>
+        </div>
+        <div id="taskSelectionContent" class="collapsible-content">
+          <div id="taskOptions">
+            <div class="task-option" onclick="selectTask('zone')" data-task="zone">
+              <div class="task-icon"><i class="fas fa-vector-square"></i></div>
+              <div class="task-info">
+                <h4>Đếm trong Zone</h4>
+                <p>Vẽ vùng và đếm số người trong vùng đó</p>
+              </div>
+            </div>
+            <div class="task-option" onclick="selectTask('line')" data-task="line">
+              <div class="task-icon"><i class="fas fa-minus"></i></div>
+              <div class="task-info">
+                <h4>Đếm In/Out qua Line</h4>
+                <p>Vẽ đường thẳng và đếm người đi vào/ra</p>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <div id="taskStatus" style="text-align: center; margin-bottom: 10px; font-size: 12px; color: #6c757d;">
+              Chọn một task ở trên
+            </div>
+            <button id="confirmTaskBtn" class="btn btn-primary btn-block" onclick="confirmTaskSelection()" disabled>
+              <i class="fas fa-play"></i> <span id="confirmBtnText">Chọn task trước</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Add Camera -->
+      <section class="control-section" aria-labelledby="add-camera-title">
+        <div class="collapsible-header" onclick="toggleAddCamera()">
+          <h3 id="add-camera-title"><i class="fas fa-plus-circle"></i> Thêm Camera Mới</h3>
+          <i class="fas fa-chevron-down expand-icon"></i>
+        </div>
+        <div id="addCameraContent" class="collapsible-content">
+          <div class="form-group">
+            <label for="inputType">Loại Input</label>
+            <select id="inputType" class="form-control" onchange="toggleInputFields()">
+              <option value="rtsp">RTSP Stream</option>
+              <option value="file">Video File</option>
+              <option value="webcam">Webcam</option>
+            </select>
+          </div>
+
+          <div class="input-group" id="rtspGroup">
+            <label for="rtspUrl">RTSP URL</label>
+            <input id="rtspUrl" type="text" class="form-control" placeholder="rtsp://username:password@ip:port/stream" />
+          </div>
+
+          <div class="input-group hidden" id="fileGroup">
+            <label for="videoFile">Video File</label>
+            <input id="videoFile" type="file" class="form-control" accept="video/*" />
+            <div class="debug-info">File input ready for selection</div>
+          </div>
+
+        <div class="input-group hidden" id="webcamGroup">
+          <label for="webcamId">Webcam ID</label>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input id="webcamId" type="number" class="form-control" value="0" min="0" max="10" style="flex: 1;" />
+            <button type="button" class="btn btn-info" onclick="testWebcam()" style="white-space: nowrap;">
+              <i class="fas fa-search"></i> Test
+            </button>
+          </div>
+          <div class="debug-info">
+            <strong>💡 Gợi ý:</strong> Click "Test" để kiểm tra webcam trước khi thêm
+            <br><small>Đóng các ứng dụng khác đang dùng webcam (Skype, Teams, etc.)</small>
+          </div>
+        </div>          <div class="form-group">
+            <label for="modelSelect">YOLO Model</label>
+            <select id="modelSelect" class="form-control">
+              <option value="yolov8n.pt">YOLOv8 Nano (Fast)</option>
+              <option value="yolov8s.pt">YOLOv8 Small</option>
+              <option value="yolov8m.pt">YOLOv8 Medium</option>
+              <option value="yolov8l.pt">YOLOv8 Large</option>
+              <option value="yolov8x.pt">YOLOv8 XLarge (Accurate)</option>
+            </select>
+          </div>
+
+          <!-- Detection settings -->
+          <div class="control-section" style="margin:10px 0; padding:12px;">
+            <h3 style="font-size:14px"><i class="fas fa-sliders-h"></i> Detection Settings</h3>
+            <div class="form-group">
+              <label for="confThresh">Confidence (0.0 - 1.0)</label>
+              <input id="confThresh" type="number" min="0" max="1" step="0.01" value="0.5" class="form-control" />
+            </div>
+            <div class="form-group">
+              <label for="iouThresh">IoU (NMS) (0.0 - 1.0)</label>
+              <input id="iouThresh" type="number" min="0" max="1" step="0.01" value="0.45" class="form-control" />
+            </div>
+            <div class="form-group inline">
+              <label for="maxDet">Max Detections</label>
+              <input id="maxDet" type="number" class="form-control" min="1" max="3000" value="300" />
+            </div>
+          </div>
+
+          <button class="btn btn-primary btn-block" onclick="addCamera()">
+            <i class="fas fa-plus"></i> Thêm Camera
+          </button>
+        </div>
+        <div id="debugStatus" class="debug-info">Status: Ready to add camera</div>
+      </section>
+
+      <!-- System Info -->
+      <section class="control-section" aria-labelledby="system-status-title">
+        <h3 id="system-status-title"><i class="fas fa-info-circle"></i> System Status</h3>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div id="totalCameras" class="stat-value">0</div>
+            <div class="stat-label">Cameras</div>
+          </div>
+          <div class="stat-card">
+            <div id="totalPeople" class="stat-value">0</div>
+            <div class="stat-label">People</div>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <div id="camerasGrid" class="cameras-grid"></div>
+    </main>
+  </div>
+
+  <script>
+    // =====================
+    // GLOBAL STATE
+    // =====================
+    const cameras = {};          // { [camId]: true }
+    const zones = {};            // { [camId]: [ [x,y], ... ] }
+    const zonesClosed = {};      // { [camId]: boolean }
+    const camSettings = {};      // per-camera detection settings
+    const cameraTasks = {};      // { [camId]: 'zone'|'line'|null } - track current task for each camera
+    
+    // Task selection state
+    let selectedTask = null;
+    let selectedCameraForTask = null;
+
+    // =====================
+    // INIT
+    // =====================
+    document.addEventListener('DOMContentLoaded', () => {
+      updateDebugStatus('Page loaded successfully');
+      refreshCameraList();
+      setInterval(updateStats, 2000);
+    });
+
+    // =====================
+    // COLLAPSIBLE MANAGEMENT
+    // =====================
+    function toggleTaskSelection() {
+      const content = document.getElementById('taskSelectionContent');
+      const header = content.previousElementSibling;
+      
+      if (content.classList.contains('expanded')) {
+        content.classList.remove('expanded');
+        header.classList.remove('expanded');
+      } else {
+        // Check if any cameras exist
+        const cameraIds = Object.keys(cameras);
+        if (cameraIds.length === 0) {
+          alert('❌ Vui lòng thêm camera trước khi chọn task!');
+          return;
+        }
+        
+        content.classList.add('expanded');
+        header.classList.add('expanded');
+        
+        // Reset selection and UI
+        selectedTask = null;
+        const confirmBtn = document.getElementById('confirmTaskBtn');
+        const confirmBtnText = document.getElementById('confirmBtnText');
+        const taskStatus = document.getElementById('taskStatus');
+        
+        confirmBtn.disabled = true;
+        confirmBtn.className = 'btn btn-primary btn-block';
+        confirmBtnText.textContent = 'Chọn task trước';
+        taskStatus.innerHTML = '<i class="fas fa-info-circle"></i> Chọn một task ở trên';
+        
+        document.querySelectorAll('.task-option').forEach(opt => {
+          opt.classList.remove('selected');
+        });
+      }
+    }
+
+    function toggleAddCamera() {
+      const content = document.getElementById('addCameraContent');
+      const header = content.previousElementSibling;
+      
+      if (content.classList.contains('expanded')) {
+        content.classList.remove('expanded');
+        header.classList.remove('expanded');
+      } else {
+        content.classList.add('expanded');
+        header.classList.add('expanded');
+        toggleInputFields(); // Initialize input fields
+      }
+    }
+
+    function selectTask(taskType) {
+      selectedTask = taskType;
+      
+      // Update UI selection
+      document.querySelectorAll('.task-option').forEach(opt => {
+        opt.classList.remove('selected');
+      });
+      document.querySelector(`[data-task="${taskType}"]`).classList.add('selected');
+      
+      // Update button and status
+      const confirmBtn = document.getElementById('confirmTaskBtn');
+      const confirmBtnText = document.getElementById('confirmBtnText');
+      const taskStatus = document.getElementById('taskStatus');
+      
+      confirmBtn.disabled = false;
+      confirmBtn.className = 'btn btn-success btn-block';
+      confirmBtnText.textContent = `Bắt đầu ${taskType.toUpperCase()}`;
+      taskStatus.innerHTML = `<i class="fas fa-check-circle" style="color: #28a745;"></i> ${taskType.toUpperCase()} task đã chọn`;
+      
+      // Auto-start after short delay for better UX
+      setTimeout(() => {
+        confirmTaskSelection();
+      }, 800); // Slightly longer delay to show selection feedback
+    }
+
+    function confirmTaskSelection() {
+      if (!selectedTask) return;
+      
+      // Find cameras that don't have this task yet
+      const availableCameras = [];
+      for (const camId in cameras) {
+        if (!cameraTasks[camId] || cameraTasks[camId] !== selectedTask) {
+          availableCameras.push(camId);
+        }
+      }
+      
+      if (availableCameras.length === 0) {
+        alert(`❌ Tất cả camera đã có task "${selectedTask.toUpperCase()}" rồi!\n\n💡 Giải pháp:\n• Thêm camera mới, hoặc\n• Clear task hiện tại của camera có sẵn`);
+        
+        // Reset selection and UI
+        document.querySelectorAll('.task-option').forEach(opt => {
+          opt.classList.remove('selected');
+        });
+        
+        const confirmBtn = document.getElementById('confirmTaskBtn');
+        const confirmBtnText = document.getElementById('confirmBtnText');
+        const taskStatus = document.getElementById('taskStatus');
+        
+        confirmBtn.disabled = true;
+        confirmBtn.className = 'btn btn-primary btn-block';
+        confirmBtnText.textContent = 'Chọn task trước';
+        taskStatus.innerHTML = '<i class="fas fa-exclamation-triangle" style="color: #ffc107;"></i> Không có camera khả dụng';
+        
+        selectedTask = null;
+        return;
+      }
+      
+      // If only one camera available, auto-select it immediately
+      if (availableCameras.length === 1) {
+        selectedCameraForTask = availableCameras[0];
+        startDrawingTask();
+      } else {
+        // Create a nicer camera selection UI
+        showCameraSelectionDialog(availableCameras);
+      }
+    }
+
+    function showCameraSelectionDialog(availableCameras) {
+      const cameraOptions = availableCameras.map(id => {
+        const taskStatus = cameraTasks[id] ? ` (có ${cameraTasks[id]})` : ' (chưa có task)';
+        return `${id}: Camera ${id}${taskStatus}`;
+      }).join('\n');
+      
+      const cameraChoice = prompt(`🎯 Chọn camera để vẽ ${selectedTask.toUpperCase()}:\n\n${cameraOptions}\n\n📝 Nhập ID camera:`, availableCameras[0]);
+      
+      if (cameraChoice && availableCameras.includes(cameraChoice)) {
+        selectedCameraForTask = cameraChoice;
+        startDrawingTask();
+      } else if (cameraChoice !== null) {
+        alert('❌ ID camera không hợp lệ!');
+        showCameraSelectionDialog(availableCameras); // Retry
+      }
+    }
+
+    function startDrawingTask() {
+      if (!selectedTask || !selectedCameraForTask) return;
+      
+      const camId = selectedCameraForTask;
+      
+      // Show loading state
+      updateDebugStatus(`🎯 Bắt đầu ${selectedTask.toUpperCase()} task cho Camera ${camId}...`);
+      
+      // Mark this camera as having this task type
+      cameraTasks[camId] = selectedTask;
+      
+      // Clear any existing zone
+      clearZone(camId);
+      
+      // Update instructions based on task type with better messaging
+      const instructionsEl = document.getElementById(`instructions-${camId}`);
+      if (instructionsEl) {
+        if (selectedTask === 'zone') {
+          instructionsEl.innerHTML = `
+            <div style="background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+              <strong><i class="fas fa-vector-square"></i> ZONE TASK ACTIVE</strong>
+            </div>
+            <div style="color: #667eea; font-weight: 600;">
+              🖱️ Click để vẽ vùng đếm người (cần ≥3 điểm)
+            </div>
+          `;
+        } else if (selectedTask === 'line') {
+          instructionsEl.innerHTML = `
+            <div style="background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+              <strong><i class="fas fa-minus"></i> LINE TASK ACTIVE</strong>
+            </div>
+            <div style="color: #667eea; font-weight: 600;">
+              🖱️ Click để vẽ đường thẳng đếm in/out (cần đúng 2 điểm)
+            </div>
+          `;
+        }
+      }
+      
+      // Collapse task selection smoothly
+      const taskContent = document.getElementById('taskSelectionContent');
+      const taskHeader = taskContent.previousElementSibling;
+      taskContent.classList.remove('expanded');
+      taskHeader.classList.remove('expanded');
+      
+      // Reset task selection UI
+      document.querySelectorAll('.task-option').forEach(opt => {
+        opt.classList.remove('selected');
+      });
+      selectedTask = null;
+      selectedCameraForTask = null;
+      
+      // Scroll to the selected camera with better timing
+      setTimeout(() => {
+        const cameraCard = document.getElementById(`camera-${camId}`);
+        if (cameraCard) {
+          cameraCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          
+          // Enhanced highlight effect
+          cameraCard.style.transition = 'all 0.3s ease';
+          cameraCard.style.boxShadow = '0 0 30px #667eea, 0 0 60px rgba(102, 126, 234, 0.3)';
+          cameraCard.style.transform = 'scale(1.02)';
+          
+          setTimeout(() => {
+            cameraCard.style.boxShadow = '';
+            cameraCard.style.transform = '';
+            updateDebugStatus(`✅ ${selectedTask || 'Task'} ready cho Camera ${camId}. Bắt đầu vẽ!`);
+          }, 2000);
+        }
+      }, 500);
+    }
+
+    function toggleInputFields() {
+      const inputType = document.getElementById('inputType').value;
+      const rtspGroup = document.getElementById('rtspGroup');
+      const fileGroup = document.getElementById('fileGroup');
+      const webcamGroup = document.getElementById('webcamGroup');
+
+      rtspGroup.classList.add('hidden');
+      fileGroup.classList.add('hidden');
+      webcamGroup.classList.add('hidden');
+
+      if (inputType === 'rtsp') { 
+        rtspGroup.classList.remove('hidden'); 
+        updateDebugStatus('RTSP input selected'); 
+      } else if (inputType === 'file') { 
+        fileGroup.classList.remove('hidden'); 
+        updateDebugStatus('Video file input selected - choose a file'); 
+      } else if (inputType === 'webcam') { 
+        webcamGroup.classList.remove('hidden'); 
+        updateDebugStatus('Webcam input selected'); 
+      }
+    }
+
+    async function testWebcam() {
+      const webcamId = document.getElementById('webcamId').value;
+      const testBtn = event.target;
+      const originalText = testBtn.innerHTML;
+      
+      try {
+        testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...';
+        testBtn.disabled = true;
+        
+        // Use MediaDevices API to test webcam availability
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          const constraints = { 
+            video: { 
+              deviceId: webcamId ? { exact: webcamId } : undefined 
+            } 
+          };
+          
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          
+          // Stop the stream immediately after testing
+          stream.getTracks().forEach(track => track.stop());
+          
+          alert(`✅ Webcam ${webcamId} hoạt động bình thường!\nBạn có thể thêm camera này.`);
+          updateDebugStatus(`✅ Webcam ${webcamId} test successful`);
+          
+        } else {
+          throw new Error('Trình duyệt không hỗ trợ webcam API');
+        }
+        
+      } catch (err) {
+        console.error('Webcam test error:', err);
+        
+        let errorMsg = '❌ Không thể truy cập webcam!\n\n';
+        
+        if (err.name === 'NotFoundError') {
+          errorMsg += 'Webcam ID không tồn tại. Thử ID khác (0, 1, 2...)';
+        } else if (err.name === 'NotAllowedError') {
+          errorMsg += 'Truy cập webcam bị từ chối.\n• Cho phép truy cập webcam trong trình duyệt\n• Kiểm tra quyền riêng tư';
+        } else if (err.name === 'NotReadableError') {
+          errorMsg += 'Webcam đang được sử dụng bởi ứng dụng khác.\n• Đóng Skype, Teams, hoặc ứng dụng khác\n• Thử webcam ID khác';
+        } else {
+          errorMsg += `Lỗi: ${err.message}`;
+        }
+        
+        alert(errorMsg);
+        updateDebugStatus(`❌ Webcam ${webcamId} test failed: ${err.message}`);
+        
+      } finally {
+        testBtn.innerHTML = originalText;
+        testBtn.disabled = false;
+      }
+    }
+
+    async function addCamera() {
+      updateDebugStatus('Adding camera...');
+
+      const inputType = document.getElementById('inputType').value;
+      const model = document.getElementById('modelSelect').value;
+      const conf = parseFloat(document.getElementById('confThresh').value);
+      const iou = parseFloat(document.getElementById('iouThresh').value);
+      const maxDet = parseInt(document.getElementById('maxDet').value, 10);
+
+      let source = '';
+      if (inputType === 'rtsp') {
+        source = document.getElementById('rtspUrl').value.trim();
+        if (!source) { 
+          alert('❌ Vui lòng nhập RTSP URL'); 
+          updateDebugStatus('Error: RTSP URL required'); 
+          return; 
+        }
+      } else if (inputType === 'file') {
+        const fileInput = document.getElementById('videoFile');
+        if (!fileInput.files.length) { 
+          alert('❌ Vui lòng chọn video file'); 
+          updateDebugStatus('Error: Video file required'); 
+          return; 
+        }
+        source = 'data/' + fileInput.files[0].name;
+      } else if (inputType === 'webcam') {
+        source = String(document.getElementById('webcamId').value);
+        // Validate webcam ID
+        const webcamId = parseInt(source);
+        if (isNaN(webcamId) || webcamId < 0 || webcamId > 10) {
+          alert('❌ Webcam ID phải là số từ 0-10');
+          updateDebugStatus('Error: Invalid webcam ID');
+          return;
+        }
+      }
+
+      try {
+        const payload = { source, model, conf, iou, max_det: maxDet };
+        const res = await fetch('/api/camera/add', {
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        
+        if (!res.ok) {
+          // Display detailed error message from backend
+          throw new Error(data.error || 'Unknown error occurred');
+        }
+        
+        updateDebugStatus('✅ Camera added successfully');
+
+        // Clear inputs
+        document.getElementById('rtspUrl').value = '';
+        document.getElementById('videoFile').value = '';
+        document.getElementById('webcamId').value = '0';
+
+        // Collapse add camera section after successful add
+        const addCameraContent = document.getElementById('addCameraContent');
+        const addCameraHeader = addCameraContent.previousElementSibling;
+        addCameraContent.classList.remove('expanded');
+        addCameraHeader.classList.remove('expanded');
+
+        refreshCameraList();
+        
+      } catch (err) {
+        console.error('Camera add error:', err);
+        
+        // Show user-friendly error dialog
+        let errorMsg = err.message;
+        
+        // Add helpful suggestions for common errors
+        if (errorMsg.includes('Webcam') || errorMsg.includes('webcam')) {
+          errorMsg += '\n\n💡 Giải pháp:\n• Thử webcam ID khác (0, 1, 2...)\n• Đóng các ứng dụng đang dùng webcam\n• Kiểm tra kết nối webcam';
+        } else if (errorMsg.includes('RTSP') || errorMsg.includes('stream')) {
+          errorMsg += '\n\n💡 Giải pháp:\n• Kiểm tra URL và thông tin đăng nhập\n• Kiểm tra kết nối mạng\n• Thử ping camera để test kết nối';
+        } else if (errorMsg.includes('file') || errorMsg.includes('File')) {
+          errorMsg += '\n\n💡 Giải pháp:\n• Kiểm tra file có tồn tại không\n• Thử định dạng video khác (mp4, avi...)\n• Kiểm tra quyền truy cập file';
+        }
+        
+        alert(`❌ Lỗi thêm camera:\n\n${errorMsg}`);
+        updateDebugStatus(`❌ Error: ${err.message}`);
+      }
+    }
+
+    // =====================
+    // INPUT FIELD MANAGEMENT
+    // =====================
+
+
+    // =====================
+    // CAMERA MANAGEMENT
+    // =====================
+
+
+    async function refreshCameraList() {
+      try {
+        const res = await fetch('/api/camera/list');
+        if (!res.ok) throw new Error('list failed');
+        const data = await res.json();
+        updateCameraGrid(data.cameras || []);
+        updateTotalCameras((data.cameras || []).length);
+        updateDebugStatus(`Loaded ${(data.cameras || []).length} cameras`);
+      } catch (err) {
+        console.warn('Failed to refresh camera list', err);
+        updateDebugStatus('Error loading cameras');
+      }
+    }
+
+    function updateCameraGrid(ids) {
+      // Remove missing
+      for (const camId in cameras) {
+        if (!ids.includes(camId)) {
+          const el = document.getElementById(`camera-${camId}`);
+          if (el) el.remove();
+          delete cameras[camId];
+          delete zones[camId];
+          delete zonesClosed[camId];
+          delete camSettings[camId];
+          delete cameraTasks[camId]; // Clean up task tracking
+        }
+      }
+      // Add new
+      for (const camId of ids) {
+        if (!cameras[camId]) createCameraCard(camId);
+      }
+    }
+
+    // =====================
+    // CAMERA CARD
+    // =====================
+    function createCameraCard(camId) {
+      cameras[camId] = true;
+      zones[camId] = [];
+      zonesClosed[camId] = false;
+      camSettings[camId] = { conf: 0.5, iou: 0.45, max_det: 300 };
+      cameraTasks[camId] = null; // No task initially
+
+      const grid = document.getElementById('camerasGrid');
+      const card = document.createElement('div');
+      card.className = 'camera-card';
+      card.id = `camera-${camId}`;
+
+      card.innerHTML = `
+        <div class="camera-header">
+          <div class="camera-title"><i class="fas fa-camera"></i> Camera ${camId}</div>
+          <div class="camera-status online">Online</div>
+        </div>
+        <div class="camera-body">
+          <div class="camera-canvas-container">
+            <div class="video-container">
+              <img id="stream-${camId}" src="/camera/${camId}/stream" alt="Camera ${camId} stream"
+                   style="width:100%; height:auto; object-fit:contain; display:block; background:#000;" onerror="this.style.opacity=0.1" />
+              <canvas id="canvas-${camId}" class="camera-canvas" tabindex="0" aria-label="Drawing canvas for camera ${camId}"></canvas>
+            </div>
+            <div class="canvas-overlay">
+              <div id="instructions-${camId}">Chọn task từ menu để bắt đầu vẽ</div>
+            </div>
+          </div>
+
+          <div class="camera-controls">
+            <button class="btn btn-success" onclick="saveTask('${camId}')"><i class="fas fa-save"></i> Start Task</button>
+            <button class="btn btn-warning" onclick="undoPoint('${camId}')"><i class="fas fa-rotate-left"></i> Undo Point (Z)</button>
+            <button class="btn btn-warning" onclick="clearTask('${camId}')"><i class="fas fa-stop"></i> Clear Task</button>
+            <button class="btn btn-secondary" onclick="toggleSettings('${camId}')"><i class="fas fa-cog"></i> Settings</button>
+            <button class="btn btn-danger" onclick="removeCamera('${camId}')"><i class="fas fa-trash"></i> Remove</button>
+          </div>
+
+          <!-- Per-camera detection settings (hidden by default) -->
+          <div id="settings-${camId}" class="control-section hidden" style="padding:12px; margin-bottom:12px">
+            <h3 style="font-size:14px"><i class="fas fa-sliders-h"></i> Camera Settings</h3>
+            <div class="form-group">
+              <label for="conf-${camId}">Confidence (0.0 - 1.0)</label>
+              <input id="conf-${camId}" type="number" min="0" max="1" step="0.01" value="0.5" class="form-control"
+                oninput="updateCamSetting('${camId}','conf',parseFloat(this.value))" />
+            </div>
+            <div class="form-group">
+              <label for="iou-${camId}">IoU (NMS) (0.0 - 1.0)</label>
+              <input id="iou-${camId}" type="number" min="0" max="1" step="0.01" value="0.45" class="form-control"
+                oninput="updateCamSetting('${camId}','iou',parseFloat(this.value))" />
+            </div>
+            <div class="form-group inline">
+              <label for="maxdet-${camId}">Max Det</label>
+              <input id="maxdet-${camId}" type="number" min="1" max="3000" value="300" class="form-control"
+                oninput="updateCamSetting('${camId}','max_det',parseInt(this.value,10)||300)" />
+            </div>
+
+            <div class="form-group">
+              <button class="btn btn-primary" onclick="applySettings('${camId}')"><i class="fas fa-check"></i> Apply to Backend</button>
+            </div>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-card"><div id="count-${camId}" class="stat-value">0</div><div class="stat-label">People Count</div></div>
+            <div class="stat-card"><div id="fps-${camId}" class="stat-value">0</div><div class="stat-label">FPS</div></div>
+          </div>
+        </div>
+      `;
+
+      grid.appendChild(card);
+      setupCanvas(camId);
+    }
+
+    // =====================
+    // CANVAS + ZONE DRAWING
+    // =====================
+    function setupCanvas(camId) {
+      const canvas = document.getElementById(`canvas-${camId}`);
+      const img = document.getElementById(`stream-${camId}`);
+      const ctx = canvas.getContext('2d');
+
+      let mouseX = 0, mouseY = 0, isNearFirst = false;
+
+      function syncCanvasToImage() {
+        if (!img || !img.naturalWidth) return;
+        // logical pixels match the stream's natural size
+        const w = img.naturalWidth, h = img.naturalHeight;
+        if (w && h) { 
+          canvas.width = w; 
+          canvas.height = h; 
+          console.log(`DEBUG: Canvas synced to ${w}x${h} (natural size)`);
+          console.log(`DEBUG: Image display size: ${img.clientWidth}x${img.clientHeight}`);
+        }
+      }
+      img.addEventListener('load', syncCanvasToImage);
+      if (img.complete) syncCanvasToImage();
+      window.addEventListener('resize', syncCanvasToImage);
+
+      function toCanvasCoords(evt) {
+        const r = canvas.getBoundingClientRect();
+        const x = (evt.clientX - r.left) * (canvas.width / r.width);
+        const y = (evt.clientY - r.top) * (canvas.height / r.height);
+        return [x, y];
+      }
+
+      canvas.addEventListener('mousemove', (e) => {
+        const [x, y] = toCanvasCoords(e);
+        mouseX = x; mouseY = y;
+        isNearFirst = false;
+        if (zones[camId].length >= 3) {
+          const [fx, fy] = zones[camId][0];
+          const d = Math.hypot(x - fx, y - fy);
+          isNearFirst = d <= 20;
+          canvas.style.cursor = isNearFirst ? 'pointer' : 'crosshair';
+        }
+      });
+
+      canvas.addEventListener('mouseleave', () => { mouseX = mouseY = 0; isNearFirst = false; });
+
+      // Left click: add point, or close if near first
+      canvas.addEventListener('click', (e) => {
+        const [x, y] = toCanvasCoords(e);
+        console.log(`DEBUG: Canvas click at ${x}, ${y} (canvas: ${canvas.width}x${canvas.height})`);
+        if (x < 0 || y < 0 || x > canvas.width || y > canvas.height) return;
+        if (zonesClosed[camId]) return; // locked
+
+        const currentTask = cameraTasks[camId];
+        if (!currentTask) {
+          alert('Vui lòng chọn task trước khi vẽ!');
+          return;
+        }
+
+        if (currentTask === 'zone') {
+          // Zone task logic (existing)
+          if (zones[camId].length >= 3) {
+            const [fx, fy] = zones[camId][0];
+            const d = Math.hypot(x - fx, y - fy);
+            if (d <= 20) { 
+              zonesClosed[camId] = true; 
+              updateInstructions(camId);
+              return; 
+            }
+          }
+        } else if (currentTask === 'line') {
+          // Line task logic - only allow 2 points
+          if (zones[camId].length >= 2) {
+            return; // Max 2 points for line
+          }
+        }
+
+        const p = [Math.round(x), Math.round(y)];
+        zones[camId].push(p);
+        console.log(`DEBUG: Added point ${p} for ${currentTask} task`);
+        updateInstructions(camId);
+      });
+
+      // Double click anywhere to close (if >=3)
+      canvas.addEventListener('dblclick', () => {
+        if (zones[camId].length >= 3) { zonesClosed[camId] = true; updateInstructions(camId, true); }
+      });
+
+      // Keyboard shortcuts on focused canvas
+      canvas.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() === 'z') { undoPoint(camId); }
+        if (e.key === 'Escape') { clearZone(camId); }
+        if (e.key === 'Enter') { if (zones[camId].length >= 3) { zonesClosed[camId] = true; updateInstructions(camId, true); } }
+      });
+
+      // Right-click to undo last point
+      canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); undoPoint(camId); });
+
+      (function drawLoop(){
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+
+        const pts = zones[camId];
+        const closed = zonesClosed[camId];
+        const currentTask = cameraTasks[camId];
+
+        if (pts && pts.length) {
+          if (pts.length > 1) {
+            // Different colors for different tasks
+            if (currentTask === 'zone') {
+              ctx.strokeStyle = closed ? '#28a745' : '#ff4757';
+              ctx.lineWidth = closed ? 3 : 2;
+              ctx.setLineDash(closed ? [] : [5,5]);
+            } else if (currentTask === 'line') {
+              ctx.strokeStyle = pts.length === 2 ? '#28a745' : '#667eea';
+              ctx.lineWidth = pts.length === 2 ? 4 : 3;
+              ctx.setLineDash([]);
+            } else {
+              ctx.strokeStyle = '#ff4757';
+              ctx.lineWidth = 2;
+              ctx.setLineDash([5,5]);
+            }
+            
+            ctx.beginPath();
+            ctx.moveTo(pts[0][0], pts[0][1]);
+            for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]);
+            
+            // Only close path for zone task with 3+ points
+            if (currentTask === 'zone' && closed && pts.length >= 3) {
+              ctx.closePath();
+            }
+            
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+          // points
+          pts.forEach((p, i) => {
+            const isFirst = i===0;
+            if (isFirst && pts.length >=3 && !closed) {
+              ctx.fillStyle = isNearFirst ? '#28a745' : '#ffc107';
+              ctx.beginPath(); ctx.arc(p[0], p[1], 10, 0, Math.PI*2); ctx.fill();
+              ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+              if (isNearFirst) {
+                ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(p[0]-22, p[1]-30, 44, 16);
+                ctx.fillStyle = '#fff'; ctx.font = 'bold 10px Arial'; ctx.textAlign='center'; ctx.fillText('CLOSE', p[0], p[1]-18);
+              }
+            } else {
+              ctx.fillStyle = closed ? '#28a745' : '#ff4757';
+              ctx.beginPath(); ctx.arc(p[0], p[1], 6, 0, Math.PI*2); ctx.fill();
+              ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+            }
+            // index label
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Arial'; ctx.textAlign='center'; ctx.fillText(String(i+1), p[0], p[1]+3);
+          });
+
+          // preview line to mouse
+          if (mouseX>0 && mouseY>0 && pts.length>0 && !isNearFirst && !closed) {
+            const last = pts[pts.length-1];
+            ctx.strokeStyle = 'rgba(255,71,87,0.5)'; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+            ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(mouseX, mouseY); ctx.stroke(); ctx.setLineDash([]);
+          }
+        }
+
+        // crosshair
+        if (mouseX>0 && mouseY>0 && !closed) {
+          if (isNearFirst && (pts?.length||0) >= 3) {
+            ctx.strokeStyle = '#28a745'; ctx.lineWidth = 2; ctx.setLineDash([4,4]);
+            ctx.beginPath(); ctx.arc(mouseX, mouseY, 15, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+          } else {
+            ctx.strokeStyle = '#ff4757'; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(mouseX-10, mouseY); ctx.lineTo(mouseX+10, mouseY);
+            ctx.moveTo(mouseX, mouseY-10); ctx.lineTo(mouseX, mouseY+10); ctx.stroke();
+          }
+        }
+
+        requestAnimationFrame(drawLoop);
+      })();
+    }
+
+    // =====================
+    // ZONE UTILITIES
+    // =====================
+    function updateInstructions(camId, completed=false) {
+      const el = document.getElementById(`instructions-${camId}`);
+      if (!el) return;
+      const count = zones[camId].length;
+      const currentTask = cameraTasks[camId];
+      
+      if (completed) {
+        el.innerHTML = `
+          <div style="background: linear-gradient(45deg, #28a745, #20c997); color: white; padding: 8px 12px; border-radius: 6px; animation: pulse 2s infinite;">
+            <strong><i class="fas fa-check-circle"></i> ${currentTask ? currentTask.toUpperCase() : 'TASK'} ĐANG CHẠY!</strong>
+          </div>
+          <div style="color: #28a745; font-weight: 600; margin-top: 5px;">
+            🤖 AI đang xử lý và phân tích...
+          </div>
+        `;
+        return;
+      }
+      
+      if (!currentTask) {
+        el.innerHTML = `
+          <div style="color: #6c757d; text-align: center; padding: 10px;">
+            <i class="fas fa-hand-pointer"></i> Chọn task từ menu để bắt đầu vẽ
+          </div>
+        `;
+        return;
+      }
+      
+      if (currentTask === 'zone') {
+        if (zonesClosed[camId]) {
+          el.innerHTML = `
+            <div style="background: #28a745; color: white; padding: 6px 10px; border-radius: 6px; margin-bottom: 5px;">
+              <strong><i class="fas fa-check"></i> Zone hoàn thành!</strong>
+            </div>
+            <div style="color: #28a745; font-weight: 600;">
+              ✅ ${count} điểm đã vẽ. Click "Start Task" để bắt đầu AI!
+            </div>
+          `;
+        } else if (count === 0) {
+          el.innerHTML = `
+            <div style="background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+              <strong><i class="fas fa-vector-square"></i> ZONE TASK ACTIVE</strong>
+            </div>
+            <div style="color: #667eea; font-weight: 600;">
+              🖱️ Click để vẽ điểm đầu tiên của vùng
+            </div>
+          `;
+        } else if (count < 3) {
+          el.innerHTML = `
+            <div style="background: #667eea; color: white; padding: 6px 10px; border-radius: 6px; margin-bottom: 5px;">
+              <strong>ZONE: ${count}/3+ điểm</strong>
+            </div>
+            <div style="color: #667eea; font-weight: 600;">
+              📍 Cần ${3-count} điểm nữa để hoàn thành zone
+            </div>
+          `;
+        } else {
+          el.innerHTML = `
+            <div style="background: #ffc107; color: #000; padding: 6px 10px; border-radius: 6px; margin-bottom: 5px;">
+              <strong>ZONE: ${count} điểm - Sẵn sàng đóng</strong>
+            </div>
+            <div style="color: #ffc107; font-weight: 600;">
+              🎯 Hover điểm đầu hoặc double-click để đóng zone
+            </div>
+          `;
+        }
+      } else if (currentTask === 'line') {
+        if (count === 0) {
+          el.innerHTML = `
+            <div style="background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+              <strong><i class="fas fa-minus"></i> LINE TASK ACTIVE</strong>
+            </div>
+            <div style="color: #667eea; font-weight: 600;">
+              🖱️ Click để vẽ điểm đầu của đường thẳng
+            </div>
+          `;
+        } else if (count === 1) {
+          el.innerHTML = `
+            <div style="background: #667eea; color: white; padding: 6px 10px; border-radius: 6px; margin-bottom: 5px;">
+              <strong>LINE: 1/2 điểm</strong>
+            </div>
+            <div style="color: #667eea; font-weight: 600;">
+              📍 Click để vẽ điểm cuối của đường thẳng
+            </div>
+          `;
+        } else if (count === 2) {
+          el.innerHTML = `
+            <div style="background: #28a745; color: white; padding: 6px 10px; border-radius: 6px; margin-bottom: 5px;">
+              <strong><i class="fas fa-check"></i> Line hoàn thành!</strong>
+            </div>
+            <div style="color: #28a745; font-weight: 600;">
+              ✅ Đường thẳng đã vẽ xong. Click "Start Task" để bắt đầu AI!
+            </div>
+          `;
+          zonesClosed[camId] = true; // Auto-close for line task
+        }
+      }
+    }
+
+    function clearZone(camId) {
+      zones[camId] = []; zonesClosed[camId] = false; updateInstructions(camId);
+    }
+
+    function undoPoint(camId) {
+      if (!zones[camId].length) return;
+      zones[camId].pop(); zonesClosed[camId] = false; updateInstructions(camId);
+    }
+
+    function resetZone(camId) {
+      if (zones[camId].length === 0) return;
+      if (confirm('Reset zone? This will clear all points.')) {
+        clearZone(camId);
+      }
+    }
+
+    async function clearTask(camId) {
+      if (confirm('Xóa task hiện tại? Điều này sẽ dừng AI processing và hiển thị video bình thường.')) {
+        try {
+          const response = await fetch(`/api/camera/${camId}/clear_task`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            alert(result.message || 'Task đã được xóa thành công');
+            
+            // Clear UI elements
+            clearZone(camId);
+            cameraTasks[camId] = null; // Reset task type
+            
+            // Reset people count display
+            const countEl = document.querySelector(`#camera-${camId} .people-count`);
+            if (countEl) countEl.textContent = '0';
+            
+            // Update instructions
+            updateInstructions(camId);
+            
+            // Update FPS display to show video source FPS
+            setTimeout(() => updateStats(), 500);
+            
+          } else {
+            throw new Error('Failed to clear task');
+          }
+        } catch (error) {
+          console.error('Error clearing task:', error);
+          alert('Lỗi xóa task: ' + error.message);
+        }
+      }
+    }
+
+    function toggleSettings(camId) {
+      const settingsDiv = document.getElementById(`settings-${camId}`);
+      if (settingsDiv) {
+        settingsDiv.classList.toggle('hidden');
+      }
+    }
+
+    async function saveTask(camId) {
+      const currentTask = cameraTasks[camId];
+      
+      if (!currentTask) {
+        alert('Vui lòng chọn task trước khi vẽ!');
+        return;
+      }
+      
+      if (currentTask === 'zone') {
+        if (zones[camId].length < 3) { 
+          alert('Zone task cần ít nhất 3 điểm!'); 
+          return; 
+        }
+      } else if (currentTask === 'line') {
+        if (zones[camId].length !== 2) { 
+          alert('Line task cần đúng 2 điểm!'); 
+          return; 
+        }
+      }
+      
+      try {
+        // Get actual frame dimensions from backend
+        const statsRes = await fetch(`/api/camera/${camId}/stats`);
+        const stats = await statsRes.json();
+        
+        const canvas = document.getElementById(`canvas-${camId}`);
+        const img = document.getElementById(`stream-${camId}`);
+        
+        console.log(`DEBUG: Canvas: ${canvas.width}x${canvas.height}`);
+        console.log(`DEBUG: Backend frame: ${stats.frame_width}x${stats.frame_height}`);
+        console.log(`DEBUG: Original ${currentTask}:`, zones[camId]);
+        
+        let pointsToSend = zones[camId];
+        
+        // Scale coordinates if backend frame size differs from canvas
+        if (stats.frame_width && stats.frame_height && 
+            (stats.frame_width !== canvas.width || stats.frame_height !== canvas.height)) {
+          
+          const scaleX = stats.frame_width / canvas.width;
+          const scaleY = stats.frame_height / canvas.height;
+          
+          console.log(`DEBUG: Scaling by ${scaleX}x${scaleY}`);
+          
+          pointsToSend = zones[camId].map(([x, y]) => [
+            Math.round(x * scaleX),
+            Math.round(y * scaleY)
+          ]);
+          
+          console.log(`DEBUG: Scaled ${currentTask}:`, pointsToSend);
+        }
+        
+        let payload;
+        if (currentTask === 'zone') {
+          payload = { task: 'zone', params: { zone: pointsToSend } };
+        } else if (currentTask === 'line') {
+          payload = { 
+            task: 'line', 
+            params: { 
+              p1: pointsToSend[0],
+              p2: pointsToSend[1]
+            } 
+          };
+        }
+        
+        const res = await fetch(`/api/camera/${camId}/set_task`, {
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        
+        if (!res.ok) throw new Error('Save failed');
+        
+        alert(`${currentTask.toUpperCase()} task đã được lưu với ${zones[camId].length} điểm!`);
+        
+        // Hide frontend drawing after saving since backend will show it
+        zones[camId] = [];
+        zonesClosed[camId] = false;
+        updateInstructions(camId, true);
+        
+      } catch (err) { 
+        console.error(err); 
+        alert(`Lỗi lưu ${currentTask}: ` + err.message); 
+      }
+    }
+
+    async function removeCamera(camId) {
+      if (!confirm('Xóa camera này?')) return;
+      try {
+        const res = await fetch(`/api/camera/${camId}/remove`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('remove failed');
+        const card = document.getElementById(`camera-${camId}`);
+        if (card) card.remove();
+        delete cameras[camId]; 
+        delete zones[camId]; 
+        delete zonesClosed[camId]; 
+        delete camSettings[camId];
+        delete cameraTasks[camId]; // Clean up task tracking
+        updateTotalCameras(Object.keys(cameras).length);
+      } catch (err) { 
+        console.error(err); 
+        alert('Lỗi xóa camera: ' + err.message); 
+      }
+    }
+
+    // =====================
+    // PER-CAMERA SETTINGS
+    // =====================
+    function updateCamSetting(camId, key, value) {
+      if (!camSettings[camId]) camSettings[camId] = {};
+      camSettings[camId][key] = value;
+    }
+
+    async function applySettings(camId) {
+      try {
+        const payload = { 
+          confidence: camSettings[camId].conf,
+          iou: camSettings[camId].iou,
+          max_det: camSettings[camId].max_det
+        };
+        const res = await fetch(`/api/camera/${camId}/update_config`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error(await res.text());
+        alert('Settings applied');
+      } catch (err) {
+        console.error(err); alert('Failed to apply settings: ' + err.message);
+      }
+    }
+
+    // =====================
+    // STATS
+    // =====================
+    function updateStats() {
+      let totalPeople = 0; let cameraCount = 0;
+      for (const camId in cameras) {
+        cameraCount++;
+        fetch(`/api/camera/${camId}/stats`).then(r => r.ok ? r.json() : null).then(data => {
+          if (!data) return;
+          const countEl = document.getElementById(`count-${camId}`);
+          const fpsEl = document.getElementById(`fps-${camId}`);
+          const pc = Number(data.people_count || 0);
+          if (countEl) countEl.textContent = pc;
+          
+          // Update FPS display
+          if (fpsEl) {
+            const fpsValue = data.fps || 0;
+            fpsEl.textContent = `${fpsValue} FPS`;
+            fpsEl.style.color = '#333'; // Black color
+          }
+          
+          totalPeople += pc;
+          updateTotalPeople(totalPeople);
+        }).catch(() => {/* ignore per-cam error */});
+      }
+      if (cameraCount === 0) updateTotalPeople(0);
+    }
+
+    // =====================
+    // MISC UI
+    // =====================
+    function updateDebugStatus(message) {
+      const el = document.getElementById('debugStatus');
+      if (!el) return;
+      const ts = new Date().toLocaleTimeString();
+      el.textContent = `[${ts}] ${message}`;
+    }
+
+    function updateTotalCameras(n) { const el = document.getElementById('totalCameras'); if (el) el.textContent = n; }
+    function updateTotalPeople(n) { const el = document.getElementById('totalPeople'); if (el) el.textContent = n; }
+  </script>
+</body>
+</html>
