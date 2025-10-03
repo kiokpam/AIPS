@@ -80,14 +80,48 @@ def update_config(cam_id):
     return jsonify({'ok': True, 'message': 'Config update placeholder'})
 
 def gen_cam_stream(worker):
+    # Measure FPS at SEND time (what the user actually sees)
+    send_times = []  # sliding window of recent send timestamps
     while True:
         jpeg = worker.get_jpeg_bytes()
         if jpeg is None:
-            time.sleep(0.05)
+            time.sleep(0.01)  # Reduced from 0.05 to 0.01 for faster recovery
             continue
+
+        # Record send timestamp and compute FPS over a short window (2s)
+        now = time.time()
+        send_times.append(now)
+        # keep only last 2 seconds
+        cutoff = now - 2.0
+        send_times = [t for t in send_times if t > cutoff]
+
+        if len(send_times) >= 5:
+            span = send_times[-1] - send_times[0]
+            if span > 0:
+                fps_now = (len(send_times) - 1) / span
+                # Clamp to reasonable max to avoid spikes
+                worker.display_fps = round(min(fps_now, 60.0), 1)
+            else:
+                worker.display_fps = 0
+        else:
+            # Fallback to source/video FPS if available
+            video_fps = getattr(getattr(worker, 'stream', None), 'video_fps', 0) or 0
+            if isinstance(video_fps, (int, float)) and video_fps > 0:
+                worker.display_fps = round(min(video_fps, 60.0), 1)
+            else:
+                worker.display_fps = 0
+
+        # Send frame to client
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
-        time.sleep(0.03)
+
+        # Dynamic pacing based on measured send-side FPS
+        actual_fps = getattr(worker, 'display_fps', 0)
+        if actual_fps > 0:
+            frame_delay = 1.0 / actual_fps
+            time.sleep(min(frame_delay * 0.8, 0.033))  # Max ~30 FPS to browser
+        else:
+            time.sleep(0.033)  # ~30 FPS fallback
 
 @app.route('/camera/<cam_id>/stream')
 def stream(cam_id):
@@ -115,9 +149,7 @@ def get_camera_stats(cam_id):
     
     stats = {
         'people_count': getattr(worker, 'current_count', 0),
-        'fps': getattr(worker, 'current_fps', 0),  # FPS chính để hiển thị (streaming FPS)
-        'streaming_fps': getattr(worker, 'streaming_fps', 0),  # FPS thực tế của video streaming
-        'processing_fps': getattr(worker, 'processing_fps', 0),  # FPS của AI processing (khi có task)
+        'fps': getattr(worker, 'display_fps', 0),  # FPS thực tế mà user thấy
         'status': 'online' if worker.running else 'offline',
         'frame_width': frame_width,
         'frame_height': frame_height,
