@@ -1,0 +1,71 @@
+# MediaMTX configuration for AIPS Stream Gateway
+logLevel: info
+logDestinations: [stdout]
+logFile: mediamtx.log
+
+# API
+api: yes
+apiAddress: 0.0.0.0:9997
+
+# Metrics
+metrics: yes
+metricsAddress: 0.0.0.0:9998
+
+# RTSP server
+rtsp: yes
+rtspAddress: :8554
+rtspEncryption: "no"
+rtspServerKey: server.key
+rtspServerCert: server.crt
+
+# RTMP server  
+rtmp: yes
+rtmpAddress: :1935
+rtmpEncryption: "no"
+
+# HLS server
+hls: yes
+hlsAddress: :8888
+hlsEncryption: "no"
+hlsVariant: lowLatency
+hlsSegmentCount: 3
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+# WebRTC server
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: "no"
+webrtcAllowOrigin: "*"
+
+# Paths
+paths:
+  all:
+    # Source protocols
+    source: publisher
+    sourceProtocol: automatic
+    
+    # Recording
+    record: no
+    
+    # Playback
+    publishUser: ""
+    publishPass: ""
+    publishIPs: []
+    
+    # Read
+    readUser: ""
+    readPass: ""
+    readIPs: []
+    
+    # Run on init
+    runOnInit: ""
+    runOnInitRestart: no
+    runOnDemand: ""
+    runOnDemandRestart: no
+    runOnDemandStartTimeout: 10s
+    runOnDemandCloseAfter: 10s
+    runOnReady: ""
+    runOnReadyRestart: no
+    runOnRead: ""
+    runOnReadRestart: no
