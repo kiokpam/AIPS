@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
+import ProtectedRoute from '../components/ProtectedRoute';
 import { 
   Plus, 
   Store, 
@@ -65,8 +66,9 @@ export default function Stores() {
   }, []);
 
   return (
-    <Layout>
-      <div className="space-y-6">
+    <ProtectedRoute>
+      <Layout>
+        <div className="space-y-6">
         {/* Header */}
         <div className="flex justify-between items-center">
           <div>
@@ -248,6 +250,7 @@ export default function Stores() {
           </div>
         </div>
       </div>
-    </Layout>
+      </Layout>
+    </ProtectedRoute>
   );
 }

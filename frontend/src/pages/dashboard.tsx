@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import StatusCard from '../components/StatusCard';
+import ProtectedRoute from '../components/ProtectedRoute';
 import { 
   Activity, 
   Database, 
@@ -85,8 +86,9 @@ export default function Dashboard() {
   ];
 
   return (
-    <Layout>
-      <div className="space-y-6">
+    <ProtectedRoute>
+      <Layout>
+        <div className="space-y-6">
         {/* Header */}
         <div className="animate-fade-in">
           <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
@@ -196,6 +198,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-    </Layout>
+      </Layout>
+    </ProtectedRoute>
   );
 }

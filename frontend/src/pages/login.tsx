@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../components/Layout';
+import { useAuth } from '../contexts/AuthContext';
 import { Shield, Eye, EyeOff, LogIn, AlertCircle } from 'lucide-react';
 
 export default function Login() {
   const router = useRouter();
-  const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const { login, isAuthenticated } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Redirect if already authenticated
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      const returnUrl = router.query.returnUrl as string || '/dashboard';
+      router.push(returnUrl);
+    }
+  }, [isAuthenticated, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,22 +27,15 @@ export default function Login() {
     setError('');
 
     try {
-      const res = await fetch(`${base}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || 'Login failed');
+      const success = await login(username, password);
+      if (success) {
+        const returnUrl = router.query.returnUrl as string || '/dashboard';
+        router.push(returnUrl);
+      } else {
+        setError('Invalid username or password. Please try again.');
       }
-      
-      const data = await res.json();
-      localStorage.setItem('token', data.access_token);
-      router.push('/dashboard');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed. Please try again.');
+      setError('Login failed. Please try again.');
     } finally {
       setIsLoading(false);
     }
