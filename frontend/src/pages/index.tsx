@@ -1,41 +1,20 @@
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { useEffect } from 'react';
+import { useRouter } from 'next/router';
 
 export default function Home() {
-  const [apiStatus, setApiStatus] = useState<string>('loading...');
-  const [wsStatus, setWsStatus] = useState<string>('disconnected');
+  const router = useRouter();
 
   useEffect(() => {
-    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    fetch(`${base}/api/healthz`).then(async (r) => {
-      if (!r.ok) throw new Error('failed');
-      const data = await r.json();
-      setApiStatus(data.status || 'ok');
-    }).catch(() => setApiStatus('unavailable'));
-
-    // WebSocket test
-    const ws = new WebSocket(base.replace('http', 'ws') + '/ws');
-    ws.onopen = () => setWsStatus('connected');
-    ws.onclose = () => setWsStatus('disconnected');
-    ws.onerror = () => setWsStatus('error');
-    return () => ws.close();
-  }, []);
+    // Redirect to welcome page
+    router.replace('/welcome');
+  }, [router]);
 
   return (
-    <main style={{ padding: 24, fontFamily: 'sans-serif' }}>
-      <h1>AIPS Dashboard</h1>
-      <nav style={{ marginBottom: 24 }}>
-        <Link href="/" style={{ marginRight: 16 }}>Home</Link>
-        <Link href="/stores" style={{ marginRight: 16 }}>Stores</Link>
-        <Link href="/cameras" style={{ marginRight: 16 }}>Cameras</Link>
-        <Link href="/login">Login</Link>
-      </nav>
-      <div>
-        <p>Backend status: {apiStatus}</p>
-        <p>WebSocket status: {wsStatus}</p>
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"></div>
+        <p className="text-gray-600">Redirecting to welcome page...</p>
       </div>
-    </main>
+    </div>
   );
 }
-
-
