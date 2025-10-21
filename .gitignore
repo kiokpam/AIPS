@@ -27,3 +27,5 @@ ENV/
 
 # VS Code
 .vscode/
+
+codedash_ai/
