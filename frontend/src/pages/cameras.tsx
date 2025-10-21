@@ -43,16 +43,18 @@ export default function Cameras() {
   const [isLoading, setIsLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
 
+  // Lấy danh sách camera từ AI service
   const loadCameras = async () => {
     try {
-      const res = await fetch(`${base}/api/cameras`);
+      const res = await fetch(`${base}/api/ai/camera/list`);
       const data = await res.json();
-      setCameras(data);
+      setCameras(data.cameras || []);
     } catch (error) {
       console.error('Failed to load cameras:', error);
     }
   };
 
+  // Nếu vẫn cần quản lý store vật lý, giữ nguyên
   const loadStores = async () => {
     try {
       const res = await fetch(`${base}/api/stores`);
@@ -63,19 +65,18 @@ export default function Cameras() {
     }
   };
 
+  // Tạo camera AI
   const createCamera = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
     try {
-      await fetch(`${base}/api/cameras`, {
+      await fetch(`${base}/api/ai/camera/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          name, 
-          store_id: storeId, 
-          rtsp_url: rtsp || null,
-          location: location || null
+          source: rtsp || '0', // source là rtsp hoặc webcam id
+          model: 'yolov8n.pt',
+          device: 'auto'
         }),
       });
       setName('');

@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  people-counting-ai:
+    build:
+      context: ./ai/people-counting
+      dockerfile: Dockerfile
+    image: aips-people-counting:latest
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./ai/people-counting/uploads:/app/uploads
+    restart: unless-stopped
