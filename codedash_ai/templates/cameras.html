@@ -1,0 +1,552 @@
+{% extends 'base.html' %}
+{% set active = 'cameras' %}
+{% block title %}Quản lý camera{% endblock %}
+
+{% block head %}
+  <style>
+    .toolbar { display:flex; gap:10px; margin-bottom: 12px; }
+    .btn { padding: 10px 14px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; text-decoration: none; }
+    .btn-primary { background: #667eea; color: #fff; }
+    .grid { display:grid; grid-template-columns: repeat(2, 1fr); gap:16px; }
+    .card { background:#fff; border-radius: 12px; box-shadow: 0 8px 24px rgba(15,23,42,0.06); overflow:hidden; }
+    .card-header { background: linear-gradient(45deg, #667eea, #764ba2); color:#fff; padding: 10px 14px; display:flex; justify-content: space-between; align-items:center; }
+    .card-body { padding: 12px; }
+    .video-container { position: relative; }
+    .video-container img { width: 100%; height: auto; display:block; background:#000; }
+    .canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:auto; }
+    .controls { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:8px; margin-top: 10px; }
+    .hidden { display:none; }
+    /* Modal */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 1000; }
+    .modal { width: 1040px; max-width: calc(100% - 24px); background: #fff; border-radius: 12px; box-shadow: 0 20px 80px rgba(0,0,0,0.35); overflow:hidden; }
+    .modal-header { display:flex; justify-content: space-between; align-items:center; padding: 12px 14px; background: #0f172a; color: #e2e8f0; }
+    .modal-body { padding: 14px; display:grid; gap: 10px; }
+    .two-col { grid-template-columns: 1fr 1.4fr; align-items: start; gap: 14px; }
+    .panel { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; }
+    .form-row { display:grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
+    .form-control { width: 100%; padding: 9px 11px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 14px; }
+    .seg { display:flex; gap:8px; }
+    .seg .seg-btn { padding:8px 10px; border-radius:8px; border:2px solid #e2e8f0; cursor:pointer; background:#fff; }
+    .seg .seg-btn.active { background:#667eea; color:#fff; border-color:#667eea; }
+    .modal-footer { display:flex; justify-content: flex-end; gap: 8px; padding: 12px 14px; border-top: 1px solid #eef2ff; }
+  </style>
+{% endblock %}
+
+{% block content %}
+  <div class="toolbar">
+    <button class="btn btn-primary" onclick="openCamModal()"><i class="fas fa-plus"></i> Thêm camera</button>
+  </div>
+
+  <div id="grid" class="grid"></div>
+
+  <div id="camModal" class="modal-backdrop" onclick="if(event.target===this) closeCamModal()">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="camModalTitle">
+      <div class="modal-header">
+        <div id="camModalTitle"><i class="fas fa-video"></i> Cấu hình Camera</div>
+        <button class="btn" onclick="closeCamModal()" style="background:transparent; color:#e2e8f0"><i class="fas fa-xmark"></i></button>
+      </div>
+      <div class="modal-body two-col">
+        <div id="leftForm" class="panel" style="display:grid; gap:10px;">
+          <div class="form-row">
+          <label>Loại nguồn</label>
+          <select id="inputType" class="form-control" onchange="toggleInputFields()">
+            <option value="rtsp">RTSP</option>
+            <option value="file">Video file</option>
+            <option value="webcam">Webcam</option>
+          </select>
+          </div>
+          <div id="sourceFields"></div>
+
+          <div class="form-row">
+            <label>Task</label>
+            <div class="seg">
+              <button id="btnZone" class="seg-btn" data-task="zone" onclick="toggleTaskDraw(this)"><i class="fas fa-vector-square"></i> Zone</button>
+              <button id="btnLine" class="seg-btn" data-task="line" onclick="toggleTaskDraw(this)"><i class="fas fa-minus"></i> Line</button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label>Confidence</label>
+            <input id="confThresh" type="number" min="0" max="1" step="0.01" value="0.5" class="form-control" />
+          </div>
+          <div class="form-row">
+            <label>IoU</label>
+            <input id="iouThresh" type="number" min="0" max="1" step="0.01" value="0.45" class="form-control" />
+          </div>
+          <div class="form-row">
+            <label>MaxDet</label>
+            <input id="maxDet" type="number" min="1" max="3000" value="300" class="form-control" />
+          </div>
+          <div class="form-row">
+            <label>Vẽ nhiều khu vực</label>
+            <div>Cho phép vẽ và đếm nhiều khu vực cho 1 camera (thiết lập khi vẽ)</div>
+          </div>
+        </div>
+
+        <div id="rightPreview" class="panel">
+          <div style="font-weight:700; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center">
+            <span>Xem trước</span>
+            <div style="display:flex; gap:6px;">
+              <button class="btn" onclick="undoPreviewDraw()" style="padding:6px 10px; font-size:12px"><i class="fas fa-rotate-left"></i> Undo</button>
+              <button class="btn" onclick="clearPreviewDraw()" style="padding:6px 10px; font-size:12px"><i class="fas fa-eraser"></i> Clear</button>
+            </div>
+          </div>
+          <div id="previewWrap" style="position:relative; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; background:#000; max-height:520px">
+            <img id="previewImg" src="" alt="preview" style="width:100%; height:auto; display:none" />
+            <img id="previewStream" src="" alt="preview stream" style="width:100%; height:auto; display:none" />
+            <canvas id="previewCanvas" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:auto;"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeCamModal()">Hủy</button>
+        <button class="btn btn-primary" onclick="saveCamModal()"><i class="fas fa-save"></i> Lưu</button>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Removed unused variables
+  let drawState = { active:false, type:null, points:[], finished:false };
+  let modalState = { camId: null, pendingTask: null };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    refreshList();
+  });
+
+  function openCamModal() {
+    document.getElementById('camModal').style.display = 'flex';
+    // initialize fields for current selection
+    toggleInputFields();
+    // reset modal state for new camera
+    modalState.camId = null;
+    modalState.pendingTask = null;
+    modalState.completedZones = [];
+    // reset button text and state
+    document.querySelectorAll('.seg-btn').forEach(b=>{ 
+      b.classList.remove('active'); 
+      b.textContent = b.dataset.task==='zone'?'Zone':'Line'; 
+    });
+    drawState = { active:false, type:null, points:[], finished:false };
+  }
+  function closeCamModal() {
+    document.getElementById('camModal').style.display = 'none';
+  }
+  
+  function undoPreviewDraw() {
+    // Undo last completed zone
+    if(modalState.completedZones && modalState.completedZones.length > 0) {
+      modalState.completedZones.pop();
+    }
+    // Or undo current drawing
+    else if(drawState.points.length > 0) {
+      drawState.points.pop();
+    }
+  }
+  
+  function clearPreviewDraw() {
+    drawState = { active:false, type:null, points:[], finished:false };
+    document.querySelectorAll('.seg-btn').forEach(b=>{ b.classList.remove('active'); b.textContent = b.dataset.task==='zone'?'Zone':'Line'; });
+    modalState.pendingTask = null;
+    modalState.completedZones = [];
+  }
+  
+  function openEditModal(camId) {
+    modalState.camId = camId;
+    document.getElementById('camModal').style.display = 'flex';
+    toggleInputFields();
+    // Don't reset task state for editing - keep existing zones
+    // modalState.completedZones will be populated from existing camera task
+  }
+  function selectTaskBtn(btn){
+    document.querySelectorAll('.seg-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  function toggleInputFields(){
+    const t = document.getElementById('inputType').value;
+    const container = document.getElementById('sourceFields');
+    console.log('Switching to input type:', t);
+    
+    if (t === 'rtsp') {
+      container.innerHTML = `
+        <div class="form-row">
+          <label>RTSP URL</label>
+          <input id="rtspUrl" class="form-control" placeholder="rtsp://user:pass@ip:port/stream" />
+        </div>
+      `;
+    } else if (t === 'file') {
+      container.innerHTML = `
+        <div class="form-row">
+          <label>Video file</label>
+          <input id="videoFile" type="file" accept="video/*" class="form-control" />
+        </div>
+      `;
+    } else if (t === 'webcam') {
+      container.innerHTML = `
+        <div class="form-row">
+          <label>Webcam ID</label>
+          <input id="webcamId" type="number" class="form-control" value="0" min="0" max="10" />
+        </div>
+      `;
+    }
+    
+    // Add Connect button for all types
+    container.innerHTML += `
+      <div class="form-row">
+        <button class="btn btn-primary" onclick="connectPreview()" style="width:100%">
+          <i class="fas fa-play"></i> Connect Preview
+        </button>
+      </div>
+    `;
+    
+    // Clear any existing preview
+    const stream = document.getElementById('previewStream');
+    stream.src = '';
+    stream.style.display = 'none';
+  }
+  async function connectPreview(){
+    console.log('Connect Preview clicked');
+    
+    // Show loading state
+    const btn = event.target;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Connecting...';
+    btn.disabled = true;
+    
+    try {
+      await startPreview();
+    } catch (error) {
+      console.error('Preview connection failed:', error);
+      alert('Preview connection failed: ' + error.message);
+    } finally {
+      // Restore button
+      btn.innerHTML = originalText;
+      btn.disabled = false;
+    }
+  }
+  async function startPreview(){
+    const type = document.getElementById('inputType').value;
+    const img = document.getElementById('previewImg');
+    const stream = document.getElementById('previewStream');
+    img.style.display = 'none'; 
+    stream.style.display = 'none';
+    
+    let source = '';
+    if(type==='file'){
+      const f = document.getElementById('videoFile').files[0];
+      if(!f) {
+        console.log('No file selected for preview');
+        return;
+      }
+      try {
+        const fd = new FormData(); 
+        fd.append('file', f);
+        const up = await fetch('/api/upload', { method:'POST', body: fd }).then(r=>r.json());
+        if(!up.path){ 
+          console.error('Upload failed:', up);
+          return; 
+        }
+        source = up.path;
+        console.log('File uploaded, source:', source);
+      } catch(e) {
+        console.error('Upload error:', e);
+        return;
+      }
+    } else if(type==='rtsp'){
+      const url = document.getElementById('rtspUrl').value.trim();
+      if(!url) {
+        console.log('No RTSP URL for preview');
+        return; 
+      }
+      source = url;
+    } else if(type==='webcam'){
+      const id = String(document.getElementById('webcamId').value||'0');
+      source = id;
+    }
+    
+    if(!source) {
+      console.log('No source available for preview');
+      return;
+    }
+    
+    // Use preview stream for all types
+    const previewUrl = '/preview?source=' + encodeURIComponent(source);
+    console.log('Starting preview with URL:', previewUrl);
+    stream.src = previewUrl;
+    stream.style.display = 'block';
+    
+    // Handle stream load/error
+    stream.onload = () => {
+      console.log('Preview stream loaded');
+      setTimeout(syncPreviewCanvas, 1000);
+    };
+    stream.onerror = (e) => {
+      console.error('Preview stream error:', e);
+      stream.style.display = 'none';
+    };
+  }
+
+  function syncPreviewCanvas(){
+    const img = document.getElementById('previewStream');
+    const cvs = document.getElementById('previewCanvas');
+    const ctx = cvs.getContext('2d');
+    
+    if (!img || !img.naturalWidth || img.naturalWidth === 0) {
+      console.log('Image not ready for canvas sync');
+      return;
+    }
+    
+    console.log('Syncing canvas to image size:', img.naturalWidth, 'x', img.naturalHeight);
+    cvs.width = img.naturalWidth; 
+    cvs.height = img.naturalHeight;
+    
+    // start draw loop once
+    if (!cvs._loopStarted){ 
+      cvs._loopStarted = true; 
+      requestAnimationFrame(()=>previewLoop(ctx,cvs)); 
+    }
+  }
+
+  function toggleTaskDraw(btn){
+    const type = btn.dataset.task;
+    if(drawState.active && drawState.type===type){
+      // cancel
+      drawState = { active:false, type:null, points:[], finished:false };
+      btn.classList.remove('active'); btn.textContent = (type==='zone'?'Zone':'Line');
+      return;
+    }
+    // start drawing
+    drawState = { active:true, type, points:[], finished:false };
+    document.querySelectorAll('.seg-btn').forEach(b=>{ b.classList.remove('active'); b.textContent = b.dataset.task==='zone'?'Zone':'Line'; });
+    btn.classList.add('active'); btn.textContent = 'Cancel';
+  }
+
+  (function bindPreviewCanvas(){
+    const cvs = document.getElementById('previewCanvas');
+    function toXY(e){ const r=cvs.getBoundingClientRect(); return [(e.clientX-r.left)*(cvs.width/r.width),(e.clientY-r.top)*(cvs.height/r.height)]; }
+    cvs.addEventListener('click', e=>{
+      if(!drawState.active) return;
+      const [x,y]=toXY(e);
+      if(drawState.type==='line'){
+        if(drawState.points.length<2) drawState.points.push([Math.round(x),Math.round(y)]);
+        if(drawState.points.length===2){ drawState.finished=true; finalizeTaskFromPreview(); }
+      } else if(drawState.type==='zone'){
+        if(drawState.points.length>=3){
+          const [fx,fy]=drawState.points[0];
+          if(Math.hypot(x-fx,y-fy)<=20){ 
+            // Click near first point to finish zone
+            if(!modalState.completedZones) modalState.completedZones = [];
+            modalState.completedZones.push(drawState.points.slice());
+            drawState.points = []; // Start new zone
+            return; 
+          }
+        }
+        drawState.points.push([Math.round(x),Math.round(y)]);
+      }
+    });
+  })();
+
+  async function finalizeTaskFromPreview(){
+    const type = drawState.type; const pts = drawState.points.slice();
+    if (modalState.camId) {
+      if(type==='line' && pts.length===2){
+        await fetch(`/api/camera/${modalState.camId}/set_task`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ task:'line', params:{ p1: pts[0], p2: pts[1] } }) });
+      }
+      // Zone will be handled in saveCamModal with all completed zones
+    } else {
+      // Store pending task to apply after camera creation
+      if(type==='line' && pts.length===2){
+        modalState.pendingTask = { task:'line', params:{ p1: pts[0], p2: pts[1] } };
+      }
+      // Zone will be handled in saveCamModal with all completed zones
+    }
+    // reset
+    drawState = { active:false, type:null, points:[], finished:false };
+    document.querySelectorAll('.seg-btn').forEach(b=>{ b.classList.remove('active'); b.textContent = b.dataset.task==='zone'?'Zone':'Line'; });
+  }
+
+  function previewLoop(ctx,cvs){
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    
+    // Draw completed zones
+    if(modalState.completedZones) {
+      modalState.completedZones.forEach(zone => {
+        if(zone.length >= 3) {
+          ctx.strokeStyle = '#ff4757';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5,5]);
+          ctx.beginPath();
+          ctx.moveTo(zone[0][0], zone[0][1]);
+          for(let i=1;i<zone.length;i++) ctx.lineTo(zone[i][0], zone[i][1]);
+          // Close the zone by connecting last point to first point
+          ctx.lineTo(zone[0][0], zone[0][1]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          zone.forEach((p,i)=>{ ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(p[0],p[1],4,0,Math.PI*2); ctx.fill(); });
+        }
+      });
+    }
+    
+    // Draw current zone/line being drawn
+    const pts = drawState.points; const t = drawState.type;
+    if(pts.length>0){
+      ctx.strokeStyle = t==='line' ? '#28a745' : '#ff4757';
+      ctx.lineWidth = t==='line'?3:2; if(t!=='line') ctx.setLineDash([5,5]);
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.stroke(); ctx.setLineDash([]);
+      pts.forEach((p,i)=>{ ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(p[0],p[1],4,0,Math.PI*2); ctx.fill(); });
+    }
+    requestAnimationFrame(()=>previewLoop(ctx,cvs));
+  }
+  async function saveCamModal(){
+    // Check if editing existing camera or adding new one
+    if (modalState.camId) {
+      // Editing existing camera - only update task
+      await updateCameraTask(modalState.camId);
+    } else {
+      // Adding new camera
+      const type = document.getElementById('inputType').value;
+      let source = '';
+      if(type==='rtsp'){
+        source = document.getElementById('rtspUrl').value.trim();
+        if(!source) return alert('Nhập RTSP URL');
+      } else if(type==='file'){
+        const f = document.getElementById('videoFile').files[0];
+        if(!f) return alert('Chọn video file');
+        const fd = new FormData(); fd.append('file', f);
+        const up = await fetch('/api/upload', { method:'POST', body: fd }).then(r=>r.json());
+        if(!up.path){ alert('Upload failed'); return; }
+        source = up.path;
+      } else {
+        source = String(document.getElementById('webcamId').value || '0');
+      }
+      const conf = parseFloat(document.getElementById('confThresh').value);
+      const iou = parseFloat(document.getElementById('iouThresh').value);
+      const maxDet = parseInt(document.getElementById('maxDet').value,10) || 300;
+
+      // Create camera
+      const res = await fetch('/api/camera/add', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ source, conf, iou, max_det: maxDet }) });
+      const data = await res.json();
+      if(!res.ok){ alert(data.error || 'Add failed'); return; }
+      await applyTaskToNewCamera(data.cam_id);
+    }
+    
+    closeCamModal();
+    await refreshList();
+  }
+  
+  async function updateCameraTask(camId) {
+    // Apply task to existing camera
+    if (modalState.pendingTask || modalState.completedZones) {
+      
+      // Handle line task
+      if (modalState.pendingTask) {
+        const taskRes = await fetch(`/api/camera/${camId}/set_task`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(modalState.pendingTask) });
+        modalState.pendingTask = null;
+      }
+      // Handle zone tasks
+      if (modalState.completedZones && modalState.completedZones.length > 0) {
+        const zoneTask = { task:'zone', params:{ zones: modalState.completedZones } };
+        const taskRes = await fetch(`/api/camera/${camId}/set_task`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(zoneTask) });
+        modalState.completedZones = [];
+      }
+    }
+  }
+  
+  async function applyTaskToNewCamera(camId) {
+    // if a task was drawn before creating camera, apply it now
+    if (modalState.pendingTask || modalState.completedZones){
+      // Small delay to ensure camera is fully started
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Handle line task
+      if (modalState.pendingTask) {
+        await fetch(`/api/camera/${camId}/set_task`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(modalState.pendingTask) });
+        modalState.pendingTask = null;
+      }
+      // Handle zone tasks
+      if (modalState.completedZones && modalState.completedZones.length > 0) {
+        const zoneTask = { task:'zone', params:{ zones: modalState.completedZones } };
+        await fetch(`/api/camera/${camId}/set_task`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(zoneTask) });
+        modalState.completedZones = [];
+      }
+    }
+  }
+
+  async function refreshList(){
+    const res = await fetch('/api/camera/list');
+    const data = await res.json();
+    renderGrid(data.cameras || []);
+  }
+
+  async function renderGrid(ids){
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    // Hiển thị 2 camera 1 dòng (grid-template-columns đã đúng)
+    for (const id of ids) {
+      // Removed unused variable assignments
+      // Lấy stats cho từng camera
+      let peopleCount = 0;
+      try {
+        const res = await fetch(`/api/camera/${id}/stats`);
+        if (res.ok) {
+          const stats = await res.json();
+          peopleCount = stats.people_count || 0;
+        }
+      } catch(e) {}
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="card-header">
+          <div><i class="fas fa-camera"></i> Camera ${id}</div>
+          <div>
+            <button class="btn" onclick="openEdit('${id}')"><i class="fas fa-gear"></i></button>
+            <button class="btn" onclick="removeCam('${id}')"><i class="fas fa-trash"></i></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="video-container">
+            <img id="img-${id}" src="/camera/${id}/stream" alt="Camera ${id}" />
+            <canvas id="cv-${id}" class="canvas"></canvas>
+          </div>
+          <div style="margin:8px 0;font-weight:600;color:#667eea;">Số người trong zone: <span id="count-${id}">${peopleCount}</span></div>
+          <!-- Removed drawing controls as requested -->
+        </div>`;
+      grid.appendChild(card);
+      setupCanvas(id);
+    }
+  }
+
+  function setupCanvas(id){
+    // Simplified setupCanvas - only for display, no drawing functionality
+    const img = document.getElementById('img-'+id);
+    const cv = document.getElementById('cv-'+id);
+    const ctx = cv.getContext('2d');
+    function sync(){ if(img.naturalWidth){ cv.width=img.naturalWidth; cv.height=img.naturalHeight; } }
+    img.addEventListener('load', sync); if(img.complete) sync();
+    
+    // Auto-update people count every second
+    setInterval(async () => {
+      try {
+        const res = await fetch(`/api/camera/${id}/stats`);
+        if (res.ok) {
+          const stats = await res.json();
+          const countElement = document.getElementById(`count-${id}`);
+          if (countElement) {
+            countElement.textContent = stats.people_count || 0;
+          }
+        }
+      } catch(e) {
+        console.error('Error updating people count:', e);
+      }
+    }, 1000);
+    
+    // Only expose edit and remove functions
+    window.openEdit = (cid)=>{ if(cid!==id) return; openEditModal(cid); };
+    window.removeCam = async (cid)=>{ if(cid!==id) return; if(!confirm('Xóa camera này?')) return; await fetch(`/api/camera/${id}/remove`, { method:'DELETE' }); refreshList(); };
+  }
+</script>
+{% endblock %}
+
+
