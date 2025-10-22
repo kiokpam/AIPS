@@ -1,0 +1,71 @@
+services:
+  db:
+    image: timescale/timescaledb-ha:pg15-latest
+    environment:
+      - POSTGRES_USER=aips
+      - POSTGRES_PASSWORD=aips
+      - POSTGRES_DB=aips
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+    environment:
+      - DATABASE_URL=postgresql+psycopg://aips:aips@db:5432/aips
+      - CORS_ORIGINS=*
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+
+  frontend:
+    build: ./frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  people-counting:
+    build: ./ai/people-counting
+    ports:
+      - "8001:8001"
+    environment:
+      - BACKEND_URL=http://backend:8000
+
+  behavior-detection:
+    build: ./ai/behavior-detection
+    ports:
+      - "8002:8002"
+    environment:
+      - BACKEND_URL=http://backend:8000
+
+  stream-gateway:
+    build: ./stream-gateway
+    ports:
+      - "1935:1935"   # RTMP
+      - "8554:8554"   # RTSP
+      - "8888:8888"   # HLS
+      - "8889:8889"   # WebRTC
+      - "9997:9997"   # API
+      - "9998:9998"   # Metrics
+    depends_on:
+      - backend
+
+  preprocess-pipeline:
+    build: ./stream-gateway/pipelines
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+      - people-counting
+      - behavior-detection
+
+volumes:
+  db_data:
+
+

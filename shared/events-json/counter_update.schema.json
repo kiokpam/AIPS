@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CounterUpdateEvent",
+  "type": "object",
+  "required": ["event", "store_id", "zone_id", "value", "ts"],
+  "properties": {
+    "event": { "const": "counter_update" },
+    "store_id": { "type": "string" },
+    "zone_id": { "type": "string" },
+    "value": { "type": "integer", "minimum": 0 },
+    "ts": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}
+
+

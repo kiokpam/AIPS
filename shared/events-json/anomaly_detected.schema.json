@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AnomalyDetectedEvent",
+  "type": "object",
+  "required": ["event", "store_id", "camera_id", "type", "severity", "ts"],
+  "properties": {
+    "event": { "const": "anomaly_detected" },
+    "store_id": { "type": "string" },
+    "camera_id": { "type": "string" },
+    "type": { "type": "string" },
+    "severity": { "type": "number", "minimum": 0, "maximum": 1 },
+    "clip_ref": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}
+
+
