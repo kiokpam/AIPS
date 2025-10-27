@@ -16,10 +16,14 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg://aips:aips@db:5432/aips
       - CORS_ORIGINS=*
+      - PEOPLE_COUNTING_URL=http://people-counting:8001
+      - BEHAVIOR_DETECTION_URL=http://behavior-detection:8002
     ports:
       - "8000:8000"
     depends_on:
       - db
+      - people-counting
+      - behavior-detection
 
   frontend:
     build: ./frontend
@@ -29,6 +33,10 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
 
   people-counting:
     build: ./ai/people-counting
@@ -36,6 +44,9 @@ services:
       - "8001:8001"
     environment:
       - BACKEND_URL=http://backend:8000
+      - AI_CORE_URL=http://ai-core:8003
+    depends_on:
+      - ai-core
 
   behavior-detection:
     build: ./ai/behavior-detection
@@ -43,6 +54,25 @@ services:
       - "8002:8002"
     environment:
       - BACKEND_URL=http://backend:8000
+      - AI_CORE_URL=http://ai-core:8003
+    depends_on:
+      - ai-core
+
+  ai-core:
+    build: ./ai/ai-core
+    ports:
+      - "8003:8003"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   stream-gateway:
     build: ./stream-gateway

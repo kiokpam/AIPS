@@ -7,4 +7,4 @@ COPY mediamtx.yml /mediamtx.yml
 EXPOSE 1935 8554 8888 8889 9997 9998
 
 # Use minimal config
-CMD ["mediamtx", "/mediamtx.yml"]
+CMD ["mediamtx"]
