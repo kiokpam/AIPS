@@ -1,0 +1,5 @@
+services:
+  stream-gateway:
+    image: bluenviron/mediamtx:latest
+    volumes:
+      - ./stream-gateway/mediamtx.yml:/mediamtx.yml:ro

@@ -23,7 +23,7 @@ import {
   Trash2,
   Save
 } from 'lucide-react';
-import { cameraApi, storeApi, type Camera as CameraType } from '@/lib/api';
+import { cameraApi, storeApi, tasksApi, type Camera as CameraType } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 // Drawing Canvas Component
@@ -236,8 +236,21 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   onDelete: (id: string) => void;
   onToggle: (id: string, isActive: boolean) => void;
 }) => {
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(!!camera.is_active);
+  const [isStarting, setIsStarting] = useState(false);
+  const [streamRetry, setStreamRetry] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
+
+  // When backend reports active, automatically try to show the stream
+  useEffect(() => {
+    if (camera.is_active) {
+      setIsStarting(true);
+      setIsStreaming(true);
+    } else {
+      setIsStarting(false);
+      setIsStreaming(false);
+    }
+  }, [camera.is_active]);
 
   const handleStreamToggle = () => {
     setIsStreaming(!isStreaming);
@@ -257,12 +270,29 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
             src={cameraApi.getCameraStreamUrl(camera.id)}
             alt={`${camera.name} stream`}
             className="video-stream"
-            onError={() => setIsStreaming(false)}
+            onLoad={() => {
+              setIsStarting(false);
+              setStreamRetry(0);
+            }}
+            onError={() => {
+              // Retry a few times while the worker warms up
+              if (streamRetry < 20) {
+                setStreamRetry((n) => n + 1);
+                setIsStarting(true);
+                setTimeout(() => {
+                  setIsStreaming(false);
+                  setTimeout(() => setIsStreaming(true), 300);
+                }, 300);
+              } else {
+                setIsStarting(false);
+                setIsStreaming(false);
+              }
+            }}
           />
         ) : (
           <div className="video-placeholder">
             <Camera className="w-12 h-12 text-slate-400" />
-            <p className="text-sm text-slate-500 mt-2">Camera Offline</p>
+            <p className="text-sm text-slate-500 mt-2">{isStarting ? 'Starting…' : 'Camera Offline'}</p>
           </div>
         )}
         
@@ -270,7 +300,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         <div className="absolute top-3 left-3 flex items-center space-x-2">
           <div className={`status-indicator ${camera.is_active ? 'status-online' : 'status-offline'}`} />
           <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
-            {camera.is_active ? 'Online' : 'Offline'}
+            {camera.is_active ? (isStarting ? 'Starting…' : 'Online') : 'Offline'}
           </span>
         </div>
 
@@ -429,6 +459,31 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [previewError, setPreviewError] = useState<string>('');
   const [currentDrawing, setCurrentDrawing] = useState<any>(null);
   const [drawingMode, setDrawingMode] = useState<'zone' | 'line' | null>(null);
+  const [drawSize, setDrawSize] = useState<{ w: number; h: number } | null>(null);
+  const [contentBox, setContentBox] = useState<{
+    displayW: number; displayH: number; offsetX: number; offsetY: number; naturalW: number; naturalH: number
+  } | null>(null);
+
+  // Helper function to convert normalized coordinates back to canvas coordinates for display
+  const normalizedToCanvas = (fx: number, fy: number, canvas: HTMLCanvasElement) => {
+    if (!contentBox) {
+      // Fallback to canvas-relative coordinates
+      return {
+        x: fx * canvas.width,
+        y: fy * canvas.height
+      };
+    }
+    
+    // Convert normalized coordinates back to content box coordinates
+    const xInContent = fx * contentBox.displayW;
+    const yInContent = fy * contentBox.displayH;
+    
+    // Convert to canvas coordinates
+    return {
+      x: xInContent + contentBox.offsetX,
+      y: yInContent + contentBox.offsetY
+    };
+  };
 
   // Drawing functions - defined at component level for accessibility
   const drawZone = (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft = false) => {
@@ -439,10 +494,19 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     ctx.setLineDash(isDraft ? [5, 5] : []);
 
     ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
+    
+    // Prefer direct pixel coords for immediate on-screen draw; fall back to normalized
+    const firstPoint = (points[0].x !== undefined && points[0].y !== undefined)
+      ? { x: points[0].x, y: points[0].y }
+      : normalizedToCanvas(points[0].fx, points[0].fy, ctx.canvas);
+    
+    ctx.moveTo(firstPoint.x, firstPoint.y);
 
     for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
+      const point = (points[i].x !== undefined && points[i].y !== undefined)
+        ? { x: points[i].x, y: points[i].y }
+        : normalizedToCanvas(points[i].fx, points[i].fy, ctx.canvas);
+      ctx.lineTo(point.x, point.y);
     }
 
     if (isDraft) {
@@ -458,9 +522,17 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     ctx.lineWidth = lineWidth;
     ctx.setLineDash(isDraft ? [5, 5] : []);
 
+    // Prefer direct pixel coords for immediate on-screen draw; fall back to normalized
+    const point1 = (p1.x !== undefined && p1.y !== undefined)
+      ? { x: p1.x, y: p1.y }
+      : normalizedToCanvas(p1.fx, p1.fy, ctx.canvas);
+    const point2 = (p2.x !== undefined && p2.y !== undefined)
+      ? { x: p2.x, y: p2.y }
+      : normalizedToCanvas(p2.fx, p2.fy, ctx.canvas);
+
     ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
+    ctx.moveTo(point1.x, point1.y);
+    ctx.lineTo(point2.x, point2.y);
     ctx.stroke();
   };
 
@@ -480,13 +552,14 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         return;
       }
 
-      // Convert drawn areas to backend format
+      // Convert drawn areas to backend format using normalized coordinates
+      // For now, we'll store the normalized coordinates and convert them in handleAddCamera
       const zones = drawnAreas
         .filter(area => area.type === 'zone' && area.isComplete)
         .map((area, index) => ({
           id: `zone_${index + 1}`,
           name: `Zone ${index + 1}`,
-          polygon: area.points.map((p: any) => [p.x, p.y])
+          points: area.points.map((p: any) => ({ x: p.x, y: p.y, fx: p.fx, fy: p.fy }))
         }));
 
       const lines = drawnAreas
@@ -494,8 +567,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         .map((area, index) => ({
           id: `line_${index + 1}`,
           name: `Line ${index + 1}`,
-          p1: [area.points[0].x, area.points[0].y],
-          p2: [area.points[1].x, area.points[1].y]
+          points: area.points.map((p: any) => ({ x: p.x, y: p.y, fx: p.fx, fy: p.fy }))
         }));
 
       const cameraData = {
@@ -513,7 +585,9 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         taskType: formData.taskType,
         allowMultipleAreas: formData.allowMultipleAreas,
         zones,
-        lines
+        lines,
+        canvasSize: drawSize ? { w: drawSize.w, h: drawSize.h } : null,
+        contentBox: contentBox ? { ...contentBox } : null
       };
 
       console.log('Submitting camera data:', cameraData);
@@ -629,6 +703,25 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     if (!isDrawing || !drawingMode) return;
     
     const canvas = e.currentTarget;
+    // Track drawing canvas size for later coordinate scaling
+    if (!drawSize || drawSize.w !== canvas.width || drawSize.h !== canvas.height) {
+      setDrawSize({ w: canvas.width, h: canvas.height });
+    }
+
+    // Compute content (letterboxed) box for object-contain media
+    const mediaEl = canvas.parentElement?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement | null;
+    if (mediaEl) {
+      const containerW = canvas.width;
+      const containerH = canvas.height;
+      const naturalW = (mediaEl as HTMLVideoElement).videoWidth || (mediaEl as HTMLImageElement).naturalWidth || containerW;
+      const naturalH = (mediaEl as HTMLVideoElement).videoHeight || (mediaEl as HTMLImageElement).naturalHeight || containerH;
+      const scale = Math.min(containerW / naturalW, containerH / naturalH);
+      const displayW = naturalW * scale;
+      const displayH = naturalH * scale;
+      const offsetX = (containerW - displayW) / 2;
+      const offsetY = (containerH - displayH) / 2;
+      setContentBox({ displayW, displayH, offsetX, offsetY, naturalW, naturalH });
+    }
     const rect = canvas.getBoundingClientRect();
     
     // Get precise click coordinates relative to canvas
@@ -640,12 +733,34 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       console.warn('Click outside canvas bounds:', x, y, 'Canvas:', canvas.width, 'x', canvas.height);
       return;
     }
+
+    // Calculate normalized coordinates (fractions 0-1) for precise mapping
+    let fx = 0, fy = 0;
+    if (contentBox) {
+      // Convert canvas coordinates to content box coordinates
+      const xInContent = x - contentBox.offsetX;
+      const yInContent = y - contentBox.offsetY;
+      
+      // Clamp to content box bounds
+      const clampedX = Math.max(0, Math.min(contentBox.displayW, xInContent));
+      const clampedY = Math.max(0, Math.min(contentBox.displayH, yInContent));
+      
+      // Convert to normalized coordinates (0-1)
+      fx = contentBox.displayW > 0 ? clampedX / contentBox.displayW : 0;
+      fy = contentBox.displayH > 0 ? clampedY / contentBox.displayH : 0;
+    } else {
+      // Fallback to canvas-relative coordinates
+      fx = x / canvas.width;
+      fy = y / canvas.height;
+    }
     
     console.log('=== CLICK COORDINATES DEBUG ===');
     console.log('Mouse position:', e.clientX, e.clientY);
     console.log('Canvas rect:', rect);
     console.log('Click coordinates:', x, y);
+    console.log('Normalized coordinates:', fx, fy);
     console.log('Canvas dimensions:', canvas.width, 'x', canvas.height);
+    console.log('Content box:', contentBox);
     console.log('================================');
     
     // Add visual feedback for debugging
@@ -657,28 +772,69 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       // Redraw all existing content manually
       drawnAreas.forEach(area => {
         if (area.type === 'zone' && area.isComplete) {
-          drawZone(ctx, area.points, '#10b981', 2);
+          // Convert normalized coords to pixel coords for display if needed
+          const displayPoints = area.points.map((p: any) => {
+            if (p.x !== undefined && p.y !== undefined) {
+              return { x: p.x, y: p.y, fx: p.fx, fy: p.fy };
+            } else if (p.fx !== undefined && p.fy !== undefined) {
+              const pixel = normalizedToCanvas(p.fx, p.fy, canvas);
+              return { x: pixel.x, y: pixel.y, fx: p.fx, fy: p.fy };
+            }
+            return p;
+          });
+          drawZone(ctx, displayPoints, '#10b981', 2);
         } else if (area.type === 'line' && area.isComplete) {
-          drawLine(ctx, area.points[0], area.points[1], '#ef4444', 2);
+          // Convert normalized coords to pixel coords for display if needed
+          const p1 = area.points[0];
+          const p2 = area.points[1];
+          const displayP1 = (p1.x !== undefined && p1.y !== undefined) 
+            ? { x: p1.x, y: p1.y, fx: p1.fx, fy: p1.fy }
+            : { x: normalizedToCanvas(p1.fx, p1.fy, canvas).x, y: normalizedToCanvas(p1.fx, p1.fy, canvas).y, fx: p1.fx, fy: p1.fy };
+          const displayP2 = (p2.x !== undefined && p2.y !== undefined)
+            ? { x: p2.x, y: p2.y, fx: p2.fx, fy: p2.fy }
+            : { x: normalizedToCanvas(p2.fx, p2.fy, canvas).x, y: normalizedToCanvas(p2.fx, p2.fy, canvas).y, fx: p2.fx, fy: p2.fy };
+          drawLine(ctx, displayP1, displayP2, '#ef4444', 2);
         }
       });
       
       // Draw current drawing
       if (currentDrawing) {
         if (currentDrawing.type === 'zone') {
-          drawZone(ctx, currentDrawing.points, '#3b82f6', 2, true);
+          // Convert normalized coords to pixel coords for display if needed
+          const displayPoints = currentDrawing.points.map((p: any) => {
+            if (p.x !== undefined && p.y !== undefined) {
+              return { x: p.x, y: p.y, fx: p.fx, fy: p.fy };
+            } else if (p.fx !== undefined && p.fy !== undefined) {
+              const pixel = normalizedToCanvas(p.fx, p.fy, canvas);
+              return { x: pixel.x, y: pixel.y, fx: p.fx, fy: p.fy };
+            }
+            return p;
+          });
+          drawZone(ctx, displayPoints, '#3b82f6', 2, true);
         } else if (currentDrawing.type === 'line') {
           if (currentDrawing.points.length === 1) {
             // Show only the first point
+            const p = currentDrawing.points[0];
+            const displayP = (p.x !== undefined && p.y !== undefined)
+              ? { x: p.x, y: p.y }
+              : normalizedToCanvas(p.fx, p.fy, canvas);
             ctx.fillStyle = '#3b82f6';
             ctx.beginPath();
-            ctx.arc(currentDrawing.points[0].x, currentDrawing.points[0].y, 4, 0, Math.PI * 2);
+            ctx.arc(displayP.x, displayP.y, 4, 0, Math.PI * 2);
             ctx.fill();
           } else if (currentDrawing.points.length === 2) {
             // Show the line between two points
-            drawLine(ctx, currentDrawing.points[0], currentDrawing.points[1], '#3b82f6', 3, true);
+            const p1 = currentDrawing.points[0];
+            const p2 = currentDrawing.points[1];
+            const displayP1 = (p1.x !== undefined && p1.y !== undefined)
+              ? { x: p1.x, y: p1.y, fx: p1.fx, fy: p1.fy }
+              : { x: normalizedToCanvas(p1.fx, p1.fy, canvas).x, y: normalizedToCanvas(p1.fx, p1.fy, canvas).y, fx: p1.fx, fy: p1.fy };
+            const displayP2 = (p2.x !== undefined && p2.y !== undefined)
+              ? { x: p2.x, y: p2.y, fx: p2.fx, fy: p2.fy }
+              : { x: normalizedToCanvas(p2.fx, p2.fy, canvas).x, y: normalizedToCanvas(p2.fx, p2.fy, canvas).y, fx: p2.fx, fy: p2.fy };
+            drawLine(ctx, displayP1, displayP2, '#3b82f6', 3, true);
             // Show both points
-            currentDrawing.points.forEach((point: any) => {
+            [displayP1, displayP2].forEach((point: any) => {
               ctx.fillStyle = '#3b82f6';
               ctx.beginPath();
               ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
@@ -698,6 +854,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       ctx.fillStyle = '#ff0000';
       ctx.font = 'bold 14px Arial';
       ctx.fillText(`(${Math.round(x)}, ${Math.round(y)})`, x + 8, y - 8);
+      ctx.fillText(`f(${fx.toFixed(3)}, ${fy.toFixed(3)})`, x + 8, y + 20);
       
       // Add crosshair
       ctx.strokeStyle = '#ff0000';
@@ -711,24 +868,24 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
     
     if (drawingMode === 'zone') {
-      handleZoneClick(x, y);
+      handleZoneClick(x, y, fx, fy);
     } else if (drawingMode === 'line') {
-      handleLineClick(x, y);
+      handleLineClick(x, y, fx, fy);
     }
   };
 
-  const handleZoneClick = (x: number, y: number) => {
+  const handleZoneClick = (x: number, y: number, fx: number, fy: number) => {
     if (!currentDrawing) {
       // Start new zone
       setCurrentDrawing({
         id: Date.now(),
         type: 'zone',
-        points: [{ x, y }],
+        points: [{ x, y, fx, fy }],
         isComplete: false
       });
     } else {
       // Add point to current zone
-      const newPoints = [...currentDrawing.points, { x, y }];
+      const newPoints = [...currentDrawing.points, { x, y, fx, fy }];
       setCurrentDrawing({
         ...currentDrawing,
         points: newPoints
@@ -736,21 +893,21 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
   };
 
-  const handleLineClick = (x: number, y: number) => {
-    console.log('Line click:', x, y, 'Current drawing:', currentDrawing);
+  const handleLineClick = (x: number, y: number, fx: number, fy: number) => {
+    console.log('Line click:', x, y, 'Normalized:', fx, fy, 'Current drawing:', currentDrawing);
     if (!currentDrawing) {
       // Start new line with first point
       console.log('Starting new line');
       setCurrentDrawing({
         id: Date.now(),
         type: 'line',
-        points: [{ x, y }],
+        points: [{ x, y, fx, fy }],
         isComplete: false
       });
     } else if (currentDrawing.points.length === 1) {
       // Complete the line with second point
       console.log('Completing line');
-      const newPoints = [...currentDrawing.points, { x, y }];
+      const newPoints = [...currentDrawing.points, { x, y, fx, fy }];
       const completedLine = {
         ...currentDrawing,
         points: newPoints,
@@ -1344,19 +1501,123 @@ export default function CamerasPage() {
       console.log('Creating camera via API:', payload);
       const created = await cameraApi.createCamera(payload);
 
-      // Optionally, attach zones/lines to a separate config endpoint if needed
-      // await cameraApi.updateCameraConfig(created.id, { zones, lines });
+      // Optimistically add as active while backend starts the worker
+      setCameras(prev => [...prev, { ...created, is_active: true }]);
+      toast('Starting camera...', { icon: '⏳' });
 
-      // Optionally start camera for live preview immediately
+      // Auto-start camera immediately after creation (requested behavior)
       try {
         await cameraApi.startCamera(created.id);
       } catch (e) {
-        console.warn('Start camera failed (optional):', e);
+        console.warn('Start camera after create failed (will retry on refresh):', e);
       }
 
-      // Refresh list from backend
+      // Briefly wait and poll stats to reduce "offline" flicker
+      const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
+      const maxAttempts = 20; // up to ~10s
+      for (let i = 0; i < maxAttempts; i++) {
+        try {
+          // if stats endpoint exists, use it to check running; ignore failure
+          const stats = await cameraApi.getCameraStats(created.id);
+          if (stats && stats.running) break;
+        } catch (_) {}
+        await wait(500);
+      }
+
+      // Persist zones/lines to backend tasks using normalized coordinates
+      try {
+        const taskType: 'zone' | 'line' | 'both' =
+          zones.length > 0 && lines.length > 0 ? 'both' : zones.length > 0 ? 'zone' : lines.length > 0 ? 'line' : 'zone';
+        
+        // Get actual frame dimensions from backend with retry mechanism
+        const frameSize = await (async () => {
+          const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+          const url = `${base}/api/cameras/${created.id}/frame?overlay=false&_=${Date.now()}`;
+          
+          // Retry up to 3 times with delay
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const result = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => {
+                  const w = img.naturalWidth || img.width;
+                  const h = img.naturalHeight || img.height;
+                  console.log(`Frame image loaded (attempt ${attempt}):`, w, 'x', h);
+                  if (w > 0 && h > 0) {
+                    resolve({ w, h });
+                  } else {
+                    reject(new Error('Invalid frame dimensions'));
+                  }
+                };
+                img.onerror = () => {
+                  reject(new Error('Failed to load frame image'));
+                };
+                img.src = url;
+              });
+              
+              if (result.w > 0 && result.h > 0) {
+                return result;
+              }
+            } catch (error) {
+              console.warn(`Frame load attempt ${attempt} failed:`, error);
+              if (attempt < 3) {
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+              }
+            }
+          }
+          
+          console.warn('All frame load attempts failed, using fallback dimensions');
+          return { w: 1920, h: 1080 }; // Fallback to common resolution
+        })();
+        
+        const frameW = frameSize.w;
+        const frameH = frameSize.h;
+        
+        console.log('Frame dimensions for coordinate conversion:', frameW, 'x', frameH);
+        console.log('Original zones with normalized coords:', zones);
+        
+        // Convert normalized coordinates to frame coordinates
+        const scaledZones = zones.map((z: any) => ({
+          name: z.name,
+          polygon: z.points.map((p: any) => [
+            Math.round((p.fx || 0) * frameW),
+            Math.round((p.fy || 0) * frameH)
+          ]),
+          is_active: true,
+          camera_id: created.id,
+        }));
+        
+        const scaledLines = lines.map((l: any) => ({
+          name: l.name,
+          p1: [
+            Math.round((l.points[0].fx || 0) * frameW),
+            Math.round((l.points[0].fy || 0) * frameH)
+          ],
+          p2: [
+            Math.round((l.points[1].fx || 0) * frameW),
+            Math.round((l.points[1].fy || 0) * frameH)
+          ],
+          is_active: true,
+          camera_id: created.id,
+        }));
+        
+        console.log('Converted zones:', scaledZones);
+        console.log('Converted lines:', scaledLines);
+
+        if (scaledZones.length > 0 || scaledLines.length > 0) {
+          await tasksApi.setCameraTasks(created.id, {
+            task_type: taskType,
+            zones: scaledZones,
+            lines: scaledLines,
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to save tasks (zones/lines):', e);
+      }
+
+      // Refresh list from backend to reflect final state
       await loadCameras();
-      toast.success('Camera added successfully');
+      toast.success('Camera added, tasks saved and started');
     } catch (error) {
       console.error('Error in handleAddCamera:', error);
       throw error;
@@ -1365,11 +1626,18 @@ export default function CamerasPage() {
 
   const handleToggleCamera = async (id: string, isActive: boolean) => {
     try {
-      setCameras(prev => prev.map(camera => 
-        camera.id === id ? { ...camera, is_active: isActive } : camera
-      ));
-      toast.success(`Camera ${isActive ? 'started' : 'stopped'}`);
+      // Invert current state on click: if active -> stop; if inactive -> start
+      if (isActive) {
+        await cameraApi.stopCamera(id);
+        toast.success('Camera stopped');
+      } else {
+        await cameraApi.startCamera(id);
+        toast.success('Camera started');
+      }
+      // Refresh list to reflect real backend state
+      await loadCameras();
     } catch (error) {
+      console.error('Failed to toggle camera', error);
       toast.error('Failed to toggle camera');
     }
   };

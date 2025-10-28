@@ -170,6 +170,21 @@ class VideoStream:
             if span > 0:
                 return (len(self.frame_times) - 1) / span
         return self.video_fps
+
+    def get_size(self) -> Optional[tuple]:
+        """Return (width, height) of frames if known."""
+        try:
+            w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            if w > 0 and h > 0:
+                return (w, h)
+            with self.lock:
+                if self.latest_frame is not None:
+                    lh, lw = self.latest_frame.shape[:2]
+                    return (lw, lh)
+        except Exception:
+            pass
+        return None
     
     def stop(self):
         """Stop the video stream"""
@@ -253,9 +268,20 @@ class CameraWorker:
         if self.thread:
             self.thread.join(timeout=2)
         
-        # Close HTTP clients
-        asyncio.create_task(self.people_counting_client.aclose())
-        asyncio.create_task(self.behavior_detection_client.aclose())
+        # Close HTTP clients (ensure event loop context)
+        try:
+            asyncio.run(self.people_counting_client.aclose())
+        except RuntimeError:
+            # If an event loop is already running elsewhere, fall back to threadsafe
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(self.people_counting_client.aclose())
+            loop.close()
+        try:
+            asyncio.run(self.behavior_detection_client.aclose())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(self.behavior_detection_client.aclose())
+            loop.close()
     
     def _run(self):
         """Main processing loop"""
@@ -270,7 +296,13 @@ class CameraWorker:
                 
                 # Process with AI services at intervals
                 if self.frame_count % self.ai_processing_interval == 0:
-                    asyncio.create_task(self._process_with_ai(frame))
+                    # Run coroutine in this worker thread using a fresh event loop
+                    try:
+                        asyncio.run(self._process_with_ai(frame))
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        loop.run_until_complete(self._process_with_ai(frame))
+                        loop.close()
                 
                 time.sleep(0.01)  # Small delay to prevent excessive CPU usage
                 
@@ -400,6 +432,8 @@ class CameraWorker:
         """Update task configuration for this camera"""
         self.zones = zones
         self.lines = lines
+        # Mark whether we currently have any task configured
+        self.stats["has_task"] = bool(self.zones or self.lines)
         print(f"Updated task config for camera {self.camera_id}: {len(zones)} zones, {len(lines)} lines")
     
     def clear_tasks(self):
@@ -437,7 +471,7 @@ class CameraWorker:
     
     def get_config(self) -> Dict[str, Any]:
         """Get current camera configuration"""
-        return {
+        cfg = {
             "camera_id": self.camera_id,
             "source": self.source,
             "model_name": self.model_name,
@@ -448,6 +482,11 @@ class CameraWorker:
             "skip_frame": self.skip_frame,
             "ai_services": self.ai_services
         }
+        if self.stream:
+            size = self.stream.get_size()
+            if size:
+                cfg.update({"width": size[0], "height": size[1]})
+        return cfg
     
     def get_stats(self) -> Dict[str, Any]:
         """Get camera statistics"""
