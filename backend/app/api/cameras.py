@@ -1,21 +1,16 @@
 import uuid
-from typing import List, Optional
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Response, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.db.session import SessionLocal
 from app.models.core import Camera as CameraModel
-from app.schemas.core import Camera, CameraCreate
+from app.schemas.core import Camera, CameraCreate, CameraUpdate
 from app.services.camera_manager import camera_manager
 from app.services.streaming_service import streaming_service
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
-
-class CameraUpdate(BaseModel):
-    name: Optional[str] = None
-    rtsp_url: Optional[str] = None
-    ai_services: Optional[List[str]] = None
 
 class CameraStats(BaseModel):
     camera_id: str
@@ -38,7 +33,23 @@ def get_db() -> Session:
 def list_cameras(db: Session = Depends(get_db)) -> List[Camera]:
     """List all cameras from database"""
     rows = db.query(CameraModel).all()
-    return [Camera(id=r.id, store_id=r.store_id, name=r.name, rtsp_url=r.rtsp_url) for r in rows]
+    return [
+        Camera(
+            id=r.id,
+            store_id=r.store_id,
+            name=r.name,
+            source=r.source,
+            ai_services=r.ai_services,
+            model_name=r.model_name,
+            device=r.device,
+            conf_thresh=r.conf_thresh,
+            iou_thresh=r.iou_thresh,
+            max_det=r.max_det,
+            skip_frame=r.skip_frame,
+            is_active=r.is_active,
+        )
+        for r in rows
+    ]
 
 @router.post("/", response_model=Camera)
 def create_camera(payload: CameraCreate, db: Session = Depends(get_db)) -> Camera:
@@ -102,8 +113,21 @@ def get_camera(camera_id: str, db: Session = Depends(get_db)) -> Camera:
     camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
-    
-    return Camera(id=camera.id, store_id=camera.store_id, name=camera.name, rtsp_url=camera.rtsp_url)
+
+    return Camera(
+        id=camera.id,
+        store_id=camera.store_id,
+        name=camera.name,
+        source=camera.source,
+        ai_services=camera.ai_services,
+        model_name=camera.model_name,
+        device=camera.device,
+        conf_thresh=camera.conf_thresh,
+        iou_thresh=camera.iou_thresh,
+        max_det=camera.max_det,
+        skip_frame=camera.skip_frame,
+        is_active=camera.is_active,
+    )
 
 @router.put("/{camera_id}", response_model=Camera)
 def update_camera(camera_id: str, payload: CameraUpdate, db: Session = Depends(get_db)) -> Camera:
@@ -115,21 +139,21 @@ def update_camera(camera_id: str, payload: CameraUpdate, db: Session = Depends(g
     # Update database fields
     if payload.name is not None:
         camera.name = payload.name
-    if payload.rtsp_url is not None:
-        camera.rtsp_url = payload.rtsp_url
+    if payload.source is not None:
+        camera.source = payload.source
     
     db.commit()
     db.refresh(camera)
     
     # Update camera worker if needed
-    if payload.rtsp_url is not None:
+    if payload.source is not None:
         # Restart camera worker with new URL
         camera_manager.remove_camera(camera_id)
         ai_services = payload.ai_services or ['people_counting', 'behavior_detection']
         success = camera_manager.add_camera(
             camera_id=camera.id,
             store_id=camera.store_id,
-            rtsp_url=camera.rtsp_url,
+            source=camera.source,
             name=camera.name,
             ai_services=ai_services
         )
@@ -140,7 +164,20 @@ def update_camera(camera_id: str, payload: CameraUpdate, db: Session = Depends(g
     if payload.ai_services is not None:
         camera_manager.update_camera_ai_services(camera_id, payload.ai_services)
     
-    return Camera(id=camera.id, store_id=camera.store_id, name=camera.name, rtsp_url=camera.rtsp_url)
+    return Camera(
+        id=camera.id,
+        store_id=camera.store_id,
+        name=camera.name,
+        source=camera.source,
+        ai_services=camera.ai_services,
+        model_name=camera.model_name,
+        device=camera.device,
+        conf_thresh=camera.conf_thresh,
+        iou_thresh=camera.iou_thresh,
+        max_det=camera.max_det,
+        skip_frame=camera.skip_frame,
+        is_active=camera.is_active,
+    )
 
 @router.delete("/{camera_id}")
 def delete_camera(camera_id: str, db: Session = Depends(get_db)):
@@ -218,7 +255,7 @@ def start_camera(camera_id: str, db: Session = Depends(get_db)):
     success = camera_manager.add_camera(
         camera_id=camera.id,
         store_id=camera.store_id,
-        rtsp_url=camera.rtsp_url,
+        source=camera.source,
         name=camera.name,
         ai_services=['people_counting', 'behavior_detection']
     )

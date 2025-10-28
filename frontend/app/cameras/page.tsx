@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera,
@@ -23,8 +23,212 @@ import {
   Trash2,
   Save
 } from 'lucide-react';
-import { cameraApi, type Camera as CameraType } from '@/lib/api';
+import { cameraApi, storeApi, type Camera as CameraType } from '@/lib/api';
 import toast from 'react-hot-toast';
+
+// Drawing Canvas Component
+const DrawingCanvas = ({
+  width,
+  height,
+  className,
+  onClick,
+  onMouseEnter,
+  onMouseLeave,
+  drawnAreas,
+  currentDrawing,
+  drawingMode,
+  drawZone,
+  drawLine
+}: {
+  width: number;
+  height: number;
+  className: string;
+  onClick: (e: React.MouseEvent<HTMLCanvasElement>) => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  drawnAreas: any[];
+  currentDrawing: any;
+  drawingMode: 'zone' | 'line' | null;
+  drawZone: (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft?: boolean) => void;
+  drawLine: (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft?: boolean) => void;
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const updateCanvasSize = () => {
+      // Find the video element to match its dimensions
+      const videoElement = canvas.parentElement?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement;
+      if (videoElement) {
+        // Get the actual video/image dimensions and position
+        const videoRect = videoElement.getBoundingClientRect();
+        const containerRect = canvas.parentElement?.getBoundingClientRect();
+        
+        if (!containerRect) return;
+        
+        // Calculate the video's position relative to the container
+        const videoLeft = videoRect.left - containerRect.left;
+        const videoTop = videoRect.top - containerRect.top;
+        
+        // Set canvas size to match the video element size exactly
+        canvas.width = videoRect.width;
+        canvas.height = videoRect.height;
+        
+        // Position canvas exactly over the video element
+        canvas.style.position = 'absolute';
+        canvas.style.left = videoLeft + 'px';
+        canvas.style.top = videoTop + 'px';
+        canvas.style.width = videoRect.width + 'px';
+        canvas.style.height = videoRect.height + 'px';
+        canvas.style.pointerEvents = 'auto';
+        canvas.style.border = '2px solid red'; // Debug border
+        canvas.style.backgroundColor = 'rgba(255, 0, 0, 0.1)'; // Debug background
+        canvas.style.zIndex = '20';
+        
+        console.log('=== CANVAS POSITIONING DEBUG ===');
+        console.log('Video rect:', videoRect);
+        console.log('Container rect:', containerRect);
+        console.log('Video position in container:', videoLeft, videoTop);
+        console.log('Canvas size:', videoRect.width, 'x', videoRect.height);
+        console.log('Canvas position:', canvas.style.left, canvas.style.top);
+        console.log('================================');
+        
+        // Store video element reference for click handling
+        (canvas as any).videoElement = videoElement;
+      } else {
+        // Fallback to container size
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        console.log('Canvas fallback size:', rect.width, 'x', rect.height);
+      }
+    };
+
+    // More robust video detection and positioning
+    const setupVideoTracking = () => {
+      const videoElement = canvas.parentElement?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement;
+      if (videoElement) {
+        // Multiple event listeners for different load states
+        videoElement.addEventListener('load', updateCanvasSize);
+        videoElement.addEventListener('loadeddata', updateCanvasSize);
+        videoElement.addEventListener('loadedmetadata', updateCanvasSize);
+        videoElement.addEventListener('canplay', updateCanvasSize);
+        
+        // Also listen for video resize events
+        videoElement.addEventListener('resize', updateCanvasSize);
+        
+        // Store reference for later use
+        (canvas as any).videoElement = videoElement;
+        
+        console.log('Video tracking setup complete');
+      }
+    };
+
+    // Initial setup with multiple attempts
+    setupVideoTracking();
+    setTimeout(setupVideoTracking, 100);
+    setTimeout(setupVideoTracking, 500);
+    setTimeout(setupVideoTracking, 1000);
+    setTimeout(setupVideoTracking, 2000);
+
+    // Handle window resize
+    const handleResize = () => {
+      updateCanvasSize();
+      redrawCanvas();
+    };
+
+    window.addEventListener('resize', handleResize);
+    
+    // Use MutationObserver to detect when video element is added
+    const observer = new MutationObserver(() => {
+      setupVideoTracking();
+      updateCanvasSize();
+    });
+    
+    if (canvas.parentElement) {
+      observer.observe(canvas.parentElement, { 
+        childList: true, 
+        subtree: true 
+      });
+    }
+
+    const redrawCanvas = () => {
+      if (!canvas || !ctx) return;
+      
+      // Ensure canvas is properly positioned before drawing
+      updateCanvasSize();
+      
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      console.log('Drawing canvas - drawnAreas:', drawnAreas, 'currentDrawing:', currentDrawing);
+
+      // Draw completed areas
+      drawnAreas.forEach(area => {
+        if (area.type === 'zone' && area.isComplete) {
+          console.log('Drawing completed zone:', area);
+          drawZone(ctx, area.points, '#10b981', 2);
+        } else if (area.type === 'line' && area.isComplete) {
+          console.log('Drawing completed line:', area);
+          drawLine(ctx, area.points[0], area.points[1], '#ef4444', 2);
+        }
+      });
+
+      // Draw current drawing
+      if (currentDrawing) {
+        if (currentDrawing.type === 'zone') {
+          drawZone(ctx, currentDrawing.points, '#3b82f6', 2, true);
+        } else if (currentDrawing.type === 'line') {
+          if (currentDrawing.points.length === 1) {
+            // Show only the first point
+            ctx.fillStyle = '#3b82f6';
+            ctx.beginPath();
+            ctx.arc(currentDrawing.points[0].x, currentDrawing.points[0].y, 4, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (currentDrawing.points.length === 2) {
+            // Show the line between two points
+            drawLine(ctx, currentDrawing.points[0], currentDrawing.points[1], '#3b82f6', 3, true);
+            // Show both points
+            currentDrawing.points.forEach((point: any) => {
+              ctx.fillStyle = '#3b82f6';
+              ctx.beginPath();
+              ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+        }
+      }
+    };
+
+    // Initial draw
+    redrawCanvas();
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      observer.disconnect();
+    };
+  }, [drawnAreas, currentDrawing]);
+
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={width}
+      height={height}
+      className={className}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      style={{ zIndex: 10 }}
+    />
+  );
+};
 
 const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   camera: CameraType;
@@ -223,39 +427,118 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string>('');
+  const [currentDrawing, setCurrentDrawing] = useState<any>(null);
+  const [drawingMode, setDrawingMode] = useState<'zone' | 'line' | null>(null);
+
+  // Drawing functions - defined at component level for accessibility
+  const drawZone = (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft = false) => {
+    if (points.length < 2) return;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(isDraft ? [5, 5] : []);
+
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+
+    if (isDraft) {
+      ctx.stroke();
+    } else {
+      ctx.closePath();
+      ctx.stroke();
+    }
+  };
+
+  const drawLine = (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(isDraft ? [5, 5] : []);
+
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
+      // Validate required fields
+      if (!formData.name.trim()) {
+        toast.error('Please enter a camera name');
+        return;
+      }
+
+      if (!formData.source.trim()) {
+        toast.error('Please enter a source URL or select a video file');
+        return;
+      }
+
+      // Convert drawn areas to backend format
+      const zones = drawnAreas
+        .filter(area => area.type === 'zone' && area.isComplete)
+        .map((area, index) => ({
+          id: `zone_${index + 1}`,
+          name: `Zone ${index + 1}`,
+          polygon: area.points.map((p: any) => [p.x, p.y])
+        }));
+
+      const lines = drawnAreas
+        .filter(area => area.type === 'line' && area.isComplete)
+        .map((area, index) => ({
+          id: `line_${index + 1}`,
+          name: `Line ${index + 1}`,
+          p1: [area.points[0].x, area.points[0].y],
+          p2: [area.points[1].x, area.points[1].y]
+        }));
+
       const cameraData = {
-        ...formData,
+        name: formData.name.trim(),
         source: formData.sourceType === 'video_file' && selectedFile 
           ? selectedFile.name 
-          : formData.source,
-        drawnAreas
+          : formData.source.trim(),
+        sourceType: formData.sourceType,
+        model_name: formData.model_name,
+        device: formData.device,
+        conf_thresh: formData.conf_thresh,
+        iou_thresh: formData.iou_thresh,
+        max_det: formData.max_det,
+        skip_frame: formData.skip_frame,
+        taskType: formData.taskType,
+        allowMultipleAreas: formData.allowMultipleAreas,
+        zones,
+        lines
       };
+
+      console.log('Submitting camera data:', cameraData);
+      
       await onAdd(cameraData);
       onClose();
       resetForm();
     } catch (error) {
-      toast.error('Failed to add camera');
+      console.error('Error adding camera:', error);
+      toast.error(`Failed to add camera: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsLoading(false);
     }
   };
 
   const resetForm = () => {
-    setFormData({
-      name: '',
-      source: '',
+      setFormData({
+        name: '',
+        source: '',
       sourceType: 'video_file',
-      model_name: 'yolov8n.pt',
-      device: 'auto',
-      conf_thresh: 0.5,
-      iou_thresh: 0.45,
-      max_det: 300,
+        model_name: 'yolov8n.pt',
+        device: 'auto',
+        conf_thresh: 0.5,
+        iou_thresh: 0.45,
+        max_det: 300,
       skip_frame: 3,
       taskType: 'zone',
       allowMultipleAreas: true
@@ -265,6 +548,9 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     setIsPreviewConnected(false);
     setPreviewUrl('');
     setPreviewError('');
+    setCurrentDrawing(null);
+    setDrawingMode(null);
+    setIsDrawing(false);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -340,22 +626,159 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   };
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
+    if (!isDrawing || !drawingMode) return;
     
     const canvas = e.currentTarget;
     const rect = canvas.getBoundingClientRect();
+    
+    // Get precise click coordinates relative to canvas
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    // Add drawing logic here
-    const newArea = {
-      id: Date.now(),
-      type: formData.taskType,
-      points: [{ x, y }],
-      timestamp: new Date()
-    };
+    // Validate coordinates are within canvas bounds
+    if (x < 0 || y < 0 || x > canvas.width || y > canvas.height) {
+      console.warn('Click outside canvas bounds:', x, y, 'Canvas:', canvas.width, 'x', canvas.height);
+      return;
+    }
     
-    setDrawnAreas(prev => [...prev, newArea]);
+    console.log('=== CLICK COORDINATES DEBUG ===');
+    console.log('Mouse position:', e.clientX, e.clientY);
+    console.log('Canvas rect:', rect);
+    console.log('Click coordinates:', x, y);
+    console.log('Canvas dimensions:', canvas.width, 'x', canvas.height);
+    console.log('================================');
+    
+    // Add visual feedback for debugging
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      // Clear previous debug markers
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Redraw all existing content manually
+      drawnAreas.forEach(area => {
+        if (area.type === 'zone' && area.isComplete) {
+          drawZone(ctx, area.points, '#10b981', 2);
+        } else if (area.type === 'line' && area.isComplete) {
+          drawLine(ctx, area.points[0], area.points[1], '#ef4444', 2);
+        }
+      });
+      
+      // Draw current drawing
+      if (currentDrawing) {
+        if (currentDrawing.type === 'zone') {
+          drawZone(ctx, currentDrawing.points, '#3b82f6', 2, true);
+        } else if (currentDrawing.type === 'line') {
+          if (currentDrawing.points.length === 1) {
+            // Show only the first point
+            ctx.fillStyle = '#3b82f6';
+            ctx.beginPath();
+            ctx.arc(currentDrawing.points[0].x, currentDrawing.points[0].y, 4, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (currentDrawing.points.length === 2) {
+            // Show the line between two points
+            drawLine(ctx, currentDrawing.points[0], currentDrawing.points[1], '#3b82f6', 3, true);
+            // Show both points
+            currentDrawing.points.forEach((point: any) => {
+              ctx.fillStyle = '#3b82f6';
+              ctx.beginPath();
+              ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+              ctx.fill();
+            });
+          }
+        }
+      }
+      
+      // Add new debug marker
+      ctx.fillStyle = '#ff0000';
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Add coordinate text
+      ctx.fillStyle = '#ff0000';
+      ctx.font = 'bold 14px Arial';
+      ctx.fillText(`(${Math.round(x)}, ${Math.round(y)})`, x + 8, y - 8);
+      
+      // Add crosshair
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - 10, y);
+      ctx.lineTo(x + 10, y);
+      ctx.moveTo(x, y - 10);
+      ctx.lineTo(x, y + 10);
+      ctx.stroke();
+    }
+    
+    if (drawingMode === 'zone') {
+      handleZoneClick(x, y);
+    } else if (drawingMode === 'line') {
+      handleLineClick(x, y);
+    }
+  };
+
+  const handleZoneClick = (x: number, y: number) => {
+    if (!currentDrawing) {
+      // Start new zone
+      setCurrentDrawing({
+        id: Date.now(),
+        type: 'zone',
+        points: [{ x, y }],
+        isComplete: false
+      });
+    } else {
+      // Add point to current zone
+      const newPoints = [...currentDrawing.points, { x, y }];
+      setCurrentDrawing({
+        ...currentDrawing,
+        points: newPoints
+      });
+    }
+  };
+
+  const handleLineClick = (x: number, y: number) => {
+    console.log('Line click:', x, y, 'Current drawing:', currentDrawing);
+    if (!currentDrawing) {
+      // Start new line with first point
+      console.log('Starting new line');
+      setCurrentDrawing({
+        id: Date.now(),
+        type: 'line',
+        points: [{ x, y }],
+        isComplete: false
+      });
+    } else if (currentDrawing.points.length === 1) {
+      // Complete the line with second point
+      console.log('Completing line');
+      const newPoints = [...currentDrawing.points, { x, y }];
+      const completedLine = {
+        ...currentDrawing,
+        points: newPoints,
+        isComplete: true
+      };
+
+      setDrawnAreas(prev => {
+        const newAreas = [...prev, completedLine];
+        console.log('Added line to drawn areas:', newAreas);
+        return newAreas;
+      });
+      setCurrentDrawing(null);
+    }
+  };
+
+  const finishZone = () => {
+    if (currentDrawing && currentDrawing.type === 'zone' && currentDrawing.points.length >= 3) {
+      const completedZone = {
+        ...currentDrawing,
+        isComplete: true
+      };
+      setDrawnAreas(prev => [...prev, completedZone]);
+      setCurrentDrawing(null);
+    }
+  };
+
+  const cancelCurrentDrawing = () => {
+    setCurrentDrawing(null);
   };
 
   if (!isOpen) return null;
@@ -365,7 +788,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-xl shadow-xl w-full max-w-6xl max-h-[95vh] overflow-hidden"
+        className="bg-white rounded-xl shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col mx-4 my-4"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-200 bg-slate-50">
@@ -378,12 +801,27 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           </button>
         </div>
 
-        <div className="flex h-[calc(95vh-120px)]">
+        <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
           {/* Left Panel - Configuration */}
-          <div className="w-1/2 p-6 overflow-y-auto border-r border-slate-200">
+          <div className="w-full lg:w-1/2 p-6 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200 flex-shrink-0 max-h-96 lg:max-h-none">
             <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Camera Name */}
+            <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Camera Name *
+                </label>
+              <input
+                type="text"
+                value={formData.name}
+                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Enter camera name"
+                required
+              />
+            </div>
+
               {/* Source Type */}
-              <div>
+            <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
                   Source Type
                 </label>
@@ -418,29 +856,29 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                     >
                       Choose File
                     </label>
-                    <input
-                      type="text"
+              <input
+                type="text"
                       value={formData.source}
                       readOnly
                       className="flex-1 px-3 py-2 border border-slate-300 rounded-lg bg-slate-50"
                       placeholder="No file selected"
-                    />
-                  </div>
+              />
+            </div>
                 </div>
               ) : (
-                <div>
+            <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     {formData.sourceType === 'rtsp' ? 'RTSP URL' : 'Webcam ID'}
                   </label>
-                  <input
-                    type="text"
-                    value={formData.source}
-                    onChange={(e) => setFormData({...formData, source: e.target.value})}
+              <input
+                type="text"
+                value={formData.source}
+                onChange={(e) => setFormData({...formData, source: e.target.value})}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     placeholder={formData.sourceType === 'rtsp' ? 'rtsp://...' : '0, 1, 2...'}
-                    required
-                  />
-                </div>
+                required
+              />
+            </div>
               )}
 
               {/* Connect Preview Button */}
@@ -476,87 +914,172 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 </div>
               )}
 
-              {/* Task Type */}
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Task
-                </label>
-                <div className="flex space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormData({...formData, taskType: 'zone'})}
-                    className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                      formData.taskType === 'zone'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                    }`}
-                  >
-                    Zone
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData({...formData, taskType: 'line'})}
-                    className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                      formData.taskType === 'line'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                    }`}
-                  >
-                    Line
-                  </button>
-                </div>
-              </div>
+                     {/* Task Type */}
+            <div>
+                       <label className="block text-sm font-medium text-slate-700 mb-2">
+                         Task Type
+                       </label>
+                       <div className="flex space-x-2">
+                         <button
+                           type="button"
+                           onClick={() => setFormData({...formData, taskType: 'zone'})}
+                           className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                             formData.taskType === 'zone'
+                               ? 'bg-blue-600 text-white'
+                               : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                           }`}
+                         >
+                           Zone
+                         </button>
+                         <button
+                           type="button"
+                           onClick={() => setFormData({...formData, taskType: 'line'})}
+                           className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                             formData.taskType === 'line'
+                               ? 'bg-blue-600 text-white'
+                               : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                           }`}
+                         >
+                           Line
+                         </button>
+                       </div>
+            </div>
+
+                     {/* Drawing Mode Controls */}
+                     {isPreviewConnected && (
+            <div>
+                         <label className="block text-sm font-medium text-slate-700 mb-2">
+                           Drawing Mode
+                         </label>
+                         <div className="space-y-2">
+                           <div className="flex space-x-2">
+                             <button
+                               type="button"
+                               onClick={() => {
+                                 setDrawingMode('zone');
+                                 setIsDrawing(true);
+                                 setCurrentDrawing(null);
+                               }}
+                               className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                                 drawingMode === 'zone'
+                                   ? 'bg-green-600 text-white'
+                                   : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                               }`}
+                             >
+                               Draw Zone
+                             </button>
+                             <button
+                               type="button"
+                               onClick={() => {
+                                 setDrawingMode('line');
+                                 setIsDrawing(true);
+                                 setCurrentDrawing(null);
+                               }}
+                               className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                                 drawingMode === 'line'
+                                   ? 'bg-green-600 text-white'
+                                   : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                               }`}
+                             >
+                               Draw Line
+                             </button>
+                             <button
+                               type="button"
+                               onClick={() => {
+                                 setDrawingMode(null);
+                                 setIsDrawing(false);
+                                 setCurrentDrawing(null);
+                               }}
+                               className="px-4 py-2 rounded-lg font-medium transition-colors bg-slate-200 text-slate-700 hover:bg-slate-300"
+                             >
+                               Stop Drawing
+                             </button>
+            </div>
+
+                           {/* Current Drawing Status */}
+                           {currentDrawing && (
+                             <div className="p-3 bg-blue-50 rounded-lg">
+                               <p className="text-sm text-blue-800">
+                                 <strong>Drawing {currentDrawing.type}:</strong> 
+                                 {currentDrawing.type === 'zone' 
+                                   ? ` ${currentDrawing.points.length} points (minimum 3)`
+                                   : ` ${currentDrawing.points.length}/2 points`
+                                 }
+                               </p>
+                               <div className="flex space-x-2 mt-2">
+                                 {currentDrawing.type === 'zone' && currentDrawing.points.length >= 3 && (
+                                   <button
+                                     type="button"
+                                     onClick={finishZone}
+                                     className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                                   >
+                                     Finish Zone
+                                   </button>
+                                 )}
+                                 <button
+                                   type="button"
+                                   onClick={cancelCurrentDrawing}
+                                   className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                                 >
+                                   Cancel
+                                 </button>
+                               </div>
+                             </div>
+                           )}
+                         </div>
+                       </div>
+                     )}
 
               {/* Advanced Settings */}
               <div className="space-y-4">
-                <div>
+            <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     Confidence: {formData.conf_thresh}
-                  </label>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1.0"
-                    step="0.05"
-                    value={formData.conf_thresh}
-                    onChange={(e) => setFormData({...formData, conf_thresh: parseFloat(e.target.value)})}
-                    className="w-full"
-                  />
-                </div>
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="1.0"
+                step="0.05"
+                value={formData.conf_thresh}
+                onChange={(e) => setFormData({...formData, conf_thresh: parseFloat(e.target.value)})}
+                className="w-full"
+              />
+            </div>
 
-                <div>
+            <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     IoU: {formData.iou_thresh}
-                  </label>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1.0"
-                    step="0.05"
-                    value={formData.iou_thresh}
-                    onChange={(e) => setFormData({...formData, iou_thresh: parseFloat(e.target.value)})}
-                    className="w-full"
-                  />
-                </div>
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="1.0"
+                step="0.05"
+                value={formData.iou_thresh}
+                onChange={(e) => setFormData({...formData, iou_thresh: parseFloat(e.target.value)})}
+                className="w-full"
+              />
+            </div>
 
-                <div>
+            <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     MaxDet: {formData.max_det}
                   </label>
-                  <input
+              <input
                     type="range"
-                    min="1"
-                    max="1000"
+                min="1"
+                max="1000"
                     step="1"
-                    value={formData.max_det}
-                    onChange={(e) => setFormData({...formData, max_det: parseInt(e.target.value)})}
+                value={formData.max_det}
+                onChange={(e) => setFormData({...formData, max_det: parseInt(e.target.value)})}
                     className="w-full"
-                  />
+              />
                 </div>
-              </div>
+            </div>
 
               {/* Multiple Areas Option */}
-              <div>
+            <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
                   Draw Multiple Areas
                 </label>
@@ -564,7 +1087,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                   Allow drawing and counting multiple areas for 1 camera (set up when drawing)
                 </p>
                 <label className="flex items-center">
-                  <input
+              <input
                     type="checkbox"
                     checked={formData.allowMultipleAreas}
                     onChange={(e) => setFormData({...formData, allowMultipleAreas: e.target.checked})}
@@ -572,12 +1095,12 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                   />
                   <span className="ml-2 text-sm text-slate-700">Enable multiple areas</span>
                 </label>
-              </div>
+            </div>
             </form>
           </div>
 
           {/* Right Panel - Video Preview */}
-          <div className="w-1/2 p-6 flex flex-col">
+          <div className="w-full lg:w-1/2 p-6 flex flex-col min-h-0 flex-1">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-medium text-slate-900">Preview</h3>
               <div className="flex space-x-2">
@@ -601,7 +1124,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
             </div>
 
             {/* Video Preview */}
-            <div className="flex-1 bg-slate-100 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center relative">
+            <div className="flex-1 bg-slate-100 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center relative min-h-0">
               {isLoadingPreview ? (
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
@@ -617,6 +1140,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                       loop
                       playsInline
                       className="w-full h-full object-contain bg-black rounded border"
+                      style={{ pointerEvents: 'none' }}
                       onError={(e) => {
                         console.error('Video error:', e);
                         setPreviewError('Failed to load video file');
@@ -628,6 +1152,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                       src={previewUrl}
                       alt="Video Stream"
                       className="w-full h-full object-contain bg-black rounded border"
+                      style={{ pointerEvents: 'none' }}
                       onError={(e) => {
                         console.error('Stream error:', e);
                         setPreviewError('Failed to load video stream');
@@ -636,16 +1161,22 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                     />
                   )}
                   
-                  {/* Drawing Overlay */}
-                  <canvas
-                    width={400}
-                    height={300}
-                    className="absolute top-0 left-0 w-full h-full pointer-events-auto cursor-crosshair"
-                    onClick={handleCanvasClick}
-                    onMouseEnter={() => setIsDrawing(true)}
-                    onMouseLeave={() => setIsDrawing(false)}
-                    style={{ zIndex: 10 }}
-                  />
+                         {/* Drawing Overlay */}
+                          <div className="absolute top-0 left-0 w-full h-full pointer-events-auto" style={{ zIndex: 20 }}>
+                            <DrawingCanvas
+                              width={0}
+                              height={0}
+                              className="w-full h-full cursor-crosshair"
+                              onClick={handleCanvasClick}
+                              onMouseEnter={() => setIsDrawing(true)}
+                              onMouseLeave={() => setIsDrawing(false)}
+                              drawnAreas={drawnAreas}
+                              currentDrawing={currentDrawing}
+                              drawingMode={drawingMode}
+                              drawZone={drawZone}
+                              drawLine={drawLine}
+                            />
+                          </div>
                   
                   {/* Drawing Mode Indicator */}
                   {isDrawing && (
@@ -653,6 +1184,52 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                       Drawing Mode: {formData.taskType}
                     </div>
                   )}
+                  
+                  {/* Debug Controls */}
+                  <div className="absolute top-2 right-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const canvas = document.querySelector('canvas');
+                        if (canvas) {
+                          const videoElement = canvas.parentElement?.querySelector('video, img');
+                          if (videoElement) {
+                            const videoRect = videoElement.getBoundingClientRect();
+                            const containerRect = canvas.parentElement?.getBoundingClientRect();
+                            console.log('=== MANUAL DEBUG ===');
+                            console.log('Video rect:', videoRect);
+                            console.log('Container rect:', containerRect);
+                            console.log('Canvas rect:', canvas.getBoundingClientRect());
+                            console.log('Canvas size:', canvas.width, 'x', canvas.height);
+                            console.log('==================');
+                          }
+                        }
+                      }}
+                      className="bg-red-500 text-white px-2 py-1 rounded text-xs"
+                    >
+                      Debug
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const canvas = document.querySelector('canvas');
+                        if (canvas) {
+                          const ctx = canvas.getContext('2d');
+                          if (ctx) {
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            // Trigger redraw
+                            setTimeout(() => {
+                              const event = new Event('resize');
+                              window.dispatchEvent(event);
+                            }, 100);
+                          }
+                        }
+                      }}
+                      className="bg-green-500 text-white px-2 py-1 rounded text-xs"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="text-center">
@@ -669,34 +1246,40 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
             {/* Drawing Instructions */}
             {isPreviewConnected && (
-              <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+              <div className="mt-4 p-3 bg-blue-50 rounded-lg flex-shrink-0">
                 <p className="text-sm text-blue-800">
-                  <strong>Drawing Mode:</strong> Click on the video to draw {formData.taskType}s for counting.
-                  {formData.allowMultipleAreas && ' You can draw multiple areas.'}
+                  <strong>Drawing Instructions:</strong>
                 </p>
+                <ul className="text-sm text-blue-700 mt-1 space-y-1">
+                  <li>• <strong>Zone:</strong> Click multiple points to create a polygon (minimum 3 points), then click "Finish Zone"</li>
+                  <li>• <strong>Line:</strong> Click two points to create a counting line</li>
+                  <li>• Use "Draw Zone" or "Draw Line" buttons to start drawing</li>
+                  <li>• Click "Stop Drawing" to exit drawing mode</li>
+                  <li>• Use Undo/Clear buttons to manage drawn areas</li>
+                </ul>
               </div>
             )}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end space-x-3 p-6 border-t border-slate-200 bg-slate-50">
-          <button
-            type="button"
-            onClick={onClose}
+        <div className="flex justify-end space-x-3 p-6 border-t border-slate-200 bg-slate-50 flex-shrink-0">
+            <button
+              type="button"
+              onClick={onClose}
             className="px-6 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
+            >
+              Cancel
+            </button>
+            <button
             onClick={handleSubmit}
-            disabled={isLoading}
+              disabled={isLoading}
             className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
-          >
+            >
             <Save className="w-4 h-4 mr-2" />
             {isLoading ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+            </button>
+          </div>
       </motion.div>
     </div>
   );
@@ -715,68 +1298,10 @@ export default function CamerasPage() {
   const loadCameras = async () => {
     try {
       setIsLoading(true);
-      // Mock data for demo - replace with real API call
-      const mockCameras: CameraType[] = [
-        {
-          id: '1',
-          store_id: 'store_1',
-          name: 'Entrance Camera',
-          source: 'rtsp://192.168.1.100:554/stream',
-          ai_services: ['people_counting', 'behavior_detection'],
-          model_name: 'yolov8n.pt',
-          device: 'auto',
-          conf_thresh: 0.5,
-          iou_thresh: 0.45,
-          max_det: 300,
-          skip_frame: 3,
-          is_active: true
-        },
-        {
-          id: '2',
-          store_id: 'store_1',
-          name: 'Checkout Camera',
-          source: 'rtsp://192.168.1.101:554/stream',
-          ai_services: ['people_counting'],
-          model_name: 'yolov8s.pt',
-          device: 'cuda',
-          conf_thresh: 0.6,
-          iou_thresh: 0.5,
-          max_det: 200,
-          skip_frame: 2,
-          is_active: true
-        },
-        {
-          id: '3',
-          store_id: 'store_1',
-          name: 'Security Camera 1',
-          source: 'rtsp://192.168.1.102:554/stream',
-          ai_services: ['behavior_detection'],
-          model_name: 'yolov8m.pt',
-          device: 'auto',
-          conf_thresh: 0.7,
-          iou_thresh: 0.4,
-          max_det: 150,
-          skip_frame: 1,
-          is_active: false
-        },
-        {
-          id: '4',
-          store_id: 'store_1',
-          name: 'Parking Lot Camera',
-          source: 'rtsp://192.168.1.103:554/stream',
-          ai_services: ['people_counting', 'behavior_detection'],
-          model_name: 'yolov8n.pt',
-          device: 'cpu',
-          conf_thresh: 0.4,
-          iou_thresh: 0.6,
-          max_det: 500,
-          skip_frame: 5,
-          is_active: true
-        }
-      ];
-      
-      setCameras(mockCameras);
+      const list = await cameraApi.getCameras();
+      setCameras(list);
     } catch (error) {
+      console.error('Failed to load cameras:', error);
       toast.error('Failed to load cameras');
     } finally {
       setIsLoading(false);
@@ -785,17 +1310,55 @@ export default function CamerasPage() {
 
   const handleAddCamera = async (cameraData: any) => {
     try {
-      // Mock API call - replace with real implementation
-      const newCamera: CameraType = {
-        id: Date.now().toString(),
-        store_id: 'store_1',
-        ...cameraData,
-        is_active: false
+      // Extract zones/lines for future config API (optional)
+      const { zones, lines, ...cameraConfig } = cameraData;
+
+      // Build backend payload according to CameraCreate
+      // Ensure a store exists; create a default one if backend has none
+      let storeId = 'store_1';
+      try {
+        const stores = await storeApi.getStores();
+        if (stores && stores.length > 0) {
+          storeId = stores[0].id;
+        } else {
+          const createdStore = await storeApi.createStore('Default Store');
+          storeId = createdStore.id;
+        }
+      } catch (e) {
+        console.warn('Store lookup/creation failed, falling back to store_1:', e);
+      }
+
+      const payload = {
+        store_id: storeId,
+        name: cameraConfig.name,
+        source: cameraConfig.source,
+        ai_services: ['people_counting'],
+        model_name: cameraConfig.model_name,
+        device: cameraConfig.device,
+        conf_thresh: cameraConfig.conf_thresh,
+        iou_thresh: cameraConfig.iou_thresh,
+        max_det: cameraConfig.max_det,
+        skip_frame: cameraConfig.skip_frame
       };
-      
-      setCameras(prev => [...prev, newCamera]);
+
+      console.log('Creating camera via API:', payload);
+      const created = await cameraApi.createCamera(payload);
+
+      // Optionally, attach zones/lines to a separate config endpoint if needed
+      // await cameraApi.updateCameraConfig(created.id, { zones, lines });
+
+      // Optionally start camera for live preview immediately
+      try {
+        await cameraApi.startCamera(created.id);
+      } catch (e) {
+        console.warn('Start camera failed (optional):', e);
+      }
+
+      // Refresh list from backend
+      await loadCameras();
       toast.success('Camera added successfully');
     } catch (error) {
+      console.error('Error in handleAddCamera:', error);
       throw error;
     }
   };

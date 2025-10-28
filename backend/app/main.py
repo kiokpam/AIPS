@@ -14,10 +14,15 @@ class HealthResponse(BaseModel):
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
+# Configure CORS: if wildcard is used, disable credentials per CORS spec
+raw_origins = settings.cors_origins or "http://localhost:3000"
+origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+use_wildcard = len(origins) == 1 and origins[0] == "*"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(",") if settings.cors_origins else ["*"],
-    allow_credentials=True,
+    allow_origins=["*"] if use_wildcard else origins,
+    allow_credentials=False if use_wildcard else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
