@@ -354,3 +354,221 @@
     @apply grid-cols-4;
   }
 }
+
+/* Custom select styling for dark theme - high specificity to override Tailwind base */
+html body.dark-blue select {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  font-weight: 400 !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 10px !important;
+  padding: 8px 40px 8px 12px !important;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+}
+
+/* Stronger targeting for selects using the .input utility (e.g., Dashboard "Today") */
+html body.dark-blue select.input,
+html body.dark-blue .select.input {
+  padding-right: 40px !important; /* room for arrow */
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 16px !important;
+}
+
+html body.dark-blue select:focus,
+html body.dark-blue select:active {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  border-color: #3b82f6 !important;
+  outline: none !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 16px !important;
+}
+
+html body.dark-blue select option {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  font-weight: 400 !important;
+}
+
+/* Specific targeting for dashboard and cameras page selects */
+html body.dark-blue .space-y-8 select,
+html body.dark-blue .space-y-6 select {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  font-weight: 400 !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 10px !important;
+  padding: 8px 40px 8px 12px !important;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+}
+
+/* Keep arrow when focused/open for page-scoped selects */
+html body.dark-blue .space-y-8 select:focus,
+html body.dark-blue .space-y-8 select:active,
+html body.dark-blue .space-y-6 select:focus,
+html body.dark-blue .space-y-6 select:active {
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 16px !important;
+  border-color: #3b82f6 !important;
+}
+
+html body.dark-blue .space-y-8 select option,
+html body.dark-blue .space-y-6 select option {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  font-weight: 400 !important;
+}
+
+/* Ensure select text is visible in all contexts */
+html body.dark-blue select,
+html body.dark-blue select:focus,
+html body.dark-blue select:hover,
+html body.dark-blue select:active {
+  color: #0f172a !important;
+  background-color: #ffffff !important;
+}
+
+/* Hover state for select with arrow */
+html body.dark-blue select:hover {
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  border-color: #3b82f6 !important;
+}
+
+/* Keep arrow on focus for select.input variants as well */
+html body.dark-blue select.input:focus,
+html body.dark-blue select.input:active,
+html body.dark-blue .select.input:focus,
+html body.dark-blue .select.input:active {
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 16px !important;
+}
+
+/* Input field styling for dark theme - high specificity to override Tailwind */
+html body.dark-blue input[type="text"],
+html body.dark-blue input[type="number"],
+html body.dark-blue input[type="email"],
+html body.dark-blue input[type="password"],
+html body.dark-blue input[type="url"],
+html body.dark-blue input[type="tel"],
+html body.dark-blue input[type="search"],
+html body.dark-blue input[type="date"],
+html body.dark-blue input[type="time"],
+html body.dark-blue input[type="datetime-local"],
+html body.dark-blue textarea {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 10px !important;
+  padding: 8px 12px !important;
+  font-weight: 500 !important;
+}
+
+html body.dark-blue input[type="text"]:focus,
+html body.dark-blue input[type="number"]:focus,
+html body.dark-blue input[type="email"]:focus,
+html body.dark-blue input[type="password"]:focus,
+html body.dark-blue input[type="url"]:focus,
+html body.dark-blue input[type="tel"]:focus,
+html body.dark-blue input[type="search"]:focus,
+html body.dark-blue input[type="date"]:focus,
+html body.dark-blue input[type="time"]:focus,
+html body.dark-blue input[type="datetime-local"]:focus,
+html body.dark-blue textarea:focus {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  border-color: #3b82f6 !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+}
+
+/* Specific targeting for .input class in dark theme */
+html body.dark-blue .input {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 10px !important;
+  padding: 8px 12px !important;
+  font-weight: 500 !important;
+}
+
+html body.dark-blue .input:focus {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  border-color: #3b82f6 !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+}
+
+/* Placeholder text styling */
+html body.dark-blue .input::placeholder {
+  color: #6b7280 !important;
+}
+
+/* Range input styling */
+html body.dark-blue input[type="range"] {
+  background: #e5e7eb !important;
+  height: 6px !important;
+  border-radius: 3px !important;
+  outline: none !important;
+}
+
+html body.dark-blue input[type="range"]::-webkit-slider-thumb {
+  background: #3b82f6 !important;
+  border: 2px solid #ffffff !important;
+  border-radius: 50% !important;
+  width: 20px !important;
+  height: 20px !important;
+  cursor: pointer !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+}
+
+html body.dark-blue input[type="range"]::-moz-range-thumb {
+  background: #3b82f6 !important;
+  border: 2px solid #ffffff !important;
+  border-radius: 50% !important;
+  width: 20px !important;
+  height: 20px !important;
+  cursor: pointer !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Checkbox styling for dark theme */
+html body.dark-blue input[type="checkbox"] {
+  background: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 4px !important;
+  width: 16px !important;
+  height: 16px !important;
+  accent-color: #3b82f6 !important;
+}
+
+html body.dark-blue input[type="checkbox"]:checked {
+  background: #3b82f6 !important;
+  border-color: #3b82f6 !important;
+}

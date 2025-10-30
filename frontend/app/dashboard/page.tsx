@@ -191,18 +191,18 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 text-slate-100">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
-          <p className="text-slate-600 mt-1">Monitor your store's security and analytics</p>
+          <h1 className="text-3xl font-bold text-white">Dashboard</h1>
+          <p className="text-slate-300 mt-1">Monitor your store's security and analytics</p>
         </div>
         <div className="mt-4 sm:mt-0">
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value)}
-            className="input w-full sm:w-auto"
+            className="select input w-full sm:w-auto"
           >
             <option value="today">Today</option>
             <option value="week">This Week</option>

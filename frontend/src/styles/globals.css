@@ -1,0 +1,212 @@
+/* Global design tokens */
+:root {
+	/* Dark black-blue palette */
+	--color-bg: #0b1220;           /* page background */
+	--color-bg-accent: #0a1020;    /* gradient end */
+	--color-card: #0f172a;         /* surfaces */
+	--color-border: #1f2937;       /* strokes */
+	--color-text: #e5e7eb;         /* primary text */
+	--color-muted: #94a3b8;        /* secondary */
+	--color-primary: #3b82f6;      /* blue */
+	--color-success: #22c55e;
+	--color-danger: #ef4444;
+	--radius: 12px;
+	--shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
+	--shadow-md: 0 12px 30px rgba(2, 6, 23, 0.45);
+}
+
+html, body {
+	background: radial-gradient(1200px 800px at 10% -10%, var(--color-bg-accent) 0%, var(--color-bg) 40%),
+		linear-gradient(180deg, var(--color-bg) 0%, #0a0f1d 100%);
+	color: var(--color-text);
+}
+
+/* Dark-blue overrides for common Tailwind utilities used across pages */
+body.dark-blue .text-slate-900 { color: #e5e7eb !important; }
+body.dark-blue .text-slate-800 { color: #e2e8f0 !important; }
+body.dark-blue .text-slate-700 { color: #cbd5e1 !important; }
+body.dark-blue .text-slate-600 { color: #94a3b8 !important; }
+body.dark-blue .text-slate-500 { color: #94a3b8 !important; }
+
+body.dark-blue .bg-white { background-color: var(--color-card) !important; }
+body.dark-blue .bg-slate-50 { background-color: #0b1325 !important; }
+body.dark-blue .bg-slate-100 { background-color: #0b1325 !important; }
+body.dark-blue .border-slate-200 { border-color: var(--color-border) !important; }
+body.dark-blue .border-slate-700 { border-color: #1f2937 !important; }
+
+/* Cards/sections shadows tune for dark */
+body.dark-blue .shadow-xl, 
+body.dark-blue .shadow-lg, 
+body.dark-blue .shadow-md { box-shadow: var(--shadow-md) !important; }
+
+/* Forms: ensure inputs/selects in popups/cards with white bg show dark text */
+.input { background: #ffffff; color: #0f172a; border: 1px solid var(--color-border); border-radius: 10px; padding: 8px 12px; }
+
+/* High specificity select styling to override Tailwind base styles */
+select.input, .select.input, select[class*="input"] { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+  font-weight: 700 !important;
+  border: 1px solid #d1d5db !important;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+/* Force ALL selects to readable colors with higher specificity */
+html body select { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+}
+
+html body.dark-blue select { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+}
+
+html body.dark-blue select:focus { 
+  border-color: #3b82f6 !important; 
+  outline: none !important; 
+}
+
+html body.dark-blue select.input, 
+html body.dark-blue .select.input, 
+html body.dark-blue select[class*="input"] { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+  font-weight: 700 !important;
+  border: 1px solid #d1d5db !important;
+}
+
+html body.dark-blue select.input:focus, 
+html body.dark-blue .select.input:focus, 
+html body.dark-blue select[class*="input"]:focus { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+  font-weight: 700 !important;
+  border: 1px solid #3b82f6 !important;
+  outline: none !important;
+}
+
+/* Option styling with high specificity */
+html body select.input option, 
+html body .select.input option, 
+html body select[class*="input"] option, 
+html body select option { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+  font-weight: 600 !important;
+}
+
+/* Windows/Edge specific visible value */
+html body select.input::-ms-value, 
+html body .select.input::-ms-value, 
+html body select[class*="input"]::-ms-value { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+}
+
+/* Additional specificity for dark theme */
+html body.dark-blue select.input option, 
+html body.dark-blue .select.input option, 
+html body.dark-blue select[class*="input"] option, 
+html body.dark-blue select option { 
+  color: #0f172a !important; 
+  background: #ffffff !important; 
+  font-weight: 600 !important;
+}
+
+/* Specific targeting for dashboard and cameras page selects */
+html body.dark-blue .space-y-8 select,
+html body.dark-blue .space-y-6 select {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  font-weight: 700 !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 10px !important;
+  padding: 8px 12px !important;
+}
+
+html body.dark-blue .space-y-8 select option,
+html body.dark-blue .space-y-6 select option {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+/* Ensure select text is visible in all contexts */
+html body.dark-blue select,
+html body.dark-blue select:focus,
+html body.dark-blue select:hover,
+html body.dark-blue select:active {
+  color: #0f172a !important;
+  background: #ffffff !important;
+}
+.label { color: #0f172a; }
+
+/* When inputs are placed directly on dark surfaces, add helper classes */
+body.dark-blue .input-on-dark { background: #0f172a; color: #e5e7eb; border: 1px solid #1f2937; }
+
+/* Buttons */
+.btn-primary {
+	background: var(--color-primary);
+	color: #fff;
+	border-radius: 10px;
+	padding: 10px 16px;
+	font-weight: 600;
+	box-shadow: var(--shadow-sm);
+	transition: background .2s ease, transform .1s ease;
+}
+.btn-primary:hover { background: #1d4ed8; }
+.btn-primary:active { transform: translateY(1px); }
+
+.btn-success { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; border-radius: 10px; padding: 10px 14px; font-weight: 600; }
+.btn-danger { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 10px; padding: 10px 14px; font-weight: 600; }
+.btn-outline { background: #0b1325; color: #cbd5e1; border-radius: 10px; padding: 10px 14px; border: 1px solid var(--color-border); }
+.btn-sm { padding: 8px 12px; border-radius: 10px; font-weight: 600; }
+.btn-md { padding: 10px 16px; border-radius: 10px; font-weight: 600; }
+
+/* Cards and stats */
+.camera-card {
+	background: var(--color-card);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-sm);
+	transition: box-shadow .2s ease, transform .2s ease;
+	overflow: hidden;
+}
+.camera-card:hover { box-shadow: var(--shadow-md); }
+
+.stat-card {
+	background: var(--color-card);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius);
+	padding: 18px;
+	box-shadow: var(--shadow-sm);
+}
+.stat-label { font-size: 12px; color: var(--color-muted); }
+.stat-value { font-size: 28px; font-weight: 800; color: var(--color-text); }
+
+/* Camera preview */
+.camera-preview { position: relative; background: #0b1325; aspect-ratio: 16/9; }
+.video-stream { width: 100%; height: 100%; object-fit: cover; }
+.video-placeholder { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted); }
+
+.status-indicator { width: 10px; height: 10px; border-radius: 9999px; box-shadow: 0 0 0 2px rgba(0,0,0,0.25); }
+.status-online { background: #22c55e; }
+.status-offline { background: #ef4444; }
+
+/* Camera info */
+.camera-info { padding: 16px; }
+.camera-title { font-size: 16px; font-weight: 800; margin-bottom: 6px; color: var(--color-text); }
+.camera-status { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; color: var(--color-muted); }
+
+/* Header utilities */
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-logo { width: 32px; height: 32px; }
+.brand-title { font-size: 24px; font-weight: 800; color: var(--color-text); }
+
+/* Simple menu popover layering */
+.z-10 { z-index: 10; }
+
+

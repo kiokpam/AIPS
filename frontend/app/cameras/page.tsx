@@ -327,7 +327,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-slate-200 py-1 z-10"
+                 className="absolute right-0 mt-2 w-48 bg-white text-slate-900 rounded-lg shadow-lg border border-slate-200 py-1 z-10"
               >
                 <button
                   onClick={() => {
@@ -945,7 +945,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-xl shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col mx-4 my-4"
+        className="bg-white text-slate-900 rounded-xl shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col mx-4 my-4"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-200 bg-slate-50">
@@ -985,7 +985,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 <select
                   value={formData.sourceType}
                   onChange={(e) => setFormData({...formData, sourceType: e.target.value})}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="input w-full"
                 >
                   <option value="video_file">Video File</option>
                   <option value="rtsp">RTSP Stream</option>
@@ -1558,7 +1558,7 @@ export default function CamerasPage() {
               if (result.w > 0 && result.h > 0) {
                 return result;
               }
-            } catch (error) {
+    } catch (error) {
               console.warn(`Frame load attempt ${attempt} failed:`, error);
               if (attempt < 3) {
                 await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
@@ -1667,14 +1667,14 @@ export default function CamerasPage() {
     );
   }
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Cameras</h1>
-          <p className="text-slate-600 mt-1">Manage your surveillance cameras</p>
-        </div>
+    return (
+      <div className="space-y-6 text-slate-100">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-white">Cameras</h1>
+            <p className="text-slate-300 mt-1">Manage your surveillance cameras</p>
+          </div>
         <button
           onClick={() => setShowAddModal(true)}
           className="btn-primary btn-md mt-4 sm:mt-0"

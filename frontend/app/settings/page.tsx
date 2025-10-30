@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Settings as SettingsIcon, 
@@ -14,6 +14,32 @@ import {
   RefreshCw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+// Hoisted to module scope to avoid remounts on every state change
+const SettingSection = memo(({ 
+  title, 
+  icon: Icon, 
+  children 
+}: { 
+  title: string; 
+  icon: any; 
+  children: React.ReactNode; 
+}) => (
+  <motion.div
+    initial={{ opacity: 0, y: 20 }}
+    animate={{ opacity: 1, y: 0 }}
+    className="bg-white rounded-xl shadow-sm border border-slate-200 p-6"
+  >
+    <div className="flex items-center space-x-3 mb-6">
+      <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+        <Icon className="w-5 h-5 text-blue-600" />
+      </div>
+      <h2 className="text-xl font-semibold text-slate-900">{title}</h2>
+    </div>
+    {children}
+  </motion.div>
+));
+SettingSection.displayName = 'SettingSection';
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
@@ -84,37 +110,13 @@ export default function SettingsPage() {
     toast.success('Settings reset to defaults');
   };
 
-  const SettingSection = ({ 
-    title, 
-    icon: Icon, 
-    children 
-  }: { 
-    title: string; 
-    icon: any; 
-    children: React.ReactNode; 
-  }) => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-xl shadow-sm border border-slate-200 p-6"
-    >
-      <div className="flex items-center space-x-3 mb-6">
-        <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-          <Icon className="w-5 h-5 text-blue-600" />
-        </div>
-        <h2 className="text-xl font-semibold text-slate-900">{title}</h2>
-      </div>
-      {children}
-    </motion.div>
-  );
-
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 text-slate-100">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">Settings</h1>
-          <p className="text-slate-600 mt-2">Manage your AIPS system configuration</p>
+          <h1 className="text-3xl font-bold text-white">Settings</h1>
+          <p className="text-slate-300 mt-2">Manage your AIPS system configuration</p>
         </div>
         <div className="flex space-x-3">
           <button
