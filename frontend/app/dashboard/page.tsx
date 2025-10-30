@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import { useI18n } from '@/src/contexts/I18nContext';
 import {
   Users,
   Camera,
@@ -170,6 +171,7 @@ const AlertCard = ({ alert }: { alert: any }) => {
 };
 
 export default function DashboardPage() {
+  const { t } = useI18n();
   const [timeRange, setTimeRange] = useState('today');
   const [isLoading, setIsLoading] = useState(true);
 
@@ -195,8 +197,8 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white">Dashboard</h1>
-          <p className="text-slate-300 mt-1">Monitor your store's security and analytics</p>
+          <h1 className="text-3xl font-bold text-white">{t('dashboard_title')}</h1>
+          <p className="text-slate-300 mt-1">{t('dashboard_sub')}</p>
         </div>
         <div className="mt-4 sm:mt-0">
           <select
@@ -204,9 +206,9 @@ export default function DashboardPage() {
             onChange={(e) => setTimeRange(e.target.value)}
             className="select input w-full sm:w-auto"
           >
-            <option value="today">Today</option>
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
+            <option value="today">{t('tr_today')}</option>
+            <option value="week">{t('tr_week')}</option>
+            <option value="month">{t('tr_month')}</option>
           </select>
         </div>
       </div>
@@ -267,15 +269,15 @@ export default function DashboardPage() {
         {/* Customer Flow Chart */}
         <div className="card p-6">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-slate-900">Customer Flow</h3>
+            <h3 className="text-lg font-semibold text-slate-900">{t('customer_flow')}</h3>
             <div className="flex items-center space-x-4 text-sm">
               <div className="flex items-center space-x-2">
                 <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                <span className="text-slate-600">In</span>
+                <span className="text-slate-600">{t('legend_in')}</span>
               </div>
               <div className="flex items-center space-x-2">
                 <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                <span className="text-slate-600">Out</span>
+                <span className="text-slate-600">{t('legend_out')}</span>
               </div>
             </div>
           </div>
@@ -313,15 +315,15 @@ export default function DashboardPage() {
         {/* Weekly Analytics */}
         <div className="card p-6">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-slate-900">Weekly Analytics</h3>
+            <h3 className="text-lg font-semibold text-slate-900">{t('weekly_analytics')}</h3>
             <div className="flex items-center space-x-4 text-sm">
               <div className="flex items-center space-x-2">
                 <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                <span className="text-slate-600">Customers</span>
+                <span className="text-slate-600">{t('legend_customers')}</span>
               </div>
               <div className="flex items-center space-x-2">
                 <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                <span className="text-slate-600">Alerts</span>
+                <span className="text-slate-600">{t('legend_alerts')}</span>
               </div>
             </div>
           </div>
@@ -349,7 +351,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Camera Status */}
         <div className="card p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-6">Camera Status</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-6">{t('camera_status')}</h3>
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
               <Pie
@@ -387,9 +389,9 @@ export default function DashboardPage() {
         {/* Recent Alerts */}
         <div className="lg:col-span-2 card p-6">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-slate-900">Recent Alerts</h3>
+            <h3 className="text-lg font-semibold text-slate-900">{t('recent_alerts')}</h3>
             <button className="text-sm text-primary-600 hover:text-primary-700 font-medium">
-              View All
+              {t('view_all')}
             </button>
           </div>
           <div className="space-y-3">
@@ -402,27 +404,27 @@ export default function DashboardPage() {
 
       {/* System Status */}
       <div className="card p-6">
-        <h3 className="text-lg font-semibold text-slate-900 mb-6">System Status</h3>
+        <h3 className="text-lg font-semibold text-slate-900 mb-6">{t('system_status')}</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="flex items-center space-x-3 p-4 bg-green-50 rounded-lg border border-green-200">
             <CheckCircle className="w-8 h-8 text-green-600" />
             <div>
-              <p className="font-medium text-green-900">AI Core Service</p>
-              <p className="text-sm text-green-700">All systems operational</p>
+              <p className="font-medium text-green-900">{t('ai_core_service')}</p>
+              <p className="text-sm text-green-700">{t('all_systems_operational')}</p>
             </div>
           </div>
           <div className="flex items-center space-x-3 p-4 bg-green-50 rounded-lg border border-green-200">
             <Activity className="w-8 h-8 text-green-600" />
             <div>
-              <p className="font-medium text-green-900">People Counting</p>
-              <p className="text-sm text-green-700">Processing normally</p>
+              <p className="font-medium text-green-900">{t('people_counting')}</p>
+              <p className="text-sm text-green-700">{t('processing_normally')}</p>
             </div>
           </div>
           <div className="flex items-center space-x-3 p-4 bg-green-50 rounded-lg border border-green-200">
             <Eye className="w-8 h-8 text-green-600" />
             <div>
-              <p className="font-medium text-green-900">Behavior Detection</p>
-              <p className="text-sm text-green-700">Monitoring active</p>
+              <p className="font-medium text-green-900">{t('behavior_detection')}</p>
+              <p className="text-sm text-green-700">{t('monitoring_active')}</p>
             </div>
           </div>
         </div>

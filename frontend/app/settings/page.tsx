@@ -2,6 +2,7 @@
 
 import { useState, memo } from 'react';
 import { motion } from 'framer-motion';
+import { useI18n } from '@/src/contexts/I18nContext';
 import { 
   Settings as SettingsIcon, 
   Camera, 
@@ -42,6 +43,7 @@ const SettingSection = memo(({
 SettingSection.displayName = 'SettingSection';
 
 export default function SettingsPage() {
+  const { t } = useI18n();
   const [settings, setSettings] = useState({
     // Camera Settings
     defaultModel: 'yolov8n',
@@ -115,8 +117,8 @@ export default function SettingsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white">Settings</h1>
-          <p className="text-slate-300 mt-2">Manage your AIPS system configuration</p>
+          <h1 className="text-3xl font-bold text-white">{t('settings_title')}</h1>
+          <p className="text-slate-300 mt-2">{t('settings_sub')}</p>
         </div>
         <div className="flex space-x-3">
           <button
@@ -136,17 +138,17 @@ export default function SettingsPage() {
             ) : (
               <Save className="w-4 h-4 mr-2" />
             )}
-            Save Changes
+            {t('save_changes')}
           </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Camera Settings */}
-        <SettingSection title="Camera Settings" icon={Camera}>
+        <SettingSection title={t('camera_settings')} icon={Camera}>
           <div className="space-y-4">
             <div>
-              <label className="label block mb-2">Default AI Model</label>
+              <label className="label block mb-2">{t('default_ai_model')}</label>
               <select
                 value={settings.defaultModel}
                 onChange={(e) => handleInputChange('camera', 'defaultModel', e.target.value)}
@@ -161,7 +163,7 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label className="label block mb-2">Default Device</label>
+              <label className="label block mb-2">{t('default_device')}</label>
               <select
                 value={settings.defaultDevice}
                 onChange={(e) => handleInputChange('camera', 'defaultDevice', e.target.value)}
@@ -174,9 +176,7 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label className="label block mb-2">
-                Confidence Threshold: {settings.confidenceThreshold}
-              </label>
+              <label className="label block mb-2">{t('confidence_threshold')}: {settings.confidenceThreshold}</label>
               <input
                 type="range"
                 min="0.1"
@@ -189,9 +189,7 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label className="label block mb-2">
-                IOU Threshold: {settings.iouThreshold}
-              </label>
+              <label className="label block mb-2">{t('iou_threshold')}: {settings.iouThreshold}</label>
               <input
                 type="range"
                 min="0.1"
@@ -206,10 +204,10 @@ export default function SettingsPage() {
         </SettingSection>
 
         {/* System Settings */}
-        <SettingSection title="System Settings" icon={Monitor}>
+        <SettingSection title={t('system_settings')} icon={Monitor}>
           <div className="space-y-4">
             <div>
-              <label className="label block mb-2">Max File Size (MB)</label>
+              <label className="label block mb-2">{t('max_file_size')}</label>
               <input
                 type="number"
                 value={settings.maxFileSize}
@@ -221,7 +219,7 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label className="label block mb-2">Data Retention (Days)</label>
+              <label className="label block mb-2">{t('data_retention_days')}</label>
               <input
                 type="number"
                 value={settings.retentionDays}
@@ -233,7 +231,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="flex items-center justify-between">
-              <label className="label">Auto Cleanup</label>
+              <label className="label">{t('auto_cleanup')}</label>
               <input
                 type="checkbox"
                 checked={settings.autoCleanup}
@@ -243,7 +241,7 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label className="label block mb-2">Session Timeout (Minutes)</label>
+              <label className="label block mb-2">{t('session_timeout_minutes')}</label>
               <input
                 type="number"
                 value={settings.sessionTimeout}
@@ -257,10 +255,10 @@ export default function SettingsPage() {
         </SettingSection>
 
         {/* Notification Settings */}
-        <SettingSection title="Notification Settings" icon={Bell}>
+        <SettingSection title={t('notification_settings')} icon={Bell}>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <label className="label">Email Notifications</label>
+              <label className="label">{t('email_notifications')}</label>
               <input
                 type="checkbox"
                 checked={settings.emailNotifications}
@@ -270,7 +268,7 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label className="label block mb-2">Alert Threshold</label>
+              <label className="label block mb-2">{t('alert_threshold')}</label>
               <input
                 type="number"
                 value={settings.alertThreshold}
@@ -282,7 +280,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="flex items-center justify-between">
-              <label className="label">Real-time Alerts</label>
+              <label className="label">{t('realtime_alerts')}</label>
               <input
                 type="checkbox"
                 checked={settings.realTimeAlerts}
@@ -294,10 +292,10 @@ export default function SettingsPage() {
         </SettingSection>
 
         {/* Security Settings */}
-        <SettingSection title="Security Settings" icon={Shield}>
+        <SettingSection title={t('security_settings')} icon={Shield}>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <label className="label">Require Authentication</label>
+              <label className="label">{t('require_auth')}</label>
               <input
                 type="checkbox"
                 checked={settings.requireAuth}
@@ -307,7 +305,7 @@ export default function SettingsPage() {
             </div>
 
             <div>
-              <label className="label block mb-2">Log Level</label>
+              <label className="label block mb-2">{t('log_level')}</label>
               <select
                 value={settings.logLevel}
                 onChange={(e) => handleInputChange('security', 'logLevel', e.target.value)}

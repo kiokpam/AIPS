@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import { I18nProvider, useI18n } from '@/src/contexts/I18nContext';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -42,18 +43,17 @@ const navigation = [
   }
 ];
 
-export default function AppLayout({ children }: AppLayoutProps) {
+function InnerLayout({ children }: AppLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [lang, setLang] = useState<'en' | 'vi'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lang');
-      return (saved === 'vi' ? 'vi' : 'en');
+  const { lang, setLanguage } = useI18n();
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = lang;
     }
-    return 'en';
-  });
+  }, [lang]);
 
   // Check authentication on mount
   useEffect(() => {
@@ -76,12 +76,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
     router.push('/');
   };
 
-  const setLanguage = (l: 'en' | 'vi') => {
-    setLang(l);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('lang', l);
-    }
-  };
+  const setLanguageLocal = (l: 'en' | 'vi') => setLanguage(l);
 
   const getUserEmail = () => {
     if (typeof window !== 'undefined') {
@@ -278,11 +273,11 @@ export default function AppLayout({ children }: AppLayoutProps) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           {/* Language toggle (VI / EN) with underline like Sirix */}
           <div style={{ display: 'flex', gap: '18px', alignItems: 'center' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }} onClick={() => setLanguage('vi')}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }} onClick={() => setLanguageLocal('vi')}>
               <span style={{ fontWeight: 600, fontSize: '12px', color: '#e2e8f0' }}>VI</span>
               <div style={{ height: '3px', width: '44px', backgroundColor: '#ffffff', marginTop: '6px', opacity: lang === 'vi' ? 1 : 0, transition: 'opacity .2s' }} />
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }} onClick={() => setLanguage('en')}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }} onClick={() => setLanguageLocal('en')}>
               <span style={{ fontWeight: 600, fontSize: '12px', color: '#e2e8f0' }}>EN</span>
               <div style={{ height: '3px', width: '44px', backgroundColor: '#ffffff', marginTop: '6px', opacity: lang === 'en' ? 1 : 0, transition: 'opacity .2s' }} />
             </div>
@@ -441,5 +436,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
         />
       )}
     </div>
+  );
+}
+
+export default function AppLayout({ children }: AppLayoutProps) {
+  return (
+    <I18nProvider>
+      <InnerLayout>{children}</InnerLayout>
+    </I18nProvider>
   );
 }

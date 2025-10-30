@@ -24,6 +24,7 @@ import {
   Save
 } from 'lucide-react';
 import { cameraApi, storeApi, tasksApi, type Camera as CameraType } from '@/lib/api';
+import { useI18n } from '@/src/contexts/I18nContext';
 import toast from 'react-hot-toast';
 
 // Drawing Canvas Component
@@ -236,6 +237,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   onDelete: (id: string) => void;
   onToggle: (id: string, isActive: boolean) => void;
 }) => {
+  const { t } = useI18n();
   const [isStreaming, setIsStreaming] = useState(!!camera.is_active);
   const [isStarting, setIsStarting] = useState(false);
   const [streamRetry, setStreamRetry] = useState(0);
@@ -254,7 +256,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
 
   const handleStreamToggle = () => {
     setIsStreaming(!isStreaming);
-    toast.success(isStreaming ? 'Stream stopped' : 'Stream started');
+    toast.success(isStreaming ? t('camera_stopped') : t('camera_started'));
   };
 
   return (
@@ -292,7 +294,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         ) : (
           <div className="video-placeholder">
             <Camera className="w-12 h-12 text-slate-400" />
-            <p className="text-sm text-slate-500 mt-2">{isStarting ? 'Starting…' : 'Camera Offline'}</p>
+            <p className="text-sm text-slate-500 mt-2">{isStarting ? t('starting') : t('camera_offline')}</p>
           </div>
         )}
         
@@ -300,7 +302,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         <div className="absolute top-3 left-3 flex items-center space-x-2">
           <div className={`status-indicator ${camera.is_active ? 'status-online' : 'status-offline'}`} />
           <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
-            {camera.is_active ? (isStarting ? 'Starting…' : 'Online') : 'Offline'}
+            {camera.is_active ? (isStarting ? t('starting') : t('online')) : t('offline')}
           </span>
         </div>
 
@@ -337,7 +339,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
                 >
                   <Settings className="w-4 h-4 mr-3" />
-                  Configure
+                  {t('configure')}
                 </button>
                 <button
                   onClick={() => {
@@ -347,7 +349,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
                 >
                   {camera.is_active ? <Pause className="w-4 h-4 mr-3" /> : <Play className="w-4 h-4 mr-3" />}
-                  {camera.is_active ? 'Stop' : 'Start'}
+                  {camera.is_active ? t('stop') : t('start')}
                 </button>
                 <button
                   onClick={() => {
@@ -357,7 +359,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
                 >
                   <AlertCircle className="w-4 h-4 mr-3" />
-                  Delete
+                  {t('delete')}
                 </button>
               </motion.div>
             )}
@@ -436,6 +438,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   onClose: () => void;
   onAdd: (cameraData: any) => void;
 }) => {
+  const { t } = useI18n();
   const [formData, setFormData] = useState({
     name: '',
     source: '',
@@ -949,7 +952,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-200 bg-slate-50">
-          <h2 className="text-xl font-semibold text-slate-900">Camera Configuration</h2>
+          <h2 className="text-xl font-semibold text-slate-900">{t('camera_config')}</h2>
           <button
             onClick={onClose}
             className="p-2 hover:bg-slate-200 rounded-lg transition-colors"
@@ -965,14 +968,14 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               {/* Camera Name */}
             <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Camera Name *
+                  {t('camera_name')} *
                 </label>
               <input
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({...formData, name: e.target.value})}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="Enter camera name"
+                placeholder={t('camera_name')}
                 required
               />
             </div>
@@ -980,14 +983,14 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               {/* Source Type */}
             <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Source Type
+                  {t('source_type')}
                 </label>
                 <select
                   value={formData.sourceType}
                   onChange={(e) => setFormData({...formData, sourceType: e.target.value})}
                   className="input w-full"
                 >
-                  <option value="video_file">Video File</option>
+                  <option value="video_file">{t('video_file')}</option>
                   <option value="rtsp">RTSP Stream</option>
                   <option value="webcam">Webcam</option>
                 </select>
@@ -997,7 +1000,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               {formData.sourceType === 'video_file' ? (
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Video File
+                    {t('video_file')}
                   </label>
                   <div className="flex items-center space-x-3">
                     <input
@@ -1011,7 +1014,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                       htmlFor="video-file"
                       className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition-colors"
                     >
-                      Choose File
+                      {t('choose_file')}
                     </label>
               <input
                 type="text"
@@ -1025,7 +1028,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               ) : (
             <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    {formData.sourceType === 'rtsp' ? 'RTSP URL' : 'Webcam ID'}
+                    {formData.sourceType === 'rtsp' ? t('rtsp_url') : t('webcam_id')}
                   </label>
               <input
                 type="text"
@@ -1057,7 +1060,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 ) : (
                   <>
                     <Play className="w-4 h-4 mr-2" />
-                    {isPreviewConnected ? 'Disconnect Preview' : 'Connect Preview'}
+                    {isPreviewConnected ? t('disconnect_preview') : t('connect_preview')}
                   </>
                 )}
               </button>
@@ -1066,15 +1069,15 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               {previewError && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
                   <p className="text-sm text-red-800">
-                    <strong>Preview Error:</strong> {previewError}
+                    <strong>{t('preview_error')}:</strong> {previewError}
                   </p>
                 </div>
               )}
 
                      {/* Task Type */}
             <div>
-                       <label className="block text-sm font-medium text-slate-700 mb-2">
-                         Task Type
+                         <label className="block text-sm font-medium text-slate-700 mb-2">
+                           {t('task_type')}
                        </label>
                        <div className="flex space-x-2">
                          <button
@@ -1086,7 +1089,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                            }`}
                          >
-                           Zone
+                           {t('zone')}
                          </button>
                          <button
                            type="button"
@@ -1097,7 +1100,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                            }`}
                          >
-                           Line
+                           {t('line')}
                          </button>
                        </div>
             </div>
@@ -1149,15 +1152,15 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                }}
                                className="px-4 py-2 rounded-lg font-medium transition-colors bg-slate-200 text-slate-700 hover:bg-slate-300"
                              >
-                               Stop Drawing
+                               {t('stop_drawing')}
                              </button>
             </div>
 
                            {/* Current Drawing Status */}
                            {currentDrawing && (
-                             <div className="p-3 bg-blue-50 rounded-lg">
+                           <div className="p-3 bg-blue-50 rounded-lg">
                                <p className="text-sm text-blue-800">
-                                 <strong>Drawing {currentDrawing.type}:</strong> 
+                               <strong>{t('drawing_mode')} {currentDrawing.type}:</strong> 
                                  {currentDrawing.type === 'zone' 
                                    ? ` ${currentDrawing.points.length} points (minimum 3)`
                                    : ` ${currentDrawing.points.length}/2 points`
@@ -1170,7 +1173,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                      onClick={finishZone}
                                      className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
                                    >
-                                     Finish Zone
+                                     {t('finish_zone')}
                                    </button>
                                  )}
                                  <button
@@ -1178,7 +1181,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                    onClick={cancelCurrentDrawing}
                                    className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
                                  >
-                                   Cancel
+                                   {t('cancel')}
                                  </button>
                                </div>
                              </div>
@@ -1426,7 +1429,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               onClick={onClose}
             className="px-6 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
             onClick={handleSubmit}
@@ -1434,7 +1437,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
             className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
             >
             <Save className="w-4 h-4 mr-2" />
-            {isLoading ? 'Saving...' : 'Save'}
+            {isLoading ? 'Saving...' : t('save')}
             </button>
           </div>
       </motion.div>
@@ -1443,6 +1446,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 };
 
 export default function CamerasPage() {
+  const { t } = useI18n();
   const [cameras, setCameras] = useState<CameraType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1459,7 +1463,7 @@ export default function CamerasPage() {
       setCameras(list);
     } catch (error) {
       console.error('Failed to load cameras:', error);
-      toast.error('Failed to load cameras');
+      toast.error(t('failed_load_cameras'));
     } finally {
       setIsLoading(false);
     }
@@ -1629,16 +1633,16 @@ export default function CamerasPage() {
       // Invert current state on click: if active -> stop; if inactive -> start
       if (isActive) {
         await cameraApi.stopCamera(id);
-        toast.success('Camera stopped');
+        toast.success(t('camera_stopped'));
       } else {
         await cameraApi.startCamera(id);
-        toast.success('Camera started');
+        toast.success(t('camera_started'));
       }
       // Refresh list to reflect real backend state
       await loadCameras();
     } catch (error) {
       console.error('Failed to toggle camera', error);
-      toast.error('Failed to toggle camera');
+      toast.error(t('failed_toggle_camera'));
     }
   };
 
@@ -1646,9 +1650,9 @@ export default function CamerasPage() {
     if (confirm('Are you sure you want to delete this camera?')) {
       try {
         setCameras(prev => prev.filter(camera => camera.id !== id));
-        toast.success('Camera deleted successfully');
+        toast.success(t('camera_deleted'));
       } catch (error) {
-        toast.error('Failed to delete camera');
+        toast.error(t('camera_failed_delete'));
       }
     }
   };
@@ -1671,16 +1675,16 @@ export default function CamerasPage() {
       <div className="space-y-6 text-slate-100">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-white">Cameras</h1>
-            <p className="text-slate-300 mt-1">Manage your surveillance cameras</p>
-          </div>
+        <div>
+          <h1 className="text-3xl font-bold text-white">{t('cameras_title')}</h1>
+          <p className="text-slate-300 mt-1">{t('cameras_sub')}</p>
+        </div>
         <button
           onClick={() => setShowAddModal(true)}
           className="btn-primary btn-md mt-4 sm:mt-0"
         >
           <Plus className="w-5 h-5 mr-2" />
-          Add Camera
+          {t('add_camera')}
         </button>
       </div>
 

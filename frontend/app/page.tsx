@@ -16,29 +16,18 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect } from 'react';
+import { useI18n } from '@/src/contexts/I18nContext';
 
 function LanguageButton() {
-  const [lang, setLang] = useState<'en' | 'vi'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lang');
-      return (saved === 'vi' ? 'vi' : 'en');
-    }
-    return 'en';
-  });
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('lang', lang);
-    }
-  }, [lang]);
+  const { lang, setLanguage } = useI18n();
 
   return (
     <div className="flex items-center gap-4">
-      <div className="flex flex-col items-center cursor-pointer" onClick={() => setLang('vi')}>
+      <div className="flex flex-col items-center cursor-pointer" onClick={() => setLanguage('vi')}>
         <span className="text-xs font-semibold text-slate-200">VI</span>
         <div className={`h-[3px] w-11 bg-white mt-1 ${lang==='vi' ? 'opacity-100' : 'opacity-0'} transition-opacity`} />
       </div>
-      <div className="flex flex-col items-center cursor-pointer" onClick={() => setLang('en')}>
+      <div className="flex flex-col items-center cursor-pointer" onClick={() => setLanguage('en')}>
         <span className="text-xs font-semibold text-slate-200">EN</span>
         <div className={`h-[3px] w-11 bg-white mt-1 ${lang==='en' ? 'opacity-100' : 'opacity-0'} transition-opacity`} />
       </div>
@@ -48,25 +37,7 @@ function LanguageButton() {
 
 export default function HomePage() {
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
-  const [lang, setLang] = useState<'en' | 'vi'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lang');
-      return (saved === 'vi' ? 'vi' : 'en');
-    }
-    return 'en';
-  });
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const onStorage = (e: StorageEvent) => {
-        if (e.key === 'lang' && (e.newValue === 'vi' || e.newValue === 'en')) {
-          setLang(e.newValue as 'en' | 'vi');
-        }
-      };
-      window.addEventListener('storage', onStorage);
-      return () => window.removeEventListener('storage', onStorage);
-    }
-  }, []);
+  const { lang } = useI18n();
 
   const t = (key: string): string => {
     const dict: Record<string, { en: string; vi: string }> = {
@@ -80,6 +51,15 @@ export default function HomePage() {
       perk_support: { en: '24/7 Support', vi: 'Hỗ trợ 24/7' },
       features_title: { en: 'Powerful Features for Modern Retail', vi: 'Tính năng mạnh mẽ cho bán lẻ hiện đại' },
       features_sub: { en: 'Our AI-powered surveillance system provides comprehensive security and analytics solutions tailored for retail environments.', vi: 'Hệ thống giám sát dùng AI cung cấp giải pháp an ninh và phân tích toàn diện cho môi trường bán lẻ.' },
+      // Features cards
+      features_rtm_title: { en: 'Real-time Monitoring', vi: 'Giám sát theo thời gian thực' },
+      features_rtm_desc: { en: 'Advanced AI-powered surveillance with live video streaming and instant alerts.', vi: 'Giám sát dùng AI với phát video trực tiếp và cảnh báo tức thời.' },
+      features_people_title: { en: 'People Counting', vi: 'Đếm số người' },
+      features_people_desc: { en: 'Accurate customer counting and traffic analysis with zone-based detection.', vi: 'Đếm khách chính xác và phân tích lưu lượng với vùng phát hiện.' },
+      features_behavior_title: { en: 'Behavior Detection', vi: 'Phát hiện hành vi' },
+      features_behavior_desc: { en: 'Intelligent anomaly detection for theft prevention and security monitoring.', vi: 'Phát hiện bất thường thông minh để ngăn ngừa trộm cắp và giám sát an ninh.' },
+      features_analytics_title: { en: 'Analytics Dashboard', vi: 'Bảng điều khiển phân tích' },
+      features_analytics_desc: { en: 'Comprehensive insights and reporting for business optimization.', vi: 'Thông tin chuyên sâu và báo cáo toàn diện để tối ưu hoạt động.' },
       stats_title: { en: 'Trusted by Retailers Worldwide', vi: 'Được các nhà bán lẻ tin dùng trên toàn cầu' },
       cta2_title: { en: 'Ready to Secure Your Store?', vi: 'Sẵn sàng bảo vệ cửa hàng của bạn?' },
       cta2_sub: { en: 'Start your free trial today and experience the power of AI-driven surveillance. No setup fees, no long-term contracts.', vi: 'Bắt đầu dùng thử miễn phí ngay hôm nay và trải nghiệm sức mạnh giám sát bằng AI. Không phí cài đặt, không ràng buộc dài hạn.' },
@@ -92,29 +72,29 @@ export default function HomePage() {
   const features = [
     {
       icon: Camera,
-      title: 'Real-time Monitoring',
-      description: 'Advanced AI-powered surveillance with live video streaming and instant alerts.',
+      title: t('features_rtm_title'),
+      description: t('features_rtm_desc'),
       color: 'text-blue-600',
       bgColor: 'bg-blue-100'
     },
     {
       icon: Users,
-      title: 'People Counting',
-      description: 'Accurate customer counting and traffic analysis with zone-based detection.',
+      title: t('features_people_title'),
+      description: t('features_people_desc'),
       color: 'text-green-600',
       bgColor: 'bg-green-100'
     },
     {
       icon: Brain,
-      title: 'Behavior Detection',
-      description: 'Intelligent anomaly detection for theft prevention and security monitoring.',
+      title: t('features_behavior_title'),
+      description: t('features_behavior_desc'),
       color: 'text-purple-600',
       bgColor: 'bg-purple-100'
     },
     {
       icon: BarChart3,
-      title: 'Analytics Dashboard',
-      description: 'Comprehensive insights and reporting for business optimization.',
+      title: t('features_analytics_title'),
+      description: t('features_analytics_desc'),
       color: 'text-orange-600',
       bgColor: 'bg-orange-100'
     }
