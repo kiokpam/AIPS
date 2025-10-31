@@ -1,15 +1,14 @@
 export const en = {
   nav_cameras: 'Cameras',
   nav_dashboard: 'Dashboard',
-  nav_settings: 'Settings',
+  
   nav_signin: 'Sign In',
 
   dashboard_title: 'Dashboard',
   dashboard_sub: "Monitor your store's security and analytics",
   cameras_title: 'Cameras',
   cameras_sub: 'Manage your surveillance cameras',
-  settings_title: 'Settings',
-  settings_sub: 'Manage your AIPS system configuration',
+  
   add_camera: 'Add Camera',
   save_changes: 'Save Changes',
   tr_today: 'Today',
@@ -54,24 +53,7 @@ export const en = {
   camera_stopped: 'Camera stopped',
   failed_toggle_camera: 'Failed to toggle camera',
   failed_load_cameras: 'Failed to load cameras',
-  // Settings sections
-  camera_settings: 'Camera Settings',
-  system_settings: 'System Settings',
-  notification_settings: 'Notification Settings',
-  security_settings: 'Security Settings',
-  default_ai_model: 'Default AI Model',
-  default_device: 'Default Device',
-  confidence_threshold: 'Confidence Threshold',
-  iou_threshold: 'IOU Threshold',
-  auto_cleanup: 'Auto Cleanup',
-  max_file_size: 'Max File Size (MB)',
-  data_retention_days: 'Data Retention (Days)',
-  session_timeout_minutes: 'Session Timeout (Minutes)',
-  email_notifications: 'Email Notifications',
-  alert_threshold: 'Alert Threshold',
-  realtime_alerts: 'Real-time Alerts',
-  require_auth: 'Require Authentication',
-  log_level: 'Log Level',
+  
   // Dashboard labels
   customer_flow: 'Customer Flow',
   weekly_analytics: 'Weekly Analytics',
@@ -89,6 +71,15 @@ export const en = {
   all_systems_operational: 'All systems operational',
   processing_normally: 'Processing normally',
   monitoring_active: 'Monitoring active',
+  people_count: 'People',
+  ai_details: 'AI Details',
+  model: 'Model',
+  device: 'Device',
+  confidence: 'Confidence',
+  zones: 'Zones',
+  lines: 'Lines',
+  close: 'Close',
+  confirm_delete: 'Delete this camera?',
 };
 
 

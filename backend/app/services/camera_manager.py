@@ -21,6 +21,8 @@ os.environ.setdefault('OPENCV_FFMPEG_THREADS', '1')
 # Configuration
 PEOPLE_COUNTING_URL = os.getenv("PEOPLE_COUNTING_URL", "http://localhost:8001")
 BEHAVIOR_DETECTION_URL = os.getenv("BEHAVIOR_DETECTION_URL", "http://localhost:8002")
+AI_CORE_URL = os.getenv("AI_CORE_URL", "http://localhost:8003")
+PEOPLE_COUNTING_MODE = os.getenv("PEOPLE_COUNTING_MODE", "ai_core").lower()  # 'ai_core' | 'external'
 
 class VideoStream:
     """Enhanced video stream handler for RTSP, webcam, and file sources"""
@@ -235,6 +237,8 @@ class CameraWorker:
         # AI service clients
         self.people_counting_client = httpx.AsyncClient(timeout=10.0)
         self.behavior_detection_client = httpx.AsyncClient(timeout=10.0)
+        self.ai_core_client = httpx.AsyncClient(timeout=10.0)
+        self._pc_registered = False
         
         # Statistics
         self.stats = {
@@ -281,6 +285,13 @@ class CameraWorker:
         except RuntimeError:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(self.behavior_detection_client.aclose())
+            loop.close()
+
+        try:
+            asyncio.run(self.ai_core_client.aclose())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(self.ai_core_client.aclose())
             loop.close()
     
     def _run(self):
@@ -369,12 +380,12 @@ class CameraWorker:
             config = {
                 "camera_id": self.camera_id,
                 "store_id": self.store_id,
-                "rtsp_url": self.rtsp_url,
+                "rtsp_url": self.source,
                 "zones": zones,
                 "lines": lines,
-                "model_name": "yolov8n.pt",
-                "device": "auto",
-                "conf_thresh": 0.5
+                "model_name": self.model_name,
+                "device": self.device,
+                "conf_thresh": self.conf_thresh
             }
             
             payload = {
@@ -383,27 +394,116 @@ class CameraWorker:
                 "config": config
             }
             
-            response = await self.people_counting_client.post(
-                f"{PEOPLE_COUNTING_URL}/infer",
-                json=payload,
-                timeout=5.0
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                # Update current count from zones
-                total_count = 0
-                for zone_result in result.get("zones", []):
-                    total_count += zone_result.get("count", 0)
-                
-                self.current_count = total_count
-                self.stats["current_count"] = total_count
-                
-                # Handle people counting results
-                print(f"People counting result for {self.camera_id}: {total_count} people in zones")
+            async def _ai_core_count() -> int:
+                det_resp = await self.ai_core_client.post(
+                    f"{AI_CORE_URL}/detect",
+                    json={
+                        "frame_data": frame_data,
+                        "model_name": self.model_name,
+                        "device": self.device,
+                        "classes": [0],
+                        "conf_thresh": self.conf_thresh,
+                    },
+                    timeout=8.0,
+                )
+                det_resp.raise_for_status()
+                det = det_resp.json()
+                detections = det.get("detections", [])
+                total = 0
+                for zone_cfg in zones:
+                    try:
+                        cz_resp = await self.ai_core_client.post(
+                            f"{AI_CORE_URL}/count-zone",
+                            json={
+                                "frame_data": frame_data,
+                                "detections": detections,
+                                "zone_polygon": zone_cfg.get("polygon", []),
+                            },
+                            timeout=6.0,
+                        )
+                        if cz_resp.status_code == 200:
+                            cz = cz_resp.json()
+                            total += int(cz.get("count", 0))
+                    except Exception:
+                        continue
+                return total
+
+            async def _external_infer() -> Optional[int]:
+                try:
+                    response = await self.people_counting_client.post(
+                        f"{PEOPLE_COUNTING_URL}/infer",
+                        json=payload,
+                        timeout=5.0
+                    )
+                    if response.status_code == 200:
+                        result = response.json()
+                        return int(sum(z.get("count", 0) for z in result.get("zones", [])))
+                    else:
+                        try:
+                            err_text = response.text
+                        except Exception:
+                            err_text = "<no body>"
+                        print(f"People counting HTTP {response.status_code} for {self.camera_id}: {err_text}")
+                except Exception:
+                    return None
+                return None
+
+            total_count = 0
+            if PEOPLE_COUNTING_MODE == "ai_core":
+                # Use AI Core directly
+                total_count = await _ai_core_count()
+            else:
+                # Try external, fallback to AI Core
+                ext = await _external_infer()
+                if ext is not None:
+                    total_count = ext
+                else:
+                    total_count = await _ai_core_count()
+
+            self.current_count = total_count
+            self.stats["current_count"] = total_count
+            print(f"People counting ({PEOPLE_COUNTING_MODE}) for {self.camera_id}: {total_count}")
             
         except Exception as e:
             print(f"People counting error: {e}")
+
+    async def _register_people_counting_if_needed(self):
+        """Register camera with people-counting service to initialize trackers for line counting."""
+        if self._pc_registered:
+            return
+        try:
+            zones = [{
+                "id": z.get("id", z.get("name", "zone")),
+                "polygon": z.get("polygon", [])
+            } for z in self.zones]
+            lines = [{
+                "id": l.get("id", l.get("name", "line")),
+                "p1": l.get("p1"),
+                "p2": l.get("p2")
+            } for l in self.lines]
+
+            if not zones and not lines:
+                return
+
+            config = {
+                "camera_id": self.camera_id,
+                "store_id": self.store_id,
+                "rtsp_url": self.source,
+                "zones": zones,
+                "lines": lines,
+                "model_name": self.model_name,
+                "device": self.device,
+                "conf_thresh": self.conf_thresh,
+            }
+            resp = await self.people_counting_client.post(
+                f"{PEOPLE_COUNTING_URL}/camera/register",
+                json=config,
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                self._pc_registered = True
+        except Exception as e:
+            print(f"People counting register error: {e}")
     
     async def _process_behavior_detection(self, frame_data: str):
         """Process frame with behavior detection service"""
@@ -435,6 +535,15 @@ class CameraWorker:
         # Mark whether we currently have any task configured
         self.stats["has_task"] = bool(self.zones or self.lines)
         print(f"Updated task config for camera {self.camera_id}: {len(zones)} zones, {len(lines)} lines")
+        # Register with people-counting if service is enabled
+        if "people_counting" in self.ai_services:
+            try:
+                # run async registration in a fresh loop since we are in worker thread
+                asyncio.run(self._register_people_counting_if_needed())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(self._register_people_counting_if_needed())
+                loop.close()
     
     def clear_tasks(self):
         """Clear all tasks for this camera"""
@@ -442,6 +551,17 @@ class CameraWorker:
         self.lines = []
         self.current_count = 0
         print(f"Cleared tasks for camera {self.camera_id}")
+        # Unregister from people-counting to free trackers
+        try:
+            if self._pc_registered:
+                # best-effort async call
+                asyncio.run(self.people_counting_client.post(
+                    f"{PEOPLE_COUNTING_URL}/camera/{self.camera_id}/unregister",
+                    timeout=3.0,
+                ))
+                self._pc_registered = False
+        except Exception:
+            pass
     
     def get_task_config(self) -> Dict[str, Any]:
         """Get current task configuration"""
@@ -595,10 +715,31 @@ class CameraManager:
         # Create a copy to draw overlays on
         overlay_frame = frame.copy()
         
-        # Draw zones
+        # Helpers to denormalize 0..1 coordinates to pixels
+        def _denorm_point(p, width, height):
+            try:
+                x, y = float(p[0]), float(p[1])
+                if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                    return [int(x * width), int(y * height)]
+            except Exception:
+                pass
+            return [int(p[0]), int(p[1])]
+
+        def _denorm_polygon(poly, width, height):
+            try:
+                if all(0.0 <= float(x) <= 1.0 and 0.0 <= float(y) <= 1.0 for x, y in poly):
+                    return [[int(x * width), int(y * height)] for x, y in poly]
+            except Exception:
+                pass
+            return poly
+
+        h, w = overlay_frame.shape[:2]
+
+        # Draw zones (convert normalized to pixels if needed)
         for zone in camera_worker.zones:
             if zone.get("polygon"):
-                polygon = np.array(zone["polygon"], np.int32)
+                points = _denorm_polygon(zone["polygon"], w, h)
+                polygon = np.array(points, np.int32)
                 cv2.polylines(overlay_frame, [polygon], True, (0, 255, 0), 2)
                 # Add zone name
                 if zone.get("name"):
@@ -609,8 +750,8 @@ class CameraManager:
         # Draw lines
         for line in camera_worker.lines:
             if line.get("p1") and line.get("p2"):
-                p1 = tuple(line["p1"])
-                p2 = tuple(line["p2"])
+                p1 = tuple(_denorm_point(line["p1"], w, h))
+                p2 = tuple(_denorm_point(line["p2"], w, h))
                 cv2.line(overlay_frame, p1, p2, (255, 0, 0), 2)
                 # Add line name
                 if line.get("name"):

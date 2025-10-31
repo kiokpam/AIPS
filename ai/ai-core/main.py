@@ -118,6 +118,9 @@ def detect(request: DetectionRequest):
         )
         
     except Exception as e:
+        import traceback
+        print("[ai-core] Detection failed:", str(e))
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
 
 @app.post("/count-zone", response_model=ZoneCountResponse)

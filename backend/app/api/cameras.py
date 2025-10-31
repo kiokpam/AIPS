@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.db.session import SessionLocal
 from app.models.core import Camera as CameraModel
+from app.models.core import CountingZone as CountingZoneModel, CountingLine as CountingLineModel
 from app.schemas.core import Camera, CameraCreate, CameraUpdate
 from app.services.camera_manager import camera_manager
 from app.services.streaming_service import streaming_service
@@ -54,12 +55,13 @@ def list_cameras(db: Session = Depends(get_db)) -> List[Camera]:
 @router.post("/", response_model=Camera)
 def create_camera(payload: CameraCreate, db: Session = Depends(get_db)) -> Camera:
     """Create a new camera in database with advanced configuration"""
+    default_ai = payload.ai_services if payload.ai_services and len(payload.ai_services) > 0 else ['people_counting', 'behavior_detection']
     item = CameraModel(
         id=str(uuid.uuid4()), 
         store_id=payload.store_id, 
         name=payload.name, 
         source=payload.source,
-        ai_services=payload.ai_services,
+        ai_services=default_ai,
         model_name=payload.model_name,
         device=payload.device,
         conf_thresh=payload.conf_thresh,
@@ -91,7 +93,30 @@ def create_camera(payload: CameraCreate, db: Session = Depends(get_db)) -> Camer
         db.delete(item)
         db.commit()
         raise HTTPException(status_code=400, detail="Failed to start camera stream")
-    
+    # If tasks already exist for this camera, load and apply them now
+    try:
+        zones = db.query(CountingZoneModel).filter(
+            CountingZoneModel.camera_id == item.id,
+            CountingZoneModel.is_active == True,
+        ).all()
+        lines = db.query(CountingLineModel).filter(
+            CountingLineModel.camera_id == item.id,
+            CountingLineModel.is_active == True,
+        ).all()
+        zone_configs = [
+            {"id": z.id, "name": z.name, "polygon": z.polygon}
+            for z in zones
+        ]
+        line_configs = [
+            {"id": l.id, "name": l.name, "p1": l.p1, "p2": l.p2}
+            for l in lines
+        ]
+        worker = camera_manager.get_camera(item.id)
+        if worker and (zone_configs or line_configs):
+            worker.update_task_config(zone_configs, line_configs)
+    except Exception:
+        pass
+
     return Camera(
         id=item.id, 
         store_id=item.store_id, 
@@ -160,6 +185,29 @@ def update_camera(camera_id: str, payload: CameraUpdate, db: Session = Depends(g
         
         if not success:
             raise HTTPException(status_code=400, detail="Failed to restart camera with new URL")
+        # Re-apply any existing tasks after restart
+        try:
+            zones = db.query(CountingZoneModel).filter(
+                CountingZoneModel.camera_id == camera.id,
+                CountingZoneModel.is_active == True,
+            ).all()
+            lines = db.query(CountingLineModel).filter(
+                CountingLineModel.camera_id == camera.id,
+                CountingLineModel.is_active == True,
+            ).all()
+            zone_configs = [
+                {"id": z.id, "name": z.name, "polygon": z.polygon}
+                for z in zones
+            ]
+            line_configs = [
+                {"id": l.id, "name": l.name, "p1": l.p1, "p2": l.p2}
+                for l in lines
+            ]
+            worker = camera_manager.get_camera(camera.id)
+            if worker and (zone_configs or line_configs):
+                worker.update_task_config(zone_configs, line_configs)
+        except Exception:
+            pass
     
     if payload.ai_services is not None:
         camera_manager.update_camera_ai_services(camera_id, payload.ai_services)
@@ -262,6 +310,29 @@ def start_camera(camera_id: str, db: Session = Depends(get_db)):
     
     if not success:
         raise HTTPException(status_code=400, detail="Failed to start camera")
+    # Apply any existing tasks on start
+    try:
+        zones = db.query(CountingZoneModel).filter(
+            CountingZoneModel.camera_id == camera.id,
+            CountingZoneModel.is_active == True,
+        ).all()
+        lines = db.query(CountingLineModel).filter(
+            CountingLineModel.camera_id == camera.id,
+            CountingLineModel.is_active == True,
+        ).all()
+        zone_configs = [
+            {"id": z.id, "name": z.name, "polygon": z.polygon}
+            for z in zones
+        ]
+        line_configs = [
+            {"id": l.id, "name": l.name, "p1": l.p1, "p2": l.p2}
+            for l in lines
+        ]
+        worker = camera_manager.get_camera(camera.id)
+        if worker and (zone_configs or line_configs):
+            worker.update_task_config(zone_configs, line_configs)
+    except Exception:
+        pass
     
     return {"message": "Camera started successfully"}
 

@@ -231,23 +231,49 @@ async def infer(request: InferenceRequest):
             classes=[0],  # person class
             conf_thresh=config.conf_thresh
         )
+        try:
+            print(f"[people-counting] camera={config.camera_id} model={config.model_name} device={config.device} conf={config.conf_thresh} detections={len(detections)} time_ms={detection_time}")
+        except Exception:
+            pass
         
-        # Process zones
+        # Process zones (support normalized polygons 0..1 by converting to pixel coords)
         zone_results = []
         for zone in config.zones:
             zone_id = zone.get("id", "default")
             zone_polygon = zone.get("polygon", [])
             
             if zone_polygon:
+                # Convert normalized to pixel coordinates if values are between 0 and 1
+                def _maybe_denorm_polygon(poly, width, height):
+                    try:
+                        # If every coordinate lies within [0,1], assume normalized
+                        if all(
+                            0.0 <= float(x) <= 1.0 and 0.0 <= float(y) <= 1.0
+                            for x, y in poly
+                        ):
+                            return [[int(x * width), int(y * height)] for x, y in poly]
+                    except Exception:
+                        pass
+                    return poly
+
+                h, w = image.shape[:2]
+                pixel_polygon = _maybe_denorm_polygon(zone_polygon, w, h)
+
                 count, ids_in_zone, processed_image = await ai_core.count_zone(
-                    image, detections, zone_polygon
+                    image, detections, pixel_polygon
                 )
+                try:
+                    xs = [p[0] for p in pixel_polygon]
+                    ys = [p[1] for p in pixel_polygon]
+                    print(f"[people-counting] camera={config.camera_id} zone={zone_id} poly_px=({min(xs)},{min(ys)})-({max(xs)},{max(ys)}) count={count}")
+                except Exception:
+                    pass
                 
                 zone_results.append({
                     "zone_id": zone_id,
                     "count": count,
                     "ids_in_zone": ids_in_zone,
-                    "polygon": zone_polygon
+                    "polygon": pixel_polygon
                 })
                 
                 # Send counter update event
@@ -258,17 +284,34 @@ async def infer(request: InferenceRequest):
                     count
                 )
         
-        # Process lines
+        # Process lines (support normalized endpoints 0..1)
         line_results = []
         for line in config.lines:
             line_id = line.get("id", "default")
             line_p1 = line.get("p1", [0, 0])
             line_p2 = line.get("p2", [100, 100])
             
+            def _maybe_denorm_point(p, width, height):
+                try:
+                    x, y = float(p[0]), float(p[1])
+                    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                        return [int(x * width), int(y * height)]
+                except Exception:
+                    pass
+                return p
+
+            h, w = image.shape[:2]
+            line_p1 = _maybe_denorm_point(line_p1, w, h)
+            line_p2 = _maybe_denorm_point(line_p2, w, h)
+
             tracker_id = f"camera_{config.camera_id}"
             count_in, count_out, processed_image = await ai_core.count_line(
                 image, detections, line_p1, line_p2, tracker_id
             )
+            try:
+                print(f"[people-counting] camera={config.camera_id} line={line_id} p1={line_p1} p2={line_p2} in={count_in} out={count_out}")
+            except Exception:
+                pass
             
             line_results.append({
                 "line_id": line_id,

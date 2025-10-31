@@ -19,10 +19,17 @@ class StreamingService:
         self.stream_lock = threading.Lock()
     
     def generate_mjpeg_stream(self, camera_id: str, with_overlay: bool = True):
-        """Generate MJPEG stream for a camera"""
+        """Generate MJPEG stream for a camera. Never raise inside generator; yield an error frame and exit instead."""
         camera_worker = camera_manager.get_camera(camera_id)
         if not camera_worker:
-            raise HTTPException(status_code=404, detail="Camera not found or not running")
+            # Yield a single error frame then exit to avoid half-started responses
+            error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(error_frame, "Camera not running", (80, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ret:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+            return
         
         # Mark stream as active
         with self.stream_lock:
@@ -35,6 +42,9 @@ class StreamingService:
             
             while self.active_streams.get(camera_id, False):
                 try:
+                    # Stop if camera disappeared
+                    if not camera_manager.get_camera(camera_id):
+                        break
                     # Get frame with or without overlay
                     if with_overlay:
                         frame = camera_manager.get_camera_frame_with_overlay(camera_id)

@@ -35,12 +35,7 @@ const navigation = [
     icon: BarChart3,
     current: false
   },
-  {
-    name: 'Settings',
-    href: '/settings',
-    icon: Settings,
-    current: false
-  }
+  
 ];
 
 function InnerLayout({ children }: AppLayoutProps) {
@@ -49,11 +44,28 @@ function InnerLayout({ children }: AppLayoutProps) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { lang, setLanguage } = useI18n();
+  const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     if (typeof document !== 'undefined') {
       document.documentElement.lang = lang;
     }
   }, [lang]);
+
+  // Header shrink on scroll
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Force default dark theme once
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      const body = document.body;
+      if (!body.classList.contains('dark-blue')) body.classList.add('dark-blue');
+    }
+  }, []);
 
   // Check authentication on mount
   useEffect(() => {
@@ -226,14 +238,14 @@ function InnerLayout({ children }: AppLayoutProps) {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         {/* Top navigation header */}
         <header style={{
-          backgroundColor: '#0f172a',
+          position: 'sticky', top: 0, zIndex: 30,
+          backgroundColor: 'rgba(15,23,42,' + (scrolled ? 0.9 : 0.7) + ')',
+          backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
           borderBottom: '1px solid #1f2937',
-          height: '64px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 24px',
-          boxShadow: '0 12px 30px rgba(2,6,23,.45)'
+          height: scrolled ? '56px' : '64px',
+          transition: 'height .2s ease, background-color .2s ease',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0 24px', boxShadow: '0 12px 30px rgba(2,6,23,.45)'
         }}>
         {/* Menu button and page title */}
         <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -269,7 +281,7 @@ function InnerLayout({ children }: AppLayoutProps) {
           </h1>
         </div>
 
-        {/* Right side - language, notifications and user menu */}
+        {/* Right side - language, theme, notifications and user menu */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           {/* Language toggle (VI / EN) with underline like Sirix */}
           <div style={{ display: 'flex', gap: '18px', alignItems: 'center' }}>
@@ -282,6 +294,8 @@ function InnerLayout({ children }: AppLayoutProps) {
               <div style={{ height: '3px', width: '44px', backgroundColor: '#ffffff', marginTop: '6px', opacity: lang === 'en' ? 1 : 0, transition: 'opacity .2s' }} />
             </div>
           </div>
+
+          {/* Theme toggle removed per request */}
           {/* Notifications */}
           <button style={{
             padding: '8px',

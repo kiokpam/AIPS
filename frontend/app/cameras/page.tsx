@@ -21,7 +21,8 @@ import {
   X,
   Undo,
   Trash2,
-  Save
+  Save,
+  Brain
 } from 'lucide-react';
 import { cameraApi, storeApi, tasksApi, type Camera as CameraType } from '@/lib/api';
 import { useI18n } from '@/src/contexts/I18nContext';
@@ -76,9 +77,11 @@ const DrawingCanvas = ({
         const videoLeft = videoRect.left - containerRect.left;
         const videoTop = videoRect.top - containerRect.top;
         
-        // Set canvas size to match the video element size exactly
-        canvas.width = videoRect.width;
-        canvas.height = videoRect.height;
+        // Prefer the media's intrinsic resolution for the canvas drawing buffer
+        const naturalW = (videoElement as HTMLVideoElement).videoWidth || (videoElement as HTMLImageElement).naturalWidth || videoRect.width;
+        const naturalH = (videoElement as HTMLVideoElement).videoHeight || (videoElement as HTMLImageElement).naturalHeight || videoRect.height;
+        canvas.width = naturalW;
+        canvas.height = naturalH;
         
         // Position canvas exactly over the video element
         canvas.style.position = 'absolute';
@@ -87,8 +90,6 @@ const DrawingCanvas = ({
         canvas.style.width = videoRect.width + 'px';
         canvas.style.height = videoRect.height + 'px';
         canvas.style.pointerEvents = 'auto';
-        canvas.style.border = '2px solid red'; // Debug border
-        canvas.style.backgroundColor = 'rgba(255, 0, 0, 0.1)'; // Debug background
         canvas.style.zIndex = '20';
         
         console.log('=== CANVAS POSITIONING DEBUG ===');
@@ -242,6 +243,19 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   const [isStarting, setIsStarting] = useState(false);
   const [streamRetry, setStreamRetry] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
+  const [currentCount, setCurrentCount] = useState<number | null>(null);
+  const [showAIDetails, setShowAIDetails] = useState(false);
+  const [aiModel, setAiModel] = useState(camera.model_name || 'yolov8n.pt');
+  const [aiDevice, setAiDevice] = useState(camera.device || 'auto');
+  const [aiConf, setAiConf] = useState<number>(typeof camera.conf_thresh === 'number' ? camera.conf_thresh : 0.5);
+  const [taskInfo, setTaskInfo] = useState<{ zones: any[]; lines: any[] } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Client-side overlay fallback: draw zones/lines over MJPEG <img>
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null);
+  const [streamNonce, setStreamNonce] = useState<number>(Date.now());
 
   // When backend reports active, automatically try to show the stream
   useEffect(() => {
@@ -254,10 +268,233 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     }
   }, [camera.is_active]);
 
+  // While starting, periodically refresh the MJPEG URL with a cache-busting nonce
+  useEffect(() => {
+    if (!isStreaming) return;
+    let timer: any;
+    let attempts = 0;
+    const maxAttempts = 30; // ~60 seconds (2s * 30)
+    const tick = () => {
+      if (!isStarting) return; // first frame arrived
+      attempts += 1;
+      setStreamNonce(Date.now());
+      if (attempts < maxAttempts) {
+        timer = setTimeout(tick, 2000);
+      }
+    };
+    // Kick off if starting
+    if (isStarting) timer = setTimeout(tick, 0);
+    return () => { if (timer) clearTimeout(timer); };
+  }, [isStreaming, isStarting]);
+
+  // Fetch frame size - prefer from image element (most accurate), fallback to stats
+  useEffect(() => {
+    let mounted = true;
+    
+    // First try to get from the actual image element (matches preview calculation)
+    const tryFromImage = () => {
+      if (!imgRef.current) return null;
+      const img = imgRef.current;
+      const naturalW = img.naturalWidth;
+      const naturalH = img.naturalHeight;
+      if (naturalW > 0 && naturalH > 0) {
+        console.log('Camera page frame size from image element:', naturalW, 'x', naturalH);
+        return { w: naturalW, h: naturalH };
+      }
+      return null;
+    };
+    
+    // Try image element first (most accurate, matches preview)
+    const imgSize = tryFromImage();
+    if (imgSize && mounted) {
+      setFrameSize(imgSize);
+      return;
+    }
+    
+    // Fallback to stats API
+    (async () => {
+      try {
+        const stats = await cameraApi.getCameraStats(camera.id);
+        const w = (stats as any)?.config?.width;
+        const h = (stats as any)?.config?.height;
+        if (mounted && typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
+          console.log('Camera page frame size from stats API:', w, 'x', h);
+          setFrameSize({ w, h });
+        }
+      } catch {}
+    })();
+    
+    // Also listen for image load to update when it becomes available
+    const img = imgRef.current;
+    if (img) {
+      const handleLoad = () => {
+        const imgSize = tryFromImage();
+        if (imgSize && mounted) {
+          setFrameSize(imgSize);
+        }
+      };
+      img.addEventListener('load', handleLoad);
+      img.addEventListener('loadedmetadata', handleLoad);
+      return () => {
+        mounted = false;
+        img.removeEventListener('load', handleLoad);
+        img.removeEventListener('loadedmetadata', handleLoad);
+      };
+    }
+    
+    return () => { mounted = false; };
+  }, [camera.id]);
+
+  // Draw overlay when we have tasks + frame size + img laid out
+  useEffect(() => {
+    const canvas = overlayRef.current;
+    const img = imgRef.current;
+    if (!canvas || !img || !taskInfo || !frameSize) return;
+
+    const container = img.parentElement as HTMLElement | null;
+    if (!container) return;
+
+    const resizeAndDraw = () => {
+      const containerRect = container.getBoundingClientRect();
+      const cw = Math.max(1, Math.floor(containerRect.width));
+      const ch = Math.max(1, Math.floor(containerRect.height));
+      canvas.width = cw;
+      canvas.height = ch;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, cw, ch);
+
+      // Compute object-contain content box for the frame
+      const frameW = frameSize.w;
+      const frameH = frameSize.h;
+      const scale = Math.min(cw / frameW, ch / frameH);
+      const contentW = frameW * scale;
+      const contentH = frameH * scale;
+      const offsetX = (cw - contentW) / 2;
+      const offsetY = (ch - contentH) / 2;
+
+      const mapPoint = (p: number[]) => {
+        // p can be normalized [0..1] or pixel [x,y]
+        const x = (p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1) ? p[0] * frameW : p[0];
+        const y = (p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1) ? p[1] * frameH : p[1];
+        return [offsetX + x * scale, offsetY + y * scale];
+      };
+
+      // Draw zones
+      (taskInfo.zones || []).forEach((z: any) => {
+        const poly = (z.polygon || []).map((p: number[]) => mapPoint(p));
+        if (poly.length >= 2) {
+          ctx.strokeStyle = '#10b981';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(poly[0][0], poly[0][1]);
+          for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+          ctx.closePath();
+          ctx.stroke();
+          if (z.name) {
+            ctx.fillStyle = '#10b981';
+            ctx.font = '14px sans-serif';
+            ctx.fillText(String(z.name), poly[0][0] + 4, poly[0][1] + 16);
+          }
+        }
+      });
+
+      // Draw lines
+      (taskInfo.lines || []).forEach((l: any) => {
+        if (!l.p1 || !l.p2) return;
+        const p1 = mapPoint(l.p1);
+        const p2 = mapPoint(l.p2);
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(p1[0], p1[1]);
+        ctx.lineTo(p2[0], p2[1]);
+        ctx.stroke();
+        if (l.name) {
+          ctx.fillStyle = '#3b82f6';
+          ctx.font = '14px sans-serif';
+          const midX = (p1[0] + p2[0]) / 2;
+          const midY = (p1[1] + p2[1]) / 2;
+          ctx.fillText(String(l.name), midX + 4, midY - 4);
+        }
+      });
+    };
+
+    resizeAndDraw();
+    const onResize = () => resizeAndDraw();
+    window.addEventListener('resize', onResize);
+    const ro = new ResizeObserver(() => resizeAndDraw());
+    ro.observe(container);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      ro.disconnect();
+    };
+  }, [taskInfo, frameSize]);
+
   const handleStreamToggle = () => {
     setIsStreaming(!isStreaming);
     toast.success(isStreaming ? t('camera_stopped') : t('camera_started'));
   };
+
+  // Poll camera stats to get current people count
+  useEffect(() => {
+    let isMounted = true;
+    let timer: any;
+
+    const fetchStats = async () => {
+      try {
+        const stats = await cameraApi.getCameraStats(camera.id);
+        const count = stats?.stats?.current_count ?? stats?.current_count ?? null;
+        if (isMounted) setCurrentCount(typeof count === 'number' ? count : null);
+      } catch (_) {
+        if (isMounted) setCurrentCount(null);
+      } finally {
+        timer = setTimeout(fetchStats, 5000);
+      }
+    };
+
+    fetchStats();
+    return () => { isMounted = false; if (timer) clearTimeout(timer); };
+  }, [camera.id]);
+
+  // Load AI details when modal opens
+  useEffect(() => {
+    if (!showAIDetails) return;
+    let mounted = true;
+    (async () => {
+      try {
+        const cfg = await cameraApi.getCameraConfig(camera.id);
+        if (mounted) {
+          setAiModel(cfg?.config?.model_name ?? aiModel);
+          setAiDevice(cfg?.config?.device ?? aiDevice);
+          setAiConf(cfg?.config?.conf_thresh ?? aiConf);
+        }
+      } catch {}
+      try {
+        const tasks = await tasksApi.getCameraTaskConfig(camera.id);
+        if (mounted) setTaskInfo({ zones: tasks?.zones || [], lines: tasks?.lines || [] });
+      } catch {}
+    })();
+    return () => { mounted = false; };
+  }, [showAIDetails, camera.id]);
+
+  // Auto-load task config for overlay on mount and refresh periodically
+  useEffect(() => {
+    let mounted = true;
+    let timer: any;
+    const loadTasks = async () => {
+      try {
+        const tasks = await tasksApi.getCameraTaskConfig(camera.id);
+        if (mounted) setTaskInfo({ zones: tasks?.zones || [], lines: tasks?.lines || [] });
+      } catch {}
+      timer = setTimeout(loadTasks, 5000);
+    };
+    loadTasks();
+    return () => { mounted = false; if (timer) clearTimeout(timer); };
+  }, [camera.id]);
 
   return (
     <motion.div
@@ -268,29 +505,34 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
       {/* Camera Preview */}
       <div className="camera-preview">
         {isStreaming ? (
-          <img
-            src={cameraApi.getCameraStreamUrl(camera.id)}
-            alt={`${camera.name} stream`}
-            className="video-stream"
-            onLoad={() => {
-              setIsStarting(false);
-              setStreamRetry(0);
-            }}
-            onError={() => {
-              // Retry a few times while the worker warms up
-              if (streamRetry < 20) {
-                setStreamRetry((n) => n + 1);
-                setIsStarting(true);
-                setTimeout(() => {
-                  setIsStreaming(false);
-                  setTimeout(() => setIsStreaming(true), 300);
-                }, 300);
-              } else {
+          <div className="relative w-full h-full">
+            <img
+              ref={imgRef}
+              src={`${cameraApi.getCameraStreamUrl(camera.id)}&t=${streamNonce}`}
+              alt={`${camera.name} stream`}
+              className="video-stream"
+              onLoad={() => {
                 setIsStarting(false);
-                setIsStreaming(false);
-              }
-            }}
-          />
+                setStreamRetry(0);
+              }}
+              onError={() => {
+                // Retry a few times while the worker warms up
+                if (streamRetry < 20) {
+                  setStreamRetry((n) => n + 1);
+                  setIsStarting(true);
+                  setTimeout(() => {
+                    setIsStreaming(false);
+                    setTimeout(() => setIsStreaming(true), 300);
+                  }, 300);
+                } else {
+                  setIsStarting(false);
+                  setIsStreaming(false);
+                }
+              }}
+            />
+            {/* Client-side overlay fallback to ensure zones/lines are visible */}
+            <canvas ref={overlayRef} className="absolute inset-0 pointer-events-none" />
+          </div>
         ) : (
           <div className="video-placeholder">
             <Camera className="w-12 h-12 text-slate-400" />
@@ -303,6 +545,13 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
           <div className={`status-indicator ${camera.is_active ? 'status-online' : 'status-offline'}`} />
           <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
             {camera.is_active ? (isStarting ? t('starting') : t('online')) : t('offline')}
+          </span>
+        </div>
+
+        {/* People count badge */}
+        <div className="absolute bottom-3 left-3">
+          <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
+            {t('people_count')}: {currentCount !== null ? currentCount : '—'}
           </span>
         </div>
 
@@ -340,6 +589,16 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                 >
                   <Settings className="w-4 h-4 mr-3" />
                   {t('configure')}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAIDetails(true);
+                    setShowMenu(false);
+                  }}
+                  className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <Brain className="w-4 h-4 mr-3" />
+                  {t('ai_details')}
                 </button>
                 <button
                   onClick={() => {
@@ -422,13 +681,111 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
             )}
           </button>
           <button
-            onClick={() => onEdit(camera)}
+            onClick={() => setShowAIDetails(true)}
             className="btn-outline btn-sm"
           >
             <Settings className="w-4 h-4" />
           </button>
+          <button
+            onClick={() => {
+              if (confirm(t('confirm_delete'))) onDelete(camera.id);
+            }}
+            className="btn-outline btn-sm text-red-600 border-red-200 hover:bg-red-50"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
         </div>
       </div>
+      {/* AI Details Modal */}
+      <AnimatePresence>
+        {showAIDetails && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+            onClick={() => setShowAIDetails(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-slate-900">{t('ai_details')}</h3>
+                <button className="text-slate-500 hover:text-slate-700" onClick={() => setShowAIDetails(false)}>{t('close')}</button>
+              </div>
+              <div className="grid md:grid-cols-3 gap-4">
+                <div>
+                  <label className="label block mb-2">{t('model')}</label>
+                  <input className="input" value={aiModel} onChange={(e) => setAiModel(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label block mb-2">{t('device')}</label>
+                  <input className="input" value={aiDevice} onChange={(e) => setAiDevice(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label block mb-2">{t('confidence')}</label>
+                  <input className="input" type="number" min={0} max={1} step={0.01} value={aiConf} onChange={(e) => setAiConf(parseFloat(e.target.value) || 0)} />
+                </div>
+              </div>
+              <div className="mt-6 grid md:grid-cols-2 gap-6">
+                <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                  <div className="text-sm text-slate-500 mb-2">{t('people_count')}</div>
+                  <div className="text-3xl font-bold text-slate-900">{currentCount ?? '—'}</div>
+                </div>
+                <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                  <div className="text-sm text-slate-500 mb-2">{t('zones')} / {t('lines')}</div>
+                  <div className="text-slate-900">{taskInfo?.zones?.length ?? 0} / {taskInfo?.lines?.length ?? 0}</div>
+                </div>
+              </div>
+              <div className="mt-4 grid md:grid-cols-2 gap-6 max-h-48 overflow-auto">
+                <div>
+                  <div className="text-sm font-medium text-slate-700 mb-2">{t('zones')}</div>
+                  <ul className="text-sm text-slate-600 space-y-1">
+                    {(taskInfo?.zones || []).map((z: any) => (
+                      <li key={z.id} className="truncate">{z.name || z.id}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-slate-700 mb-2">{t('lines')}</div>
+                  <ul className="text-sm text-slate-600 space-y-1">
+                    {(taskInfo?.lines || []).map((l: any) => (
+                      <li key={l.id} className="truncate">{l.name || l.id}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end gap-3">
+                <button className="btn-outline" onClick={() => setShowAIDetails(false)}>{t('close')}</button>
+                <button
+                  className="btn-primary"
+                  onClick={async () => {
+                    try {
+                      setSaving(true);
+                      await cameraApi.updateCameraConfig(camera.id, {
+                        model_name: aiModel,
+                        device: aiDevice,
+                        conf_thresh: aiConf,
+                      });
+                      toast.success(t('save_changes'));
+                    } catch (e) {
+                      toast.error(t('preview_error'));
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                >
+                  {t('save_changes')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };
@@ -672,12 +1029,39 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         const encodedSource = encodeURIComponent(formData.source);
         sourceUrl = `http://localhost:8000/api/preview/stream?source=${encodedSource}`;
         
-        // Test the source first
-        const testResponse = await fetch(`http://localhost:8000/api/preview/test?source=${encodedSource}`);
-        const testResult = await testResponse.json();
-        
-        if (!testResult.accessible) {
-          throw new Error(testResult.error || 'Cannot access video source');
+        // Test the source first with timeout and retry
+        try {
+          const testResponse = await Promise.race([
+            fetch(`http://localhost:8000/api/preview/test?source=${encodedSource}`),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Test timeout')), 10000))
+          ]) as Response;
+          
+          if (!testResponse.ok) {
+            // If test endpoint fails, try connecting anyway (might be concurrent connection issue)
+            console.warn('Preview test failed, attempting connection anyway:', testResponse.status);
+          } else {
+            const testResult = await testResponse.json();
+            
+            if (!testResult.accessible) {
+              // Check if error is about concurrent connections (might still work for preview)
+              const errorMsg = testResult.error || 'Cannot access video source';
+              if (errorMsg.includes('connection failed') && errorMsg.includes('timeout')) {
+                // Source might be in use, but preview stream might still work
+                console.warn('Source test failed but attempting preview anyway:', errorMsg);
+              } else {
+                throw new Error(errorMsg);
+              }
+            }
+          }
+        } catch (error) {
+          // If test fails but it's a timeout or connection issue, try preview anyway
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          if (errorMsg.includes('timeout') || errorMsg.includes('Connection refused')) {
+            console.warn('Preview test timed out, attempting connection anyway');
+            // Continue to try preview stream
+          } else {
+            throw error;
+          }
         }
 
         setPreviewUrl(sourceUrl);
@@ -726,10 +1110,11 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       setContentBox({ displayW, displayH, offsetX, offsetY, naturalW, naturalH });
     }
     const rect = canvas.getBoundingClientRect();
-    
-    // Get precise click coordinates relative to canvas
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // Map display coordinates to intrinsic canvas coordinates
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     
     // Validate coordinates are within canvas bounds
     if (x < 0 || y < 0 || x > canvas.width || y > canvas.height) {
@@ -737,25 +1122,21 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       return;
     }
 
-    // Calculate normalized coordinates (fractions 0-1) for precise mapping
-    let fx = 0, fy = 0;
-    if (contentBox) {
-      // Convert canvas coordinates to content box coordinates
-      const xInContent = x - contentBox.offsetX;
-      const yInContent = y - contentBox.offsetY;
-      
-      // Clamp to content box bounds
-      const clampedX = Math.max(0, Math.min(contentBox.displayW, xInContent));
-      const clampedY = Math.max(0, Math.min(contentBox.displayH, yInContent));
-      
-      // Convert to normalized coordinates (0-1)
-      fx = contentBox.displayW > 0 ? clampedX / contentBox.displayW : 0;
-      fy = contentBox.displayH > 0 ? clampedY / contentBox.displayH : 0;
+    // Also store normalized coordinates relative to the content (letterboxed) box
+    // so they map correctly back to the original frame dimensions
+    let fx = 0;
+    let fy = 0;
+    if (contentBox && contentBox.displayW > 0 && contentBox.displayH > 0) {
+      fx = (x - contentBox.offsetX) / contentBox.displayW;
+      fy = (y - contentBox.offsetY) / contentBox.displayH;
     } else {
-      // Fallback to canvas-relative coordinates
-      fx = x / canvas.width;
-      fy = y / canvas.height;
+      // Fallback to canvas-relative normalization
+      fx = canvas.width > 0 ? x / canvas.width : 0;
+      fy = canvas.height > 0 ? y / canvas.height : 0;
     }
+    // Clamp to [0,1] to avoid any numeric drift or clicks slightly outside
+    fx = Math.max(0, Math.min(1, fx));
+    fy = Math.max(0, Math.min(1, fy));
     
     console.log('=== CLICK COORDINATES DEBUG ===');
     console.log('Mouse position:', e.clientX, e.clientY);
@@ -887,6 +1268,20 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         isComplete: false
       });
     } else {
+      // If clicking near the first point, finish the zone (codedash_ai behavior)
+      if (currentDrawing.type === 'zone' && currentDrawing.points.length >= 3) {
+        const fx0 = currentDrawing.points[0].x;
+        const fy0 = currentDrawing.points[0].y;
+        if (Math.hypot(x - fx0, y - fy0) <= 20) {
+          const completedZone = {
+            ...currentDrawing,
+            isComplete: true,
+          };
+          setDrawnAreas(prev => [...prev, completedZone]);
+          setCurrentDrawing(null);
+          return;
+        }
+      }
       // Add point to current zone
       const newPoints = [...currentDrawing.points, { x, y, fx, fy }];
       setCurrentDrawing({
@@ -948,7 +1343,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-white text-slate-900 rounded-xl shadow-xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col mx-4 my-4"
+        className="bg-white text-slate-900 rounded-xl shadow-xl w-full max-w-7xl max-h-[95vh] overflow-hidden flex flex-col mx-4 my-4"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-200 bg-slate-50">
@@ -963,7 +1358,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
         <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
           {/* Left Panel - Configuration */}
-          <div className="w-full lg:w-1/2 p-6 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200 flex-shrink-0 max-h-96 lg:max-h-none">
+          <div className="w-full lg:w-1/3 p-6 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200 flex-shrink-0 max-h-96 lg:max-h-none">
             <form onSubmit={handleSubmit} className="space-y-6">
               {/* Camera Name */}
             <div>
@@ -1260,7 +1655,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           </div>
 
           {/* Right Panel - Video Preview */}
-          <div className="w-full lg:w-1/2 p-6 flex flex-col min-h-0 flex-1">
+          <div className="w-full lg:w-2/3 p-6 flex flex-col min-h-0 flex-1">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-medium text-slate-900">Preview</h3>
               <div className="flex space-x-2">
@@ -1284,7 +1679,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
             </div>
 
             {/* Video Preview */}
-            <div className="flex-1 bg-slate-100 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center relative min-h-0">
+            <div className="relative w-full h-[72vh] min-h-[480px] bg-slate-100 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center">
               {isLoadingPreview ? (
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
@@ -1533,8 +1928,21 @@ export default function CamerasPage() {
         const taskType: 'zone' | 'line' | 'both' =
           zones.length > 0 && lines.length > 0 ? 'both' : zones.length > 0 ? 'zone' : lines.length > 0 ? 'line' : 'zone';
         
-        // Get actual frame dimensions from backend with retry mechanism
-        const frameSize = await (async () => {
+        // Prefer frame dimensions from preview contentBox (most accurate), fallback to backend fetch
+        const frameSize = (() => {
+          // Use contentBox natural dimensions if available (from preview media element)
+          if (cameraData.contentBox && cameraData.contentBox.naturalW > 0 && cameraData.contentBox.naturalH > 0) {
+            console.log('Using preview contentBox dimensions:', cameraData.contentBox.naturalW, 'x', cameraData.contentBox.naturalH);
+            return { w: cameraData.contentBox.naturalW, h: cameraData.contentBox.naturalH };
+          }
+          
+          // Fallback to backend fetch
+          console.log('ContentBox not available, will fetch from backend');
+          return null;
+        })();
+        
+        // If we don't have contentBox dimensions, fetch from backend
+        const finalFrameSize = frameSize || await (async () => {
           const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
           const url = `${base}/api/cameras/${created.id}/frame?overlay=false&_=${Date.now()}`;
           
@@ -1574,13 +1982,13 @@ export default function CamerasPage() {
           return { w: 1920, h: 1080 }; // Fallback to common resolution
         })();
         
-        const frameW = frameSize.w;
-        const frameH = frameSize.h;
+        const frameW = finalFrameSize.w;
+        const frameH = finalFrameSize.h;
         
         console.log('Frame dimensions for coordinate conversion:', frameW, 'x', frameH);
         console.log('Original zones with normalized coords:', zones);
         
-        // Convert normalized coordinates to frame coordinates
+        // Backend schemas require integer pixels; convert from normalized to frame pixels
         const scaledZones = zones.map((z: any) => ({
           name: z.name,
           polygon: z.points.map((p: any) => [
@@ -1649,7 +2057,8 @@ export default function CamerasPage() {
   const handleDeleteCamera = async (id: string) => {
     if (confirm('Are you sure you want to delete this camera?')) {
       try {
-        setCameras(prev => prev.filter(camera => camera.id !== id));
+        await cameraApi.deleteCamera(id);
+        await loadCameras();
         toast.success(t('camera_deleted'));
       } catch (error) {
         toast.error(t('camera_failed_delete'));

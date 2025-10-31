@@ -43,16 +43,46 @@ def test_source(source: str = Query(..., description="Video source to test")):
         result_queue = queue.Queue()
         
         def test_connection():
+            cap = None
             try:
-                cap = cv2.VideoCapture(source)
-                if cap.isOpened():
+                # Try opening with retry (some sources need a moment between connections)
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        cap = cv2.VideoCapture(source)
+                        # Set timeout for opening (some RTSP sources take time)
+                        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+                        if cap.isOpened():
+                            break
+                        cap.release()
+                        cap = None
+                        if attempt < max_retries - 1:
+                            time.sleep(0.5)  # Brief delay before retry
+                    except Exception as e:
+                        if cap:
+                            cap.release()
+                        cap = None
+                        if attempt < max_retries - 1:
+                            time.sleep(0.5)
+                        else:
+                            raise
+                
+                if cap and cap.isOpened():
                     # Get basic info
                     fps = cap.get(cv2.CAP_PROP_FPS) or 0
                     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
                     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
                     
-                    # Try to read one frame
-                    ret, frame = cap.read()
+                    # Try to read one frame with timeout
+                    start_time = time.time()
+                    ret = False
+                    frame = None
+                    while time.time() - start_time < 3.0:  # 3 second timeout for frame read
+                        ret, frame = cap.read()
+                        if ret and frame is not None:
+                            break
+                        time.sleep(0.1)
+                    
                     cap.release()
                     
                     if ret and frame is not None:
@@ -65,10 +95,21 @@ def test_source(source: str = Query(..., description="Video source to test")):
                     else:
                         result_queue.put(("error", "Cannot read frames from video source"))
                 else:
-                    cap.release()
-                    result_queue.put(("error", "Cannot open video source - connection failed"))
+                    if cap:
+                        cap.release()
+                    result_queue.put(("error", "Cannot open video source - connection failed or source in use"))
             except Exception as e:
-                result_queue.put(("error", str(e)))
+                if cap:
+                    try:
+                        cap.release()
+                    except:
+                        pass
+                error_msg = str(e)
+                if "timeout" in error_msg.lower():
+                    error_msg = "Connection timeout - video source not responding"
+                elif "connection" in error_msg.lower():
+                    error_msg = "Cannot open video source - connection failed"
+                result_queue.put(("error", error_msg))
         
         # Start test in a separate thread
         test_thread = threading.Thread(target=test_connection, daemon=True)

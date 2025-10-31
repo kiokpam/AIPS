@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Shield, 
@@ -15,7 +15,6 @@ import {
   Star
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect } from 'react';
 import { useI18n } from '@/src/contexts/I18nContext';
 
 function LanguageButton() {
@@ -43,7 +42,7 @@ export default function HomePage() {
     const dict: Record<string, { en: string; vi: string }> = {
       nav_signin: { en: 'Sign In', vi: 'Đăng nhập' },
       hero_title: { en: 'AI-Powered Store Surveillance', vi: 'Giám sát cửa hàng bằng AI' },
-      hero_sub: { en: 'Advanced computer vision and machine learning for intelligent retail security, customer analytics, and loss prevention.', vi: 'Thị giác máy tính và máy học nâng cao cho an ninh bán lẻ thông minh, phân tích khách hàng và giảm thất thoát.' },
+      hero_sub: { en: 'Real-time detection, people counting, and analytics on a scalable microservices platform. Edge or cloud, privacy-first by design.', vi: 'Phát hiện thời gian thực, đếm người và phân tích trên nền tảng vi dịch vụ mở rộng. Chạy Edge hoặc Cloud, ưu tiên quyền riêng tư.' },
       cta_get_started: { en: 'Get Started', vi: 'Bắt đầu' },
       cta_watch_demo: { en: 'Watch Demo', vi: 'Xem demo' },
       perk_free: { en: 'Free Trial', vi: 'Dùng thử miễn phí' },
@@ -100,11 +99,13 @@ export default function HomePage() {
     }
   ];
 
+  // no manage button; no auth state needed here
+
   const stats = [
-    { label: 'Stores Protected', value: '500+', icon: Shield },
-    { label: 'Cameras Monitored', value: '2,000+', icon: Camera },
-    { label: 'Threats Prevented', value: '10,000+', icon: AlertTriangle },
-    { label: 'Customer Satisfaction', value: '99.8%', icon: Star }
+    { label: 'Status', value: 'Early Access', icon: Shield },
+    { label: 'Active Deployments', value: '—', icon: Camera },
+    { label: 'Incidents Monitored', value: '—', icon: AlertTriangle },
+    { label: 'Accuracy', value: 'Evolving', icon: Star }
   ];
 
   return (
@@ -128,20 +129,48 @@ export default function HomePage() {
 
       {/* Hero Section */}
       <section className="relative overflow-hidden">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
+        {/* Animated gradient background overlay */}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_90%_100%_at_10%_10%,rgba(57,179,246,0.18)_0%,rgba(70,69,212,0.15)_40%,rgba(12,16,64,0)_100%)] pointer-events-none animate-gradient-fade z-0" />
+        {/* Stars pattern overlay */}
+        <div className="absolute inset-0 bg-[url('/noise-dark2.png')] opacity-10 pointer-events-none z-0" />
+        {/* Subtle animated grid overlay */}
+        <div className="absolute inset-0 pointer-events-none z-0" aria-hidden>
+          <div className="w-full h-full opacity-[0.06]" style={{
+            backgroundImage: `linear-gradient(rgba(255,255,255,0.7) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.7) 1px, transparent 1px)`,
+            backgroundSize: '48px 48px, 48px 48px',
+            maskImage: 'linear-gradient(180deg, transparent, black 15%, black 85%, transparent)',
+            WebkitMaskImage: 'linear-gradient(180deg, transparent, black 15%, black 85%, transparent)'
+          }} />
+        </div>
+        {/* Gradient orbs */}
+        <div className="pointer-events-none absolute -top-24 -right-24 h-72 w-72 rounded-full bg-blue-500/25 blur-3xl z-0" />
+        <div className="pointer-events-none absolute -bottom-28 -left-28 h-72 w-72 rounded-full bg-purple-500/25 blur-3xl z-0" />
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-20 relative z-10">
+          <div className="grid grid-cols-1 items-center justify-items-center text-center">
             <motion.div
               initial={{ opacity: 0, x: -50 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.8 }}
-              className="space-y-8"
+              className="space-y-8 max-w-3xl mx-auto"
             >
-              <div className="space-y-4">
-                <h1 className="text-5xl lg:text-6xl font-bold text-white leading-tight">{t('hero_title')}</h1>
-                <p className="text-xl text-slate-300 leading-relaxed">{t('hero_sub')}</p>
+              <div className="space-y-6">
+                <h1 className="text-5xl lg:text-6xl font-bold text-white leading-tight drop-shadow-[0_2px_8px_rgba(17,74,140,0.13)]">
+                  {lang === 'vi' ? (
+                    <>Giám sát cửa hàng <span className="whitespace-nowrap">bằng AI</span></>
+                  ) : (
+                    t('hero_title')
+                  )}
+                </h1>
+                <p className="text-xl text-slate-300 leading-relaxed max-w-3xl mx-auto">{t('hero_sub')}</p>
+                {/* Feature chips */}
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium"><Star className="mr-1 w-4 h-4 text-yellow-400" /> Real-time Detection</span>
+                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium">People Counting</span>
+                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium">Privacy-first</span>
               </div>
-
-              <div className="flex flex-col sm:flex-row gap-4">
+                {/* Micro-stats removed per request */}
+              </div>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link href="/login" className="btn-primary btn-lg group">
                   {t('cta_get_started')}
                   <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
@@ -154,8 +183,7 @@ export default function HomePage() {
                   {t('cta_watch_demo')}
                 </button>
               </div>
-
-              <div className="flex items-center space-x-6 text-sm text-slate-500">
+              <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-slate-500">
                 <div className="flex items-center space-x-2">
                   <CheckCircle className="w-4 h-4 text-green-500" />
                   <span>{t('perk_free')}</span>
@@ -169,52 +197,20 @@ export default function HomePage() {
                   <span>{t('perk_support')}</span>
                 </div>
               </div>
-            </motion.div>
 
-            <motion.div
-              initial={{ opacity: 0, x: 50 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.8, delay: 0.2 }}
-              className="relative"
-            >
-              <div className="relative bg-white rounded-2xl shadow-2xl p-8 border border-slate-200">
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-slate-900">Live Dashboard</h3>
-                    <div className="flex items-center space-x-2">
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                      <span className="text-sm text-slate-500">Live</span>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-slate-50 rounded-lg p-4">
-                      <div className="text-2xl font-bold text-slate-900">1,247</div>
-                      <div className="text-sm text-slate-600">Customers Today</div>
-                    </div>
-                    <div className="bg-slate-50 rounded-lg p-4">
-                      <div className="text-2xl font-bold text-green-600">23</div>
-                      <div className="text-sm text-slate-600">Active Cameras</div>
-                    </div>
-                    <div className="bg-slate-50 rounded-lg p-4">
-                      <div className="text-2xl font-bold text-blue-600">98.5%</div>
-                      <div className="text-sm text-slate-600">Accuracy Rate</div>
-                    </div>
-                    <div className="bg-slate-50 rounded-lg p-4">
-                      <div className="text-2xl font-bold text-orange-600">3</div>
-                      <div className="text-sm text-slate-600">Alerts Today</div>
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-100 rounded-lg p-4 aspect-video flex items-center justify-center">
-                    <div className="text-center">
-                      <Camera className="w-12 h-12 text-slate-400 mx-auto mb-2" />
-                      <p className="text-sm text-slate-500">Live Camera Feed</p>
-                    </div>
-                  </div>
-                </div>
+              {/* Trust logos row */}
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-6 opacity-80 text-slate-300">
+                <span className="text-xs">Trusted by teams</span>
+                <span className="h-4 w-px bg-white/20" />
+                <span className="text-sm">Next.js</span>
+                <span className="text-sm">FastAPI</span>
+                <span className="text-sm">OpenCV</span>
+                <span className="text-sm">Ultralytics</span>
+                <span className="text-sm">Postgres/Timescale</span>
+                <span className="text-sm">Docker</span>
               </div>
             </motion.div>
+
           </div>
         </div>
       </section>
@@ -241,13 +237,17 @@ export default function HomePage() {
                 whileInView={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.8, delay: index * 0.1 }}
                 viewport={{ once: true }}
-                className="text-center space-y-4 p-6 rounded-xl hover:shadow-lg transition-shadow duration-300"
+                whileHover={{ y: -6, boxShadow: '0 8px 24px 0 rgba(37,99,235,.08)' }}
+                className="relative text-center space-y-4 p-6 rounded-xl bg-white hover:shadow-xl transition-all duration-300 group cursor-pointer"
               >
-                <div className={`w-16 h-16 ${feature.bgColor} rounded-2xl flex items-center justify-center mx-auto`}>
-                  <feature.icon className={`w-8 h-8 ${feature.color}`} />
+                <div className={`w-16 h-16 ${feature.bgColor} rounded-2xl flex items-center justify-center mx-auto group-hover:scale-110 transition-transform duration-300`}>
+                  <feature.icon className={`w-8 h-8 ${feature.color} group-hover:scale-125 transition-transform duration-300`} />
                 </div>
                 <h3 className="text-xl font-semibold text-slate-900">{feature.title}</h3>
                 <p className="text-slate-600 leading-relaxed">{feature.description}</p>
+                <Link href="/features" className="inline-flex items-center gap-1 text-blue-600 font-medium text-sm hover:underline transition-all">
+                  Learn more <ArrowRight className="w-3 h-3" />
+                </Link>
               </motion.div>
             ))}
           </div>

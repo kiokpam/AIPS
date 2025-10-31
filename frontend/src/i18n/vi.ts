@@ -1,15 +1,14 @@
 export const vi = {
   nav_cameras: 'Camera',
   nav_dashboard: 'Bảng điều khiển',
-  nav_settings: 'Cài đặt',
+  
   nav_signin: 'Đăng nhập',
 
   dashboard_title: 'Bảng điều khiển',
   dashboard_sub: 'Giám sát an ninh và phân tích cửa hàng của bạn',
   cameras_title: 'Camera',
   cameras_sub: 'Quản lý hệ thống camera giám sát',
-  settings_title: 'Cài đặt',
-  settings_sub: 'Quản lý cấu hình hệ thống AIPS',
+  
   add_camera: 'Thêm Camera',
   save_changes: 'Lưu thay đổi',
   tr_today: 'Hôm nay',
@@ -54,24 +53,7 @@ export const vi = {
   camera_stopped: 'Đã dừng camera',
   failed_toggle_camera: 'Không thể chuyển trạng thái camera',
   failed_load_cameras: 'Không thể tải danh sách camera',
-  // Settings sections
-  camera_settings: 'Cài đặt Camera',
-  system_settings: 'Cài đặt Hệ thống',
-  notification_settings: 'Cài đặt Thông báo',
-  security_settings: 'Cài đặt Bảo mật',
-  default_ai_model: 'Mô hình AI mặc định',
-  default_device: 'Thiết bị mặc định',
-  confidence_threshold: 'Confidence Threshold',
-  iou_threshold: 'IOU Threshold',
-  auto_cleanup: 'Tự động dọn dẹp',
-  max_file_size: 'Kích thước tệp tối đa (MB)',
-  data_retention_days: 'Lưu trữ dữ liệu (ngày)',
-  session_timeout_minutes: 'Thời gian phiên (phút)',
-  email_notifications: 'Thông báo email',
-  alert_threshold: 'Ngưỡng cảnh báo',
-  realtime_alerts: 'Cảnh báo thời gian thực',
-  require_auth: 'Yêu cầu xác thực',
-  log_level: 'Mức ghi log',
+  
   // Dashboard labels
   customer_flow: 'Lưu lượng khách',
   weekly_analytics: 'Phân tích tuần',
@@ -89,6 +71,15 @@ export const vi = {
   all_systems_operational: 'Hệ thống hoạt động ổn định',
   processing_normally: 'Xử lý bình thường',
   monitoring_active: 'Giám sát hoạt động',
+  people_count: 'Số người',
+  ai_details: 'Chi tiết AI',
+  model: 'Model',
+  device: 'Thiết bị',
+  confidence: 'Độ tin cậy',
+  zones: 'Vùng',
+  lines: 'Đường',
+  close: 'Đóng',
+  confirm_delete: 'Xóa camera này?',
 };
 
 
