@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 
 
 class Store(BaseModel):
@@ -106,5 +107,50 @@ class TaskSetRequest(BaseModel):
     task_type: str  # "zone", "line", or "both"
     zones: Optional[List[CountingZoneCreate]] = None
     lines: Optional[List[CountingLineCreate]] = None
+
+
+class Alert(BaseModel):
+    id: str
+    type: str  # 'system' | 'anomaly'
+    severity: str  # 'low' | 'medium' | 'high'
+    message: str
+    store_id: Optional[str] = None
+    camera_id: Optional[str] = None
+    anomaly_type: Optional[str] = None
+    confidence: Optional[float] = None
+    timestamp: datetime
+    acknowledged: bool = False
+
+
+class AlertCreate(BaseModel):
+    type: str
+    severity: str
+    message: str
+    store_id: Optional[str] = None
+    camera_id: Optional[str] = None
+    anomaly_type: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class VideoClip(BaseModel):
+    id: str
+    camera_id: str
+    store_id: str
+    file_path: str
+    start_time: datetime
+    end_time: datetime
+    anomaly_type: Optional[str] = None
+    alert_id: Optional[str] = None
+    created_at: datetime
+
+
+class VideoClipCreate(BaseModel):
+    camera_id: str
+    store_id: str
+    file_path: str
+    start_time: datetime
+    end_time: datetime
+    anomaly_type: Optional[str] = None
+    alert_id: Optional[str] = None
 
 

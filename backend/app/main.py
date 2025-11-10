@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app.api.routes import router as api_router
@@ -31,17 +31,6 @@ app.add_middleware(
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
-    await websocket.accept()
-    try:
-        while True:
-            message = await websocket.receive_text()
-            await websocket.send_text(message)
-    except WebSocketDisconnect:
-        return
 
 
 app.include_router(api_router, prefix="/api")

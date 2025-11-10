@@ -3,7 +3,6 @@ File Upload Service
 Handles video file uploads for testing and camera addition
 """
 
-import os
 import uuid
 import shutil
 from typing import Dict, Any, Optional, List

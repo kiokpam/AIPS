@@ -25,8 +25,6 @@ Services (Dockerized):
 - ai/people-counting, ai/behavior-detection (FastAPI)
   - Example AI microservices (can be swapped with your models).
 
-- codedash_ai/ (reference code)
-  - Legacy utilities and models; useful for backends like robust OpenCV opening.
 
 Data Store:
 
@@ -34,25 +32,33 @@ Data Store:
 
 ---
 
-## Repository Layout (important parts)
+## Repository Layout
 
 ```
-backend/
+backend/                # FastAPI backend service
   app/
-    api/                # FastAPI routers: cameras, tasks, preview
-    models/             # SQLAlchemy models (Camera, CountingZone, CountingLine, …)
+    api/                # FastAPI routers: cameras, tasks, preview, events
+    models/             # SQLAlchemy models (Camera, CountingZone, Alert, VideoClip, …)
     schemas/            # Pydantic schemas
     services/
-      camera_manager.py # CameraWorker, StreamingService, overlay rendering, AI calls
+      camera_manager.py # CameraWorker, frame processing, AI integration
       streaming_service.py # MJPEG generation and preview helpers
     main.py             # App factory, CORS, router wiring
-  alembic/              # DB migrations
-frontend/
+  alembic/              # Database migrations
+
+frontend/               # Next.js frontend application
   app/                  # Next.js app router pages
-    app-layout.tsx      # Sidebar/topbar layout
-    page.tsx            # Public homepage (EN/VI)
-    cameras/page.tsx    # Cameras management + Add Camera + drawing canvas
-  src/styles/globals.css# Global dark design system
+  src/                  # Components, contexts, utilities
+
+ai/                     # AI microservices (ready for integration)
+  ai-core/              # Core AI service (detection, tracking)
+  people-counting/      # People counting service (example)
+  behavior-detection/   # Behavior detection service (example)
+
+stream-gateway/         # MediaMTX streaming gateway
+
+shared/                 # Shared schemas and definitions
+  events-json/          # Event JSON schemas
 stream-gateway/
   mediamtx.yml          # Clean LF config, mounted into the container
 docker-compose.yml      # Orchestrates services

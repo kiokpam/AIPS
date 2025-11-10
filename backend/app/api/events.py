@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
@@ -5,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.session import SessionLocal
 from app.schemas.events import CounterUpdateEvent, AnomalyDetectedEvent
+from app.models.core import Alert as AlertModel
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -39,10 +41,37 @@ def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_
 def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(get_db)):
     """Receive anomaly detection events from Behavior Detection AI"""
     try:
-        # For now, just log the event (you can add an alerts table later)
-        print(f"Anomaly detected: {event.type} at {event.store_id}/{event.camera_id} - severity: {event.severity}")
-        return {"status": "success", "message": "Anomaly event received"}
+        # Map severity float to string
+        severity_float = event.severity
+        if severity_float >= 0.8:
+            severity_str = "high"
+        elif severity_float >= 0.5:
+            severity_str = "medium"
+        else:
+            severity_str = "low"
+        
+        # Create alert in database
+        alert = AlertModel(
+            id=str(uuid.uuid4()),
+            type="anomaly",
+            severity=severity_str,
+            message=f"Anomaly detected: {event.type}",
+            store_id=event.store_id,
+            camera_id=event.camera_id,
+            anomaly_type=event.type,
+            confidence=severity_float,
+            timestamp=datetime.fromisoformat(event.ts.replace('Z', '+00:00')) if isinstance(event.ts, str) else event.ts,
+            acknowledged=False
+        )
+        
+        db.add(alert)
+        db.commit()
+        db.refresh(alert)
+        
+        print(f"Anomaly detected: {event.type} at {event.store_id}/{event.camera_id} - severity: {event.severity} (Alert ID: {alert.id})")
+        return {"status": "success", "message": "Anomaly event received and stored", "alert_id": alert.id}
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/people-counts")
