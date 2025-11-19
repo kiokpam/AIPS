@@ -23,6 +23,7 @@ import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { useI18n } from '@/src/contexts/I18nContext';
 import { useAuth } from '@/src/contexts/AuthContext';
+import NotificationDropdown from '../components/NotificationDropdown';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -68,6 +69,8 @@ function InnerLayout({ children }: AppLayoutProps) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const { lang, setLanguage } = useI18n();
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
@@ -552,35 +555,49 @@ function InnerLayout({ children }: AppLayoutProps) {
 
           {/* Theme toggle removed per request */}
           {/* Notifications */}
-          <button style={{
-            padding: '8px',
-            borderRadius: '8px',
-            border: 'none',
-            backgroundColor: 'transparent',
-            cursor: 'pointer',
-            position: 'relative',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#0b1325';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'transparent';
-          }}
-          >
-            <Bell style={{ width: '20px', height: '20px', color: '#94a3b8' }} />
-            <span style={{
-              position: 'absolute',
-              top: '4px',
-              right: '4px',
-              width: '8px',
-              height: '8px',
-              backgroundColor: '#ef4444',
-              borderRadius: '50%'
-            }}></span>
-          </button>
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setNotificationOpen(!notificationOpen)}
+              style={{
+                padding: '8px',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#0b1325';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              <Bell style={{ width: '20px', height: '20px', color: '#94a3b8' }} />
+              {notificationUnreadCount > 0 && (
+                <span style={{
+                  position: 'absolute',
+                  top: '4px',
+                  right: '4px',
+                  width: '8px',
+                  height: '8px',
+                  backgroundColor: '#ef4444',
+                  borderRadius: '50%'
+                }}></span>
+              )}
+            </button>
+            {notificationOpen && (
+              <NotificationDropdown
+                isOpen={notificationOpen}
+                onClose={() => setNotificationOpen(false)}
+                unreadCount={notificationUnreadCount}
+                onUnreadCountChange={setNotificationUnreadCount}
+              />
+            )}
+          </div>
 
           {/* User menu */}
           <div style={{ position: 'relative' }}>

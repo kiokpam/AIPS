@@ -526,6 +526,44 @@ export interface MemberPermissionResponse {
 }
 
 // Auth API
+// Notification/Alert types
+export interface Alert {
+  id: string;
+  type: string;
+  severity: 'low' | 'medium' | 'high';
+  message: string;
+  store_id?: string;
+  camera_id?: string;
+  anomaly_type?: string;
+  confidence?: number;
+  timestamp: string;
+  acknowledged: boolean;
+  store_name?: string;
+  camera_name?: string;
+}
+
+export interface AlertsResponse {
+  alerts: Alert[];
+  unread_count: number;
+  total_count: number;
+}
+
+export const eventsApi = {
+  getAlerts: async (params?: { limit?: number; unread_only?: boolean; store_id?: string }): Promise<AlertsResponse> => {
+    const response = await api.get('/events/alerts', { params });
+    return response.data;
+  },
+
+  acknowledgeAlert: async (alertId: string): Promise<void> => {
+    await api.put(`/events/alerts/${alertId}/acknowledge`);
+  },
+
+  acknowledgeAllAlerts: async (storeId?: string): Promise<{ status: string; message: string; count: number }> => {
+    const response = await api.put('/events/alerts/acknowledge-all', null, { params: storeId ? { store_id: storeId } : {} });
+    return response.data;
+  },
+};
+
 export const authApi = {
   signupMember: async (data: MemberSignupRequest): Promise<AuthResponse> => {
     const response = await api.post('/auth/signup/member', data);

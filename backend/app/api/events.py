@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Dict, Any, Optional, List
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from app.api.deps import CurrentMembership, get_current_membership, get_db
-from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel
-from app.schemas.events import CounterUpdateEvent, AnomalyDetectedEvent
+from sqlalchemy import text, or_
+from app.api.deps import CurrentMembership, get_current_membership, get_db, MembershipRole
+from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission
+from app.schemas.events import CounterUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -114,3 +114,171 @@ def get_people_counts(
         }
         for row in rows
     ]
+
+@router.get("/alerts", response_model=AlertsResponse)
+def get_alerts(
+    limit: int = Query(50, ge=1, le=100),
+    unread_only: bool = Query(False),
+    store_id: Optional[str] = Query(None),
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+) -> AlertsResponse:
+    """Get alerts for the current user's organization, filtered by permissions for members"""
+    
+    # Base query for alerts in the organization
+    query = db.query(AlertModel).filter(AlertModel.org_id == current.organization.id)
+    
+    # For members, filter by store permissions
+    if current.role == MembershipRole.member:
+        # Get stores the member has access to
+        store_permissions = db.query(MemberPermission.store_id).filter(
+            MemberPermission.membership_id == current.membership.id,
+            MemberPermission.store_id.isnot(None)
+        ).distinct().all()
+        
+        accessible_store_ids = [perm[0] for perm in store_permissions if perm[0]]
+        
+        if not accessible_store_ids:
+            # Member has no store access, return empty
+            return AlertsResponse(alerts=[], unread_count=0, total_count=0)
+        
+        # Filter alerts by accessible stores
+        query = query.filter(AlertModel.store_id.in_(accessible_store_ids))
+    
+    # Filter by store if provided
+    if store_id:
+        query = query.filter(AlertModel.store_id == store_id)
+    
+    # Filter unread only if requested
+    if unread_only:
+        query = query.filter(AlertModel.acknowledged == False)
+    
+    # Order by timestamp (newest first) and limit
+    alerts = query.order_by(AlertModel.timestamp.desc()).limit(limit).all()
+    
+    # Get store and camera names for enrichment
+    store_ids = {alert.store_id for alert in alerts if alert.store_id}
+    camera_ids = {alert.camera_id for alert in alerts if alert.camera_id}
+    
+    stores = {}
+    if store_ids:
+        store_rows = db.query(StoreModel).filter(StoreModel.id.in_(store_ids)).all()
+        stores = {store.id: store.name for store in store_rows}
+    
+    cameras = {}
+    if camera_ids:
+        camera_rows = db.query(CameraModel).filter(CameraModel.id.in_(camera_ids)).all()
+        cameras = {camera.id: camera.name for camera in camera_rows}
+    
+    # Build response
+    alert_responses = [
+        AlertResponse(
+            id=alert.id,
+            type=alert.type,
+            severity=alert.severity,
+            message=alert.message,
+            store_id=alert.store_id,
+            camera_id=alert.camera_id,
+            anomaly_type=alert.anomaly_type,
+            confidence=alert.confidence,
+            timestamp=alert.timestamp,
+            acknowledged=alert.acknowledged,
+            store_name=stores.get(alert.store_id) if alert.store_id else None,
+            camera_name=cameras.get(alert.camera_id) if alert.camera_id else None,
+        )
+        for alert in alerts
+    ]
+    
+    # Count unread alerts
+    unread_count = db.query(AlertModel).filter(
+        AlertModel.org_id == current.organization.id,
+        AlertModel.acknowledged == False
+    ).count()
+    
+    # Apply member store filtering for unread count
+    if current.role == MembershipRole.member:
+        store_permissions = db.query(MemberPermission.store_id).filter(
+            MemberPermission.membership_id == current.membership.id,
+            MemberPermission.store_id.isnot(None)
+        ).distinct().all()
+        accessible_store_ids = [perm[0] for perm in store_permissions if perm[0]]
+        if accessible_store_ids:
+            unread_count = db.query(AlertModel).filter(
+                AlertModel.org_id == current.organization.id,
+                AlertModel.acknowledged == False,
+                AlertModel.store_id.in_(accessible_store_ids)
+            ).count()
+        else:
+            unread_count = 0
+    
+    return AlertsResponse(
+        alerts=alert_responses,
+        unread_count=unread_count,
+        total_count=len(alert_responses)
+    )
+
+@router.put("/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(
+    alert_id: str,
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """Mark an alert as acknowledged"""
+    alert = db.query(AlertModel).filter(
+        AlertModel.id == alert_id,
+        AlertModel.org_id == current.organization.id
+    ).first()
+    
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    # For members, check if they have access to the store
+    if current.role == MembershipRole.member and alert.store_id:
+        has_access = db.query(MemberPermission).filter(
+            MemberPermission.membership_id == current.membership.id,
+            MemberPermission.store_id == alert.store_id
+        ).first()
+        if not has_access:
+            raise HTTPException(status_code=403, detail="You don't have permission to access this alert")
+    
+    alert.acknowledged = True
+    db.commit()
+    db.refresh(alert)
+    
+    return {"status": "success", "message": "Alert acknowledged"}
+
+@router.put("/alerts/acknowledge-all")
+def acknowledge_all_alerts(
+    store_id: Optional[str] = Query(None),
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """Mark all unread alerts as acknowledged"""
+    query = db.query(AlertModel).filter(
+        AlertModel.org_id == current.organization.id,
+        AlertModel.acknowledged == False
+    )
+    
+    # For members, filter by store permissions
+    if current.role == MembershipRole.member:
+        store_permissions = db.query(MemberPermission.store_id).filter(
+            MemberPermission.membership_id == current.membership.id,
+            MemberPermission.store_id.isnot(None)
+        ).distinct().all()
+        accessible_store_ids = [perm[0] for perm in store_permissions if perm[0]]
+        if not accessible_store_ids:
+            return {"status": "success", "message": "No alerts to acknowledge", "count": 0}
+        query = query.filter(AlertModel.store_id.in_(accessible_store_ids))
+    
+    if store_id:
+        query = query.filter(AlertModel.store_id == store_id)
+    
+    alerts = query.all()
+    count = len(alerts)
+    
+    for alert in alerts:
+        alert.acknowledged = True
+    
+    db.commit()
+    
+    return {"status": "success", "message": f"{count} alert(s) acknowledged", "count": count}
