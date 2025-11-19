@@ -19,9 +19,6 @@ Services (Dockerized):
   - Web UI for camera CRUD, live preview, drawing zones/lines, and configuration.
   - Auth placeholder (localStorage), dark black‑blue design system.
 
-- stream-gateway/ (MediaMTX)
-  - Optional RTSP/HLS/RTMP gateway (runs in its own container with a mounted `mediamtx.yml`).
-
 - ai/people-counting, ai/behavior-detection (FastAPI)
   - Example AI microservices (can be swapped with your models).
 
@@ -55,12 +52,8 @@ ai/                     # AI microservices (ready for integration)
   people-counting/      # People counting service (example)
   behavior-detection/   # Behavior detection service (example)
 
-stream-gateway/         # MediaMTX streaming gateway
-
 shared/                 # Shared schemas and definitions
   events-json/          # Event JSON schemas
-stream-gateway/
-  mediamtx.yml          # Clean LF config, mounted into the container
 docker-compose.yml      # Orchestrates services
 ```
 
@@ -146,12 +139,6 @@ Open apps:
 - Backend:  http://localhost:8000/api/healthz → `{ "status": "ok" }`
 - API docs: http://localhost:8000/docs
 
-Optional: Recreate the stream gateway after config edits (LF line endings):
-
-```bash
-docker-compose up -d --force-recreate stream-gateway
-```
-
 Stop everything:
 
 ```bash
@@ -199,14 +186,6 @@ AI – Behavior Detection (example):
 cd ai/behavior-detection
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8002
-```
-
-Stream Gateway (MediaMTX) standalone:
-
-```bash
-docker run --rm -it -p 8554:8554 -p 8888:8888 -p 1935:1935 \
-  -v $(pwd)/stream-gateway/mediamtx.yml:/mediamtx.yml:ro \
-  bluenviron/mediamtx:latest
 ```
 
 ---
@@ -285,10 +264,6 @@ Preview “Connection timeout – video source not responding”
 curl -s "http://localhost:8000/api/preview/test?source=<RTSP>"
 ```
 - If false: verify camera online, RTSP path/credentials, network/firewall, and that the backend host can reach the camera.
-
-Stream gateway YAML errors (control characters)
-- Ensure LF line endings: `dos2unix stream-gateway/mediamtx.yml`
-- Recreate container after edits.
 
 Canvas overlay misalignment
 - Ensure normalized coordinates are saved; the UI fetches a real frame and scales `[fx, fy]` → frame pixels on save.

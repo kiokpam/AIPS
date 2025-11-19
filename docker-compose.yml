@@ -77,27 +77,6 @@ services:
               count: 1
               capabilities: [gpu]
 
-  stream-gateway:
-    build: ./stream-gateway
-    ports:
-      - "1935:1935"   # RTMP
-      - "8554:8554"   # RTSP
-      - "8888:8888"   # HLS
-      - "8889:8889"   # WebRTC
-      - "9997:9997"   # API
-      - "9998:9998"   # Metrics
-    depends_on:
-      - backend
-
-  preprocess-pipeline:
-    build: ./stream-gateway/pipelines
-    environment:
-      - BACKEND_URL=http://backend:8000
-    depends_on:
-      - backend
-      - people-counting
-      - behavior-detection
-
 volumes:
   db_data:
 

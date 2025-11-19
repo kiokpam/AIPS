@@ -1,6 +1,0 @@
-logLevel: info
-api: yes
-rtsp: yes
-rtmp: yes
-hls: yes
-webrtc: yes
