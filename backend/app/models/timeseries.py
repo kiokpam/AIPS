@@ -18,5 +18,10 @@ class PeopleCount(Base):
         primary_key=True
     )
     value: Mapped[int] = mapped_column(Integer, nullable=False)
+    org_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        String,
+        nullable=False
+    )
 
 

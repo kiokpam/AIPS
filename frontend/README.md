@@ -212,8 +212,8 @@ CMD ["npm", "start"]
 ## 🧪 Testing
 
 ### **Demo Credentials**
-- **Email**: admin@aips.com
-- **Password**: password123
+- **Email**: manager@example.com
+- **Password**: StrongPass123!
 
 ### **Test Features**
 - Login/logout functionality

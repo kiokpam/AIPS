@@ -66,6 +66,25 @@ docker-compose.yml      # Orchestrates services
 
 ---
 
+## Authentication & RBAC
+
+- New multi-tenant auth model with organizations and role-based access:
+  - `manager`: full access within organization (manage cameras, tasks, members)
+  - `member`: read/monitor permissions as granted by managers
+- Key REST endpoints:
+  - `POST /api/auth/signup` – create organization and manager user
+  - `POST /api/auth/login` – obtain org-scoped JWT
+  - `POST /api/auth/switch-org` – switch active organization for users with multiple memberships
+  - `GET /api/auth/me` – profile with memberships
+  - `GET /api/auth/orgs/{org_id}/members` – list members (manager only)
+  - `POST /api/auth/orgs/{org_id}/members` – add/update members (manager only)
+- JWT access tokens now include `sub`, `org_id`, and `role` claims. All protected endpoints enforce organization scoping and role checks.
+- Set environment variables (or `.env`) for JWT configuration:
+  - `JWT_SECRET` (default `dev-secret-change-me`)
+  - `JWT_EXPIRES_SECONDS` (default `3600`)
+
+---
+
 ## Core User Flows
 
 1) Add a camera
@@ -89,6 +108,12 @@ docker-compose.yml      # Orchestrates services
 
 5) People counting/behavior detection
 - `CameraWorker` can periodically send frames to AI services; results update `current_count` and/or events.
+
+---
+
+## Default Credentials & Setup
+
+After signing up via `POST /api/auth/signup`, use the returned token for subsequent requests. Production deployments must set a strong `JWT_SECRET`.
 
 ---
 

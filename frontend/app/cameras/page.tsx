@@ -39,8 +39,7 @@ const DrawingCanvas = ({
   drawnAreas,
   currentDrawing,
   drawingMode,
-  drawZone,
-  drawLine
+  drawZone
 }: {
   width: number;
   height: number;
@@ -50,9 +49,8 @@ const DrawingCanvas = ({
   onMouseLeave: () => void;
   drawnAreas: any[];
   currentDrawing: any;
-  drawingMode: 'zone' | 'line' | null;
+  drawingMode: 'zone' | null;
   drawZone: (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft?: boolean) => void;
-  drawLine: (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft?: boolean) => void;
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -175,9 +173,6 @@ const DrawingCanvas = ({
         if (area.type === 'zone' && area.isComplete) {
           console.log('Drawing completed zone:', area);
           drawZone(ctx, area.points, '#10b981', 2);
-        } else if (area.type === 'line' && area.isComplete) {
-          console.log('Drawing completed line:', area);
-          drawLine(ctx, area.points[0], area.points[1], '#ef4444', 2);
         }
       });
 
@@ -185,24 +180,6 @@ const DrawingCanvas = ({
       if (currentDrawing) {
         if (currentDrawing.type === 'zone') {
           drawZone(ctx, currentDrawing.points, '#3b82f6', 2, true);
-        } else if (currentDrawing.type === 'line') {
-          if (currentDrawing.points.length === 1) {
-            // Show only the first point
-            ctx.fillStyle = '#3b82f6';
-            ctx.beginPath();
-            ctx.arc(currentDrawing.points[0].x, currentDrawing.points[0].y, 4, 0, Math.PI * 2);
-            ctx.fill();
-          } else if (currentDrawing.points.length === 2) {
-            // Show the line between two points
-            drawLine(ctx, currentDrawing.points[0], currentDrawing.points[1], '#3b82f6', 3, true);
-            // Show both points
-            currentDrawing.points.forEach((point: any) => {
-              ctx.fillStyle = '#3b82f6';
-              ctx.beginPath();
-              ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-              ctx.fill();
-            });
-          }
         }
       }
     };
@@ -247,11 +224,11 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   const [showAIDetails, setShowAIDetails] = useState(false);
   const [aiModel, setAiModel] = useState(camera.model_name || 'yolov8n.pt');
   const [aiDevice, setAiDevice] = useState(camera.device || 'auto');
-  const [aiConf, setAiConf] = useState<number>(typeof camera.conf_thresh === 'number' ? camera.conf_thresh : 0.5);
-  const [taskInfo, setTaskInfo] = useState<{ zones: any[]; lines: any[] } | null>(null);
+  // conf_thresh removed - using backend defaults
+  const [taskInfo, setTaskInfo] = useState<{ zones: any[] } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Client-side overlay fallback: draw zones/lines over MJPEG <img>
+  // Client-side overlay fallback: draw zones over MJPEG <img>
   const imgRef = useRef<HTMLImageElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null);
@@ -260,13 +237,52 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   // When backend reports active, automatically try to show the stream
   useEffect(() => {
     if (camera.is_active) {
-      setIsStarting(true);
       setIsStreaming(true);
+      // Check if camera is actually running via stats
+      cameraApi.getCameraStats(camera.id)
+        .then(stats => {
+          if (stats && stats.running) {
+            setIsStarting(false); // Camera is running, not just starting
+          } else {
+            setIsStarting(true); // Camera is starting but not running yet
+          }
+        })
+        .catch(() => {
+          setIsStarting(true); // Assume starting if stats unavailable
+        });
     } else {
       setIsStarting(false);
       setIsStreaming(false);
     }
-  }, [camera.is_active]);
+  }, [camera.is_active, camera.id]);
+  
+  // Periodically check if camera has finished starting
+  useEffect(() => {
+    if (!isStarting || !camera.is_active) return;
+    
+    const checkInterval = setInterval(async () => {
+      try {
+        const stats = await cameraApi.getCameraStats(camera.id);
+        if (stats && stats.running && stats.frame_count > 0) {
+          setIsStarting(false); // Camera is now running
+          clearInterval(checkInterval);
+        }
+      } catch (_) {
+        // Stats not available yet, keep checking
+      }
+    }, 2000); // Check every 2 seconds
+    
+    // Stop checking after 30 seconds
+    const timeout = setTimeout(() => {
+      clearInterval(checkInterval);
+      setIsStarting(false); // Give up, assume it's running or failed
+    }, 30000);
+    
+    return () => {
+      clearInterval(checkInterval);
+      clearTimeout(timeout);
+    };
+  }, [isStarting, camera.is_active, camera.id]);
 
   // While starting, periodically refresh the MJPEG URL with a cache-busting nonce
   useEffect(() => {
@@ -401,26 +417,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         }
       });
 
-      // Draw lines
-      (taskInfo.lines || []).forEach((l: any) => {
-        if (!l.p1 || !l.p2) return;
-        const p1 = mapPoint(l.p1);
-        const p2 = mapPoint(l.p2);
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(p1[0], p1[1]);
-        ctx.lineTo(p2[0], p2[1]);
-        ctx.stroke();
-        if (l.name) {
-          ctx.fillStyle = '#3b82f6';
-          ctx.font = '14px sans-serif';
-          const midX = (p1[0] + p2[0]) / 2;
-          const midY = (p1[1] + p2[1]) / 2;
-          ctx.fillText(String(l.name), midX + 4, midY - 4);
-        }
-      });
+      // Lines removed - only zones are supported
     };
 
     resizeAndDraw();
@@ -470,12 +467,12 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         if (mounted) {
           setAiModel(cfg?.config?.model_name ?? aiModel);
           setAiDevice(cfg?.config?.device ?? aiDevice);
-          setAiConf(cfg?.config?.conf_thresh ?? aiConf);
+          // conf_thresh removed - using backend defaults
         }
       } catch {}
       try {
         const tasks = await tasksApi.getCameraTaskConfig(camera.id);
-        if (mounted) setTaskInfo({ zones: tasks?.zones || [], lines: tasks?.lines || [] });
+        if (mounted) setTaskInfo({ zones: tasks?.zones || [] });
       } catch {}
     })();
     return () => { mounted = false; };
@@ -488,7 +485,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     const loadTasks = async () => {
       try {
         const tasks = await tasksApi.getCameraTaskConfig(camera.id);
-        if (mounted) setTaskInfo({ zones: tasks?.zones || [], lines: tasks?.lines || [] });
+        if (mounted) setTaskInfo({ zones: tasks?.zones || [] });
       } catch {}
       timer = setTimeout(loadTasks, 5000);
     };
@@ -726,10 +723,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   <label className="label block mb-2">{t('device')}</label>
                   <input className="input" value={aiDevice} onChange={(e) => setAiDevice(e.target.value)} />
                 </div>
-                <div>
-                  <label className="label block mb-2">{t('confidence')}</label>
-                  <input className="input" type="number" min={0} max={1} step={0.01} value={aiConf} onChange={(e) => setAiConf(parseFloat(e.target.value) || 0)} />
-                </div>
               </div>
               <div className="mt-6 grid md:grid-cols-2 gap-6">
                 <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
@@ -737,8 +730,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   <div className="text-3xl font-bold text-slate-900">{currentCount ?? '—'}</div>
                 </div>
                 <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
-                  <div className="text-sm text-slate-500 mb-2">{t('zones')} / {t('lines')}</div>
-                  <div className="text-slate-900">{taskInfo?.zones?.length ?? 0} / {taskInfo?.lines?.length ?? 0}</div>
+                  <div className="text-sm text-slate-500 mb-2">{t('zones')}</div>
+                  <div className="text-slate-900">{taskInfo?.zones?.length ?? 0}</div>
                 </div>
               </div>
               <div className="mt-4 grid md:grid-cols-2 gap-6 max-h-48 overflow-auto">
@@ -747,14 +740,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   <ul className="text-sm text-slate-600 space-y-1">
                     {(taskInfo?.zones || []).map((z: any) => (
                       <li key={z.id} className="truncate">{z.name || z.id}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-slate-700 mb-2">{t('lines')}</div>
-                  <ul className="text-sm text-slate-600 space-y-1">
-                    {(taskInfo?.lines || []).map((l: any) => (
-                      <li key={l.id} className="truncate">{l.name || l.id}</li>
                     ))}
                   </ul>
                 </div>
@@ -769,7 +754,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                       await cameraApi.updateCameraConfig(camera.id, {
                         model_name: aiModel,
                         device: aiDevice,
-                        conf_thresh: aiConf,
+                        // conf_thresh, iou_thresh, max_det removed - using backend defaults
                       });
                       toast.success(t('save_changes'));
                     } catch (e) {
@@ -798,15 +783,10 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const { t } = useI18n();
   const [formData, setFormData] = useState({
     name: '',
-    source: '',
-    sourceType: 'video_file', // 'video_file', 'rtsp', 'webcam'
+    source: '', // RTSP URL only
     model_name: 'yolov8n.pt',
     device: 'auto',
-    conf_thresh: 0.5,
-    iou_thresh: 0.45,
-    max_det: 300,
     skip_frame: 3,
-    taskType: 'zone', // 'zone' or 'line'
     allowMultipleAreas: true
   });
   const [isLoading, setIsLoading] = useState(false);
@@ -818,7 +798,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string>('');
   const [currentDrawing, setCurrentDrawing] = useState<any>(null);
-  const [drawingMode, setDrawingMode] = useState<'zone' | 'line' | null>(null);
+  const [drawingMode, setDrawingMode] = useState<'zone' | null>(null);
   const [drawSize, setDrawSize] = useState<{ w: number; h: number } | null>(null);
   const [contentBox, setContentBox] = useState<{
     displayW: number; displayH: number; offsetX: number; offsetY: number; naturalW: number; naturalH: number
@@ -877,24 +857,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
   };
 
-  const drawLine = (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    ctx.setLineDash(isDraft ? [5, 5] : []);
-
-    // Prefer direct pixel coords for immediate on-screen draw; fall back to normalized
-    const point1 = (p1.x !== undefined && p1.y !== undefined)
-      ? { x: p1.x, y: p1.y }
-      : normalizedToCanvas(p1.fx, p1.fy, ctx.canvas);
-    const point2 = (p2.x !== undefined && p2.y !== undefined)
-      ? { x: p2.x, y: p2.y }
-      : normalizedToCanvas(p2.fx, p2.fy, ctx.canvas);
-
-    ctx.beginPath();
-    ctx.moveTo(point1.x, point1.y);
-    ctx.lineTo(point2.x, point2.y);
-    ctx.stroke();
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -908,7 +870,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       }
 
       if (!formData.source.trim()) {
-        toast.error('Please enter a source URL or select a video file');
+        toast.error('Please enter an RTSP URL');
         return;
       }
 
@@ -922,30 +884,14 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           points: area.points.map((p: any) => ({ x: p.x, y: p.y, fx: p.fx, fy: p.fy }))
         }));
 
-      const lines = drawnAreas
-        .filter(area => area.type === 'line' && area.isComplete)
-        .map((area, index) => ({
-          id: `line_${index + 1}`,
-          name: `Line ${index + 1}`,
-          points: area.points.map((p: any) => ({ x: p.x, y: p.y, fx: p.fx, fy: p.fy }))
-        }));
-
       const cameraData = {
         name: formData.name.trim(),
-        source: formData.sourceType === 'video_file' && selectedFile 
-          ? selectedFile.name 
-          : formData.source.trim(),
-        sourceType: formData.sourceType,
+        source: formData.source.trim(), // RTSP URL only
         model_name: formData.model_name,
         device: formData.device,
-        conf_thresh: formData.conf_thresh,
-        iou_thresh: formData.iou_thresh,
-        max_det: formData.max_det,
         skip_frame: formData.skip_frame,
-        taskType: formData.taskType,
         allowMultipleAreas: formData.allowMultipleAreas,
         zones,
-        lines,
         canvasSize: drawSize ? { w: drawSize.w, h: drawSize.h } : null,
         contentBox: contentBox ? { ...contentBox } : null
       };
@@ -966,16 +912,11 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const resetForm = () => {
       setFormData({
         name: '',
-        source: '',
-      sourceType: 'video_file',
+        source: '', // RTSP URL only
         model_name: 'yolov8n.pt',
         device: 'auto',
-        conf_thresh: 0.5,
-        iou_thresh: 0.45,
-        max_det: 300,
-      skip_frame: 3,
-      taskType: 'zone',
-      allowMultipleAreas: true
+        skip_frame: 3,
+        allowMultipleAreas: true
     });
     setSelectedFile(null);
     setDrawnAreas([]);
@@ -1007,7 +948,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
     // Validate source
     if (!formData.source.trim()) {
-      toast.error('Please enter a source URL or select a video file');
+      toast.error('Please enter an RTSP URL');
       return;
     }
 
@@ -1015,38 +956,42 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     setPreviewError('');
 
     try {
-      let sourceUrl = '';
+      // Get API base URL and auth token
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const baseUrl = apiBaseUrl.endsWith('/api') ? apiBaseUrl : `${apiBaseUrl.replace(/\/+$/, '')}/api`;
+      const token = localStorage.getItem('auth_token');
+      
+      if (!token) {
+        throw new Error('Authentication required. Please log in again.');
+      }
 
-      if (formData.sourceType === 'video_file' && selectedFile) {
-        // For video files, we need to upload them first or use a local preview
-        // For now, create a local object URL
-        sourceUrl = URL.createObjectURL(selectedFile);
-        setPreviewUrl(sourceUrl);
-        setIsPreviewConnected(true);
-        toast.success('Preview connected');
-      } else if (formData.sourceType === 'rtsp' || formData.sourceType === 'webcam') {
-        // Use backend preview endpoint for RTSP and webcam
-        const encodedSource = encodeURIComponent(formData.source);
-        sourceUrl = `http://localhost:8000/api/preview/stream?source=${encodedSource}`;
+      // Use backend preview endpoint for RTSP
+      const encodedSource = encodeURIComponent(formData.source);
+      const sourceUrl = `${baseUrl}/preview/stream?source=${encodedSource}&token=${encodeURIComponent(token)}`;
+      
+      // Test the source first with timeout and retry
+      try {
+        const testUrl = `${baseUrl}/preview/test?source=${encodedSource}&token=${encodeURIComponent(token)}`;
+        const testResponse = await Promise.race([
+          fetch(testUrl, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Test timeout')), 10000))
+        ]) as Response;
         
-        // Test the source first with timeout and retry
-        try {
-          const testResponse = await Promise.race([
-            fetch(`http://localhost:8000/api/preview/test?source=${encodedSource}`),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Test timeout')), 10000))
-          ]) as Response;
+        if (!testResponse.ok) {
+          // If test endpoint fails, try connecting anyway (might be concurrent connection issue)
+          console.warn('Preview test failed, attempting connection anyway:', testResponse.status);
+        } else {
+          const testResult = await testResponse.json();
           
-          if (!testResponse.ok) {
-            // If test endpoint fails, try connecting anyway (might be concurrent connection issue)
-            console.warn('Preview test failed, attempting connection anyway:', testResponse.status);
-          } else {
-            const testResult = await testResponse.json();
-            
-            if (!testResult.accessible) {
-              // Check if error is about concurrent connections (might still work for preview)
-              const errorMsg = testResult.error || 'Cannot access video source';
-              if (errorMsg.includes('connection failed') && errorMsg.includes('timeout')) {
-                // Source might be in use, but preview stream might still work
+          if (!testResult.accessible) {
+            // Check if error is about concurrent connections (might still work for preview)
+            const errorMsg = testResult.error || 'Cannot access video source';
+            if (errorMsg.includes('connection failed') && errorMsg.includes('timeout')) {
+              // Source might be in use, but preview stream might still work
                 console.warn('Source test failed but attempting preview anyway:', errorMsg);
               } else {
                 throw new Error(errorMsg);
@@ -1067,7 +1012,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         setPreviewUrl(sourceUrl);
         setIsPreviewConnected(true);
         toast.success('Preview connected');
-      }
     } catch (error) {
       console.error('Preview connection error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to connect preview';
@@ -1167,17 +1111,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
             return p;
           });
           drawZone(ctx, displayPoints, '#10b981', 2);
-        } else if (area.type === 'line' && area.isComplete) {
-          // Convert normalized coords to pixel coords for display if needed
-          const p1 = area.points[0];
-          const p2 = area.points[1];
-          const displayP1 = (p1.x !== undefined && p1.y !== undefined) 
-            ? { x: p1.x, y: p1.y, fx: p1.fx, fy: p1.fy }
-            : { x: normalizedToCanvas(p1.fx, p1.fy, canvas).x, y: normalizedToCanvas(p1.fx, p1.fy, canvas).y, fx: p1.fx, fy: p1.fy };
-          const displayP2 = (p2.x !== undefined && p2.y !== undefined)
-            ? { x: p2.x, y: p2.y, fx: p2.fx, fy: p2.fy }
-            : { x: normalizedToCanvas(p2.fx, p2.fy, canvas).x, y: normalizedToCanvas(p2.fx, p2.fy, canvas).y, fx: p2.fx, fy: p2.fy };
-          drawLine(ctx, displayP1, displayP2, '#ef4444', 2);
         }
       });
       
@@ -1195,36 +1128,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
             return p;
           });
           drawZone(ctx, displayPoints, '#3b82f6', 2, true);
-        } else if (currentDrawing.type === 'line') {
-          if (currentDrawing.points.length === 1) {
-            // Show only the first point
-            const p = currentDrawing.points[0];
-            const displayP = (p.x !== undefined && p.y !== undefined)
-              ? { x: p.x, y: p.y }
-              : normalizedToCanvas(p.fx, p.fy, canvas);
-            ctx.fillStyle = '#3b82f6';
-            ctx.beginPath();
-            ctx.arc(displayP.x, displayP.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-          } else if (currentDrawing.points.length === 2) {
-            // Show the line between two points
-            const p1 = currentDrawing.points[0];
-            const p2 = currentDrawing.points[1];
-            const displayP1 = (p1.x !== undefined && p1.y !== undefined)
-              ? { x: p1.x, y: p1.y, fx: p1.fx, fy: p1.fy }
-              : { x: normalizedToCanvas(p1.fx, p1.fy, canvas).x, y: normalizedToCanvas(p1.fx, p1.fy, canvas).y, fx: p1.fx, fy: p1.fy };
-            const displayP2 = (p2.x !== undefined && p2.y !== undefined)
-              ? { x: p2.x, y: p2.y, fx: p2.fx, fy: p2.fy }
-              : { x: normalizedToCanvas(p2.fx, p2.fy, canvas).x, y: normalizedToCanvas(p2.fx, p2.fy, canvas).y, fx: p2.fx, fy: p2.fy };
-            drawLine(ctx, displayP1, displayP2, '#3b82f6', 3, true);
-            // Show both points
-            [displayP1, displayP2].forEach((point: any) => {
-              ctx.fillStyle = '#3b82f6';
-              ctx.beginPath();
-              ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-              ctx.fill();
-            });
-          }
         }
       }
       
@@ -1253,8 +1156,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     
     if (drawingMode === 'zone') {
       handleZoneClick(x, y, fx, fy);
-    } else if (drawingMode === 'line') {
-      handleLineClick(x, y, fx, fy);
     }
   };
 
@@ -1291,35 +1192,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
   };
 
-  const handleLineClick = (x: number, y: number, fx: number, fy: number) => {
-    console.log('Line click:', x, y, 'Normalized:', fx, fy, 'Current drawing:', currentDrawing);
-    if (!currentDrawing) {
-      // Start new line with first point
-      console.log('Starting new line');
-      setCurrentDrawing({
-        id: Date.now(),
-        type: 'line',
-        points: [{ x, y, fx, fy }],
-        isComplete: false
-      });
-    } else if (currentDrawing.points.length === 1) {
-      // Complete the line with second point
-      console.log('Completing line');
-      const newPoints = [...currentDrawing.points, { x, y, fx, fy }];
-      const completedLine = {
-        ...currentDrawing,
-        points: newPoints,
-        isComplete: true
-      };
-
-      setDrawnAreas(prev => {
-        const newAreas = [...prev, completedLine];
-        console.log('Added line to drawn areas:', newAreas);
-        return newAreas;
-      });
-      setCurrentDrawing(null);
-    }
-  };
 
   const finishZone = () => {
     if (currentDrawing && currentDrawing.type === 'zone' && currentDrawing.points.length >= 3) {
@@ -1375,72 +1247,26 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               />
             </div>
 
-              {/* Source Type */}
-            <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  {t('source_type')}
-                </label>
-                <select
-                  value={formData.sourceType}
-                  onChange={(e) => setFormData({...formData, sourceType: e.target.value})}
-                  className="input w-full"
-                >
-                  <option value="video_file">{t('video_file')}</option>
-                  <option value="rtsp">RTSP Stream</option>
-                  <option value="webcam">Webcam</option>
-                </select>
-              </div>
-
-              {/* Source Input */}
-              {formData.sourceType === 'video_file' ? (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    {t('video_file')}
-                  </label>
-                  <div className="flex items-center space-x-3">
-                    <input
-                      type="file"
-                      accept="video/*"
-                      onChange={handleFileSelect}
-                      className="hidden"
-                      id="video-file"
-                    />
-                    <label
-                      htmlFor="video-file"
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition-colors"
-                    >
-                      {t('choose_file')}
-                    </label>
-              <input
-                type="text"
-                      value={formData.source}
-                      readOnly
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-lg bg-slate-50"
-                      placeholder="No file selected"
-              />
-            </div>
-                </div>
-              ) : (
+              {/* RTSP Source Input */}
             <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    {formData.sourceType === 'rtsp' ? t('rtsp_url') : t('webcam_id')}
+                    RTSP URL *
                   </label>
               <input
                 type="text"
                 value={formData.source}
                 onChange={(e) => setFormData({...formData, source: e.target.value})}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder={formData.sourceType === 'rtsp' ? 'rtsp://...' : '0, 1, 2...'}
+                    placeholder="rtsp://..."
                 required
               />
             </div>
-              )}
 
               {/* Connect Preview Button */}
               <button
                 type="button"
                 onClick={handleConnectPreview}
-                disabled={isLoadingPreview || (!formData.source && formData.sourceType !== 'webcam')}
+                disabled={isLoadingPreview || !formData.source}
                 className={`w-full flex items-center justify-center px-4 py-3 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                   isPreviewConnected
                     ? 'bg-red-600 text-white hover:bg-red-700'
@@ -1469,36 +1295,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 </div>
               )}
 
-                     {/* Task Type */}
-            <div>
-                         <label className="block text-sm font-medium text-slate-700 mb-2">
-                           {t('task_type')}
-                       </label>
-                       <div className="flex space-x-2">
-                         <button
-                           type="button"
-                           onClick={() => setFormData({...formData, taskType: 'zone'})}
-                           className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                             formData.taskType === 'zone'
-                               ? 'bg-blue-600 text-white'
-                               : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                           }`}
-                         >
-                           {t('zone')}
-                         </button>
-                         <button
-                           type="button"
-                           onClick={() => setFormData({...formData, taskType: 'line'})}
-                           className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                             formData.taskType === 'line'
-                               ? 'bg-blue-600 text-white'
-                               : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                           }`}
-                         >
-                           {t('line')}
-                         </button>
-                       </div>
-            </div>
 
                      {/* Drawing Mode Controls */}
                      {isPreviewConnected && (
@@ -1522,21 +1318,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                }`}
                              >
                                Draw Zone
-                             </button>
-                             <button
-                               type="button"
-                               onClick={() => {
-                                 setDrawingMode('line');
-                                 setIsDrawing(true);
-                                 setCurrentDrawing(null);
-                               }}
-                               className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                                 drawingMode === 'line'
-                                   ? 'bg-green-600 text-white'
-                                   : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                               }`}
-                             >
-                               Draw Line
                              </button>
                              <button
                                type="button"
@@ -1585,53 +1366,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                        </div>
                      )}
 
-              {/* Advanced Settings */}
-              <div className="space-y-4">
-            <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Confidence: {formData.conf_thresh}
-              </label>
-              <input
-                type="range"
-                min="0.1"
-                max="1.0"
-                step="0.05"
-                value={formData.conf_thresh}
-                onChange={(e) => setFormData({...formData, conf_thresh: parseFloat(e.target.value)})}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    IoU: {formData.iou_thresh}
-              </label>
-              <input
-                type="range"
-                min="0.1"
-                max="1.0"
-                step="0.05"
-                value={formData.iou_thresh}
-                onChange={(e) => setFormData({...formData, iou_thresh: parseFloat(e.target.value)})}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    MaxDet: {formData.max_det}
-                  </label>
-              <input
-                    type="range"
-                min="1"
-                max="1000"
-                    step="1"
-                value={formData.max_det}
-                onChange={(e) => setFormData({...formData, max_det: parseInt(e.target.value)})}
-                    className="w-full"
-              />
-                </div>
-            </div>
 
               {/* Multiple Areas Option */}
             <div>
@@ -1687,34 +1421,17 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 </div>
               ) : isPreviewConnected && previewUrl ? (
                 <div className="relative w-full h-full">
-                  {formData.sourceType === 'video_file' ? (
-                    <video
-                      src={previewUrl}
-                      autoPlay
-                      muted
-                      loop
-                      playsInline
-                      className="w-full h-full object-contain bg-black rounded border"
-                      style={{ pointerEvents: 'none' }}
-                      onError={(e) => {
-                        console.error('Video error:', e);
-                        setPreviewError('Failed to load video file');
-                        setIsPreviewConnected(false);
-                      }}
-                    />
-                  ) : (
-                    <img
-                      src={previewUrl}
-                      alt="Video Stream"
-                      className="w-full h-full object-contain bg-black rounded border"
-                      style={{ pointerEvents: 'none' }}
-                      onError={(e) => {
-                        console.error('Stream error:', e);
-                        setPreviewError('Failed to load video stream');
-                        setIsPreviewConnected(false);
-                      }}
-                    />
-                  )}
+                  <img
+                    src={previewUrl}
+                    alt="RTSP Stream"
+                    className="w-full h-full object-contain bg-black rounded border"
+                    style={{ pointerEvents: 'none' }}
+                    onError={(e) => {
+                      console.error('Stream error:', e);
+                      setPreviewError('Failed to load RTSP stream');
+                      setIsPreviewConnected(false);
+                    }}
+                  />
                   
                          {/* Drawing Overlay */}
                           <div className="absolute top-0 left-0 w-full h-full pointer-events-auto" style={{ zIndex: 20 }}>
@@ -1729,14 +1446,13 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                               currentDrawing={currentDrawing}
                               drawingMode={drawingMode}
                               drawZone={drawZone}
-                              drawLine={drawLine}
                             />
                           </div>
                   
                   {/* Drawing Mode Indicator */}
                   {isDrawing && (
                     <div className="absolute top-2 left-2 bg-blue-600 text-white px-2 py-1 rounded text-xs">
-                      Drawing Mode: {formData.taskType}
+                      Drawing Mode: Zone
                     </div>
                   )}
                   
@@ -1790,7 +1506,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 <div className="text-center">
                   <Video className="w-16 h-16 text-slate-400 mx-auto mb-4" />
                   <p className="text-slate-500">Connect preview to see video feed</p>
-                  {formData.sourceType === 'rtsp' && (
+                  {formData.source && (
                     <p className="text-xs text-slate-400 mt-2">
                       Note: RTSP streams may take a moment to load
                     </p>
@@ -1807,8 +1523,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 </p>
                 <ul className="text-sm text-blue-700 mt-1 space-y-1">
                   <li>• <strong>Zone:</strong> Click multiple points to create a polygon (minimum 3 points), then click "Finish Zone"</li>
-                  <li>• <strong>Line:</strong> Click two points to create a counting line</li>
-                  <li>• Use "Draw Zone" or "Draw Line" buttons to start drawing</li>
+                  <li>• Use "Draw Zone" button to start drawing</li>
                   <li>• Click "Stop Drawing" to exit drawing mode</li>
                   <li>• Use Undo/Clear buttons to manage drawn areas</li>
                 </ul>
@@ -1866,12 +1581,12 @@ export default function CamerasPage() {
 
   const handleAddCamera = async (cameraData: any) => {
     try {
-      // Extract zones/lines for future config API (optional)
-      const { zones, lines, ...cameraConfig } = cameraData;
+      // Extract zones for future config API (optional)
+      const { zones, ...cameraConfig } = cameraData;
 
       // Build backend payload according to CameraCreate
       // Ensure a store exists; create a default one if backend has none
-      let storeId = 'store_1';
+      let storeId: string | null = null;
       try {
         const stores = await storeApi.getStores();
         if (stores && stores.length > 0) {
@@ -1881,20 +1596,25 @@ export default function CamerasPage() {
           storeId = createdStore.id;
         }
       } catch (e) {
-        console.warn('Store lookup/creation failed, falling back to store_1:', e);
+        console.error('Store lookup/creation failed:', e);
+        toast.error('Failed to get or create a store. Please create a store first in the Managers page.');
+        throw new Error('No store available. Please create a store first.');
+      }
+      
+      if (!storeId) {
+        toast.error('No store available. Please create a store first.');
+        throw new Error('No store available');
       }
 
       const payload = {
         store_id: storeId,
         name: cameraConfig.name,
-        source: cameraConfig.source,
-        ai_services: ['people_counting'],
-        model_name: cameraConfig.model_name,
-        device: cameraConfig.device,
-        conf_thresh: cameraConfig.conf_thresh,
-        iou_thresh: cameraConfig.iou_thresh,
-        max_det: cameraConfig.max_det,
-        skip_frame: cameraConfig.skip_frame
+        source: cameraConfig.source, // RTSP URL only
+        ai_services: ['people_counting', 'behavior_detection'],
+        model_name: cameraConfig.model_name || 'yolov8n.pt',
+        device: cameraConfig.device || 'auto',
+        skip_frame: cameraConfig.skip_frame || 3
+        // conf_thresh, iou_thresh, max_det will use defaults from backend
       };
 
       console.log('Creating camera via API:', payload);
@@ -1914,19 +1634,35 @@ export default function CamerasPage() {
       // Briefly wait and poll stats to reduce "offline" flicker
       const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
       const maxAttempts = 20; // up to ~10s
+      let cameraRunning = false;
       for (let i = 0; i < maxAttempts; i++) {
         try {
           // if stats endpoint exists, use it to check running; ignore failure
           const stats = await cameraApi.getCameraStats(created.id);
-          if (stats && stats.running) break;
+          if (stats && stats.running) {
+            cameraRunning = true;
+            break;
+          }
         } catch (_) {}
         await wait(500);
       }
+      
+      // Update camera status based on actual running state
+      if (cameraRunning) {
+        setCameras(prev => prev.map(c => 
+          c.id === created.id ? { ...c, is_active: true } : c
+        ));
+        toast.success('Camera started successfully');
+      } else {
+        setCameras(prev => prev.map(c => 
+          c.id === created.id ? { ...c, is_active: false } : c
+        ));
+        toast.error('Camera created but failed to start. Check RTSP stream accessibility.', { duration: 5000 });
+      }
 
-      // Persist zones/lines to backend tasks using normalized coordinates
+      // Persist zones to backend tasks using normalized coordinates
       try {
-        const taskType: 'zone' | 'line' | 'both' =
-          zones.length > 0 && lines.length > 0 ? 'both' : zones.length > 0 ? 'zone' : lines.length > 0 ? 'line' : 'zone';
+        const taskType: 'zone' = 'zone'; // Only zones are supported now
         
         // Prefer frame dimensions from preview contentBox (most accurate), fallback to backend fetch
         const frameSize = (() => {
@@ -1943,25 +1679,55 @@ export default function CamerasPage() {
         
         // If we don't have contentBox dimensions, fetch from backend
         const finalFrameSize = frameSize || await (async () => {
+          // First, verify camera is running and has frames
+          let cameraReady = false;
+          for (let check = 0; check < 5; check++) {
+            try {
+              const stats = await cameraApi.getCameraStats(created.id);
+              if (stats && stats.running && stats.frame_count > 0) {
+                cameraReady = true;
+                break;
+              }
+            } catch (_) {
+              // Camera not ready yet
+            }
+            if (!cameraReady) {
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second between checks
+            }
+          }
+          
+          if (!cameraReady) {
+            console.debug('Camera not ready for frame fetch, using fallback dimensions');
+            return { w: 1920, h: 1080 }; // Fallback to common resolution
+          }
+          
           const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
-          const url = `${base}/api/cameras/${created.id}/frame?overlay=false&_=${Date.now()}`;
+          const baseUrl = base.endsWith('/api') ? base : `${base.replace(/\/+$/, '')}/api`;
+          const token = localStorage.getItem('auth_token');
           
           // Retry up to 3 times with delay
           for (let attempt = 1; attempt <= 3; attempt++) {
             try {
+              const url = `${baseUrl}/cameras/${created.id}/frame?overlay=false&token=${encodeURIComponent(token || '')}&_=${Date.now()}`;
               const result = await new Promise<{ w: number; h: number }>((resolve, reject) => {
                 const img = new Image();
+                const timeout = setTimeout(() => {
+                  reject(new Error('Frame load timeout'));
+                }, 5000); // 5 second timeout
+                
                 img.onload = () => {
+                  clearTimeout(timeout);
                   const w = img.naturalWidth || img.width;
                   const h = img.naturalHeight || img.height;
-                  console.log(`Frame image loaded (attempt ${attempt}):`, w, 'x', h);
                   if (w > 0 && h > 0) {
+                    console.log(`Frame image loaded (attempt ${attempt}):`, w, 'x', h);
                     resolve({ w, h });
                   } else {
                     reject(new Error('Invalid frame dimensions'));
                   }
                 };
                 img.onerror = () => {
+                  clearTimeout(timeout);
                   reject(new Error('Failed to load frame image'));
                 };
                 img.src = url;
@@ -1970,15 +1736,17 @@ export default function CamerasPage() {
               if (result.w > 0 && result.h > 0) {
                 return result;
               }
-    } catch (error) {
-              console.warn(`Frame load attempt ${attempt} failed:`, error);
+            } catch (error) {
+              // Only log on last attempt to reduce console noise
+              if (attempt === 3) {
+                console.debug(`Frame load failed after ${attempt} attempts, using fallback dimensions`);
+              }
               if (attempt < 3) {
-                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+                await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds between retries
               }
             }
           }
           
-          console.warn('All frame load attempts failed, using fallback dimensions');
           return { w: 1920, h: 1080 }; // Fallback to common resolution
         })();
         
@@ -1999,39 +1767,32 @@ export default function CamerasPage() {
           camera_id: created.id,
         }));
         
-        const scaledLines = lines.map((l: any) => ({
-          name: l.name,
-          p1: [
-            Math.round((l.points[0].fx || 0) * frameW),
-            Math.round((l.points[0].fy || 0) * frameH)
-          ],
-          p2: [
-            Math.round((l.points[1].fx || 0) * frameW),
-            Math.round((l.points[1].fy || 0) * frameH)
-          ],
-          is_active: true,
-          camera_id: created.id,
-        }));
-        
         console.log('Converted zones:', scaledZones);
-        console.log('Converted lines:', scaledLines);
 
-        if (scaledZones.length > 0 || scaledLines.length > 0) {
+        if (scaledZones.length > 0) {
           await tasksApi.setCameraTasks(created.id, {
             task_type: taskType,
-            zones: scaledZones,
-            lines: scaledLines,
+            zones: scaledZones
           });
         }
       } catch (e) {
-        console.warn('Failed to save tasks (zones/lines):', e);
+        console.warn('Failed to save tasks (zones):', e);
       }
 
-      // Refresh list from backend to reflect final state
-      await loadCameras();
-      toast.success('Camera added, tasks saved and started');
-    } catch (error) {
+      // Refresh list from backend to reflect final state (but preserve running status if we detected it)
+      const finalCameras = await cameraApi.getCameras();
+      setCameras(finalCameras.map(c => {
+        // If we just created this camera and know it's running, preserve that status
+        if (c.id === created.id && cameraRunning) {
+          return { ...c, is_active: true };
+        }
+        return c;
+      }));
+      toast.success('Camera added' + (cameraRunning ? ' and started' : ' (check RTSP stream)'));
+    } catch (error: any) {
       console.error('Error in handleAddCamera:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Failed to create camera';
+      toast.error(`Error adding camera: ${errorMessage}`);
       throw error;
     }
   };

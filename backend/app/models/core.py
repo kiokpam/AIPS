@@ -1,7 +1,57 @@
-from sqlalchemy import String, ForeignKey, JSON, Integer, Float, Boolean, DateTime, Text
-from sqlalchemy.orm import Mapped, mapped_column
+import enum
 from datetime import datetime
+from sqlalchemy import (
+    String,
+    ForeignKey,
+    JSON,
+    Integer,
+    Float,
+    Boolean,
+    DateTime,
+    Text,
+    Enum as SqlEnum,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
 from app.models import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    join_code: Mapped[str] = mapped_column(String, nullable=True, unique=True, index=True)  # Optional join code
+    member_password_hash: Mapped[str] = mapped_column(String, nullable=True)  # Shared password for all members
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class MembershipRole(str, enum.Enum):
+    manager = "manager"
+    member = "member"
+
+
+class Membership(Base):
+    __tablename__ = "memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "org_id", name="uq_memberships_user_org"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[MembershipRole] = mapped_column(SqlEnum(MembershipRole, name="membershiprole"), nullable=False, default=MembershipRole.member)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class Store(Base):
@@ -9,6 +59,7 @@ class Store(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
 
 
 class Camera(Base):
@@ -17,7 +68,7 @@ class Camera(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    source: Mapped[str] = mapped_column(String, nullable=False, unique=True)  # RTSP URL, file path, or webcam ID
+    source: Mapped[str] = mapped_column(String, nullable=False)  # RTSP URL, file path, or webcam ID
     ai_services: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     model_name: Mapped[str] = mapped_column(String, nullable=False, default="yolov8n.pt")
     device: Mapped[str] = mapped_column(String, nullable=False, default="auto")
@@ -26,6 +77,7 @@ class Camera(Base):
     max_det: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     skip_frame: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
 
 
 class CountingZone(Base):
@@ -36,6 +88,7 @@ class CountingZone(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     polygon: Mapped[list] = mapped_column(JSON, nullable=False)  # [[x1,y1], [x2,y2], ...]
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
 
 
 class CountingLine(Base):
@@ -47,6 +100,7 @@ class CountingLine(Base):
     p1: Mapped[list] = mapped_column(JSON, nullable=False)  # [x, y]
     p2: Mapped[list] = mapped_column(JSON, nullable=False)  # [x, y]
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
 
 
 class Alert(Base):
@@ -62,6 +116,7 @@ class Alert(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
 
 
 class VideoClip(Base):
@@ -76,5 +131,36 @@ class VideoClip(Base):
     anomaly_type: Mapped[str] = mapped_column(String, nullable=True)
     alert_id: Mapped[str] = mapped_column(ForeignKey("alerts.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+
+
+class Invite(Base):
+    __tablename__ = "invites"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    token: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    email: Mapped[str] = mapped_column(String, nullable=True)  # Optional: specific email invite
+    role: Mapped[MembershipRole] = mapped_column(SqlEnum(MembershipRole, name="membershiprole"), nullable=False, default=MembershipRole.member)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)  # Optional expiration
+    used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)  # When invite was used
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class MemberPermission(Base):
+    __tablename__ = "member_permissions"
+    __table_args__ = (
+        UniqueConstraint("membership_id", "camera_id", name="uq_member_permission_camera"),
+        UniqueConstraint("membership_id", "store_id", name="uq_member_permission_store"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    membership_id: Mapped[str] = mapped_column(ForeignKey("memberships.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)  # NULL means org-wide access, set means store-specific access
+    camera_id: Mapped[str] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=True, index=True)  # NULL means dashboard/store access permission
+    can_view: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

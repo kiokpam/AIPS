@@ -1,15 +1,55 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional, Literal
 from datetime import datetime
+from app.schemas.auth import UserInfo
 
 
 class Store(BaseModel):
     id: str
     name: str
+    org_id: str
 
 
 class StoreCreate(BaseModel):
     name: str
+
+
+class StoreMemberAccountCreate(BaseModel):
+    username: str
+    password: str
+    camera_ids: List[str] = []
+    can_access_dashboard: bool = True
+
+
+class StoreMemberAccountUpdate(BaseModel):
+    camera_ids: List[str] = []
+    can_access_dashboard: bool = True
+    password: Optional[str] = None
+
+
+class StoreMemberAccountResponse(BaseModel):
+    message: str
+    user: UserInfo
+    username: str
+    store_id: str
+    store_name: str
+
+
+class StoreMemberCameraAccess(BaseModel):
+    camera_id: str
+    camera_name: Optional[str] = None
+
+
+class StoreMemberAccountSummary(BaseModel):
+    membership_id: str
+    user_id: str
+    username: str
+    email: EmailStr
+    store_id: str
+    store_name: str
+    can_access_dashboard: bool
+    camera_access: List[StoreMemberCameraAccess] = []
+    created_at: datetime
 
 
 class Camera(BaseModel):
@@ -25,24 +65,25 @@ class Camera(BaseModel):
     max_det: int = 300
     skip_frame: int = 3
     is_active: bool = True
+    org_id: str
 
 
 class CameraCreate(BaseModel):
     store_id: str
     name: str
-    source: str  # RTSP URL, file path, or webcam ID
+    source: str  # RTSP URL only
     ai_services: List[str] = ["people_counting", "behavior_detection"]
     model_name: str = "yolov8n.pt"
     device: str = "auto"  # "auto", "cuda", "cpu"
-    conf_thresh: float = 0.5
-    iou_thresh: float = 0.45
-    max_det: int = 300
+    conf_thresh: Optional[float] = 0.5  # Optional, defaults to 0.5
+    iou_thresh: Optional[float] = 0.45  # Optional, defaults to 0.45
+    max_det: Optional[int] = 300  # Optional, defaults to 300
     skip_frame: int = 3
 
 
 class CameraUpdate(BaseModel):
     name: Optional[str] = None
-    source: Optional[str] = None  # RTSP URL, file path, or webcam ID
+    source: Optional[str] = None  # RTSP URL only
     ai_services: Optional[List[str]] = None
     model_name: Optional[str] = None
     device: Optional[str] = None
@@ -57,20 +98,21 @@ class CountingZone(BaseModel):
     id: str
     camera_id: str
     name: str
-    polygon: List[List[int]]  # [[x1,y1], [x2,y2], ...]
-    is_active: bool = True
+    polygon: List[List[float]]  # [[x1,y1], [x2,y2], ...]
+    is_active: bool
+    org_id: str
 
 
 class CountingZoneCreate(BaseModel):
     camera_id: str
     name: str
-    polygon: List[List[int]]
+    polygon: List[List[float]]  # [[x1,y1], [x2,y2], ...]
     is_active: bool = True
 
 
 class CountingZoneUpdate(BaseModel):
     name: Optional[str] = None
-    polygon: Optional[List[List[int]]] = None
+    polygon: Optional[List[List[float]]] = None
     is_active: Optional[bool] = None
 
 
@@ -78,79 +120,34 @@ class CountingLine(BaseModel):
     id: str
     camera_id: str
     name: str
-    p1: List[int]  # [x, y]
-    p2: List[int]  # [x, y]
-    is_active: bool = True
+    p1: List[float]  # [x, y]
+    p2: List[float]  # [x, y]
+    is_active: bool
+    org_id: str
 
 
 class CountingLineCreate(BaseModel):
     camera_id: str
     name: str
-    p1: List[int]
-    p2: List[int]
+    p1: List[float]  # [x, y]
+    p2: List[float]  # [x, y]
     is_active: bool = True
 
 
 class CountingLineUpdate(BaseModel):
     name: Optional[str] = None
-    p1: Optional[List[int]] = None
-    p2: Optional[List[int]] = None
+    p1: Optional[List[float]] = None
+    p2: Optional[List[float]] = None
     is_active: Optional[bool] = None
 
 
 class TaskConfig(BaseModel):
     zones: List[CountingZone] = []
     lines: List[CountingLine] = []
+    current_count: int = 0
 
 
 class TaskSetRequest(BaseModel):
-    task_type: str  # "zone", "line", or "both"
+    task_type: Literal["zone", "line", "both"] = "zone"
     zones: Optional[List[CountingZoneCreate]] = None
     lines: Optional[List[CountingLineCreate]] = None
-
-
-class Alert(BaseModel):
-    id: str
-    type: str  # 'system' | 'anomaly'
-    severity: str  # 'low' | 'medium' | 'high'
-    message: str
-    store_id: Optional[str] = None
-    camera_id: Optional[str] = None
-    anomaly_type: Optional[str] = None
-    confidence: Optional[float] = None
-    timestamp: datetime
-    acknowledged: bool = False
-
-
-class AlertCreate(BaseModel):
-    type: str
-    severity: str
-    message: str
-    store_id: Optional[str] = None
-    camera_id: Optional[str] = None
-    anomaly_type: Optional[str] = None
-    confidence: Optional[float] = None
-
-
-class VideoClip(BaseModel):
-    id: str
-    camera_id: str
-    store_id: str
-    file_path: str
-    start_time: datetime
-    end_time: datetime
-    anomaly_type: Optional[str] = None
-    alert_id: Optional[str] = None
-    created_at: datetime
-
-
-class VideoClipCreate(BaseModel):
-    camera_id: str
-    store_id: str
-    file_path: str
-    start_time: datetime
-    end_time: datetime
-    anomaly_type: Optional[str] = None
-    alert_id: Optional[str] = None
-
-

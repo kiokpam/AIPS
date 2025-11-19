@@ -30,11 +30,27 @@ docker-compose up --build -d
 
 echo ""
 echo "⏳ Waiting for services to be ready..."
-sleep 10
+sleep 15
 
 # Check service health
 echo ""
 echo "🔍 Checking service health..."
+
+# Function to check HTTP endpoint with retries
+check_http_endpoint() {
+    local url=$1
+    local max_attempts=3
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        if curl -s -f --max-time 5 "$url" > /dev/null 2>&1; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    return 1
+}
 
 # Check database
 if docker-compose exec -T db pg_isready -U aips > /dev/null 2>&1; then
@@ -44,33 +60,33 @@ else
 fi
 
 # Check backend
-if curl -s http://localhost:8000/api/healthz > /dev/null 2>&1; then
+if check_http_endpoint "http://localhost:8000/api/healthz"; then
     echo "✅ Backend API: Ready"
 else
     echo "❌ Backend API: Not ready"
 fi
 
 # Check frontend
-if curl -s http://localhost:3000 > /dev/null 2>&1; then
+if check_http_endpoint "http://localhost:3000"; then
     echo "✅ Frontend: Ready"
 else
     echo "❌ Frontend: Not ready"
 fi
 
 # Check AI services
-if curl -s http://localhost:8001/healthz > /dev/null 2>&1; then
+if check_http_endpoint "http://localhost:8001/health"; then
     echo "✅ People Counting: Ready"
 else
     echo "❌ People Counting: Not ready"
 fi
 
-if curl -s http://localhost:8002/healthz > /dev/null 2>&1; then
+if check_http_endpoint "http://localhost:8002/health"; then
     echo "✅ Behavior Detection: Ready"
 else
     echo "❌ Behavior Detection: Not ready"
 fi
 
-if curl -s http://localhost:8003/healthz > /dev/null 2>&1; then
+if check_http_endpoint "http://localhost:8003/health"; then
     echo "✅ AI Core: Ready"
 else
     echo "❌ AI Core: Not ready"
@@ -86,9 +102,9 @@ echo "📹 People Count: http://localhost:8001"
 echo "🧠 Behavior:     http://localhost:8002"
 echo "🤖 AI Core:      http://localhost:8003"
 echo ""
-echo "🔐 Demo Login Credentials:"
-echo "   Email:    admin@aips.com"
-echo "   Password: password123"
+echo "🔐 Authentication:"
+echo "   Use POST /api/auth/signup to create your first manager account."
+echo "   Tokens are org-scoped; switch organizations via POST /api/auth/switch-org."
 echo ""
 echo "📋 Useful Commands:"
 echo "   View logs:     docker-compose logs -f [service-name]"

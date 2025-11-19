@@ -12,11 +12,17 @@ import {
   BarChart3,
   Settings,
   Menu,
-  X
+  X,
+  Users,
+  Building2,
+  Video,
+  Activity,
+  TrendingUp
 } from 'lucide-react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { I18nProvider, useI18n } from '@/src/contexts/I18nContext';
+import { useI18n } from '@/src/contexts/I18nContext';
+import { useAuth } from '@/src/contexts/AuthContext';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -31,17 +37,36 @@ const navigation = [
   },
   {
     name: 'Dashboard',
-    href: '/dashboard',
+    href: '/dashboard/in-out',
     icon: BarChart3,
+    current: false,
+    children: [
+      {
+        name: 'In/Out Analytics',
+        href: '/dashboard/in-out',
+        icon: TrendingUp
+      },
+      {
+        name: 'Behavior Monitoring',
+        href: '/dashboard/behavior',
+        icon: Activity
+      }
+    ]
+  },
+  {
+    name: 'Videos',
+    href: '/videos',
+    icon: Video,
     current: false
   },
-  
 ];
 
 function InnerLayout({ children }: AppLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const { user, logout, switchOrganization, isAuthenticated, isLoading: authLoading } = useAuth();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { lang, setLanguage } = useI18n();
   const [scrolled, setScrolled] = useState(false);
@@ -59,6 +84,32 @@ function InnerLayout({ children }: AppLayoutProps) {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  // Handle click outside to close menus
+  useEffect(() => {
+    if (!userMenuOpen && !orgMenuOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      // Don't close if clicking on menu elements or their triggers
+      if (
+        target.closest('[data-user-menu]') ||
+        target.closest('[data-org-menu]') ||
+        target.closest('[data-user-menu-trigger]') ||
+        target.closest('[data-org-menu-trigger]')
+      ) {
+        return;
+      }
+      setUserMenuOpen(false);
+      setOrgMenuOpen(false);
+    };
+
+    // Use capture phase to catch events before they bubble
+    document.addEventListener('mousedown', handleClickOutside, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside, true);
+    };
+  }, [userMenuOpen, orgMenuOpen]);
+
   // Force default dark theme once
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -67,39 +118,34 @@ function InnerLayout({ children }: AppLayoutProps) {
     }
   }, []);
 
-  // Check authentication on mount
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('auth_token');
-      if (!token) {
-        // For development, set a mock token
-        localStorage.setItem('auth_token', 'demo_token');
-        localStorage.setItem('user_email', 'admin@aips.com');
-      }
-    }
-  }, [router]);
-
-  const handleLogout = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('user_email');
-    }
-    toast.success('Logged out successfully');
-    router.push('/');
-  };
-
   const setLanguageLocal = (l: 'en' | 'vi') => setLanguage(l);
 
-  const getUserEmail = () => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('user_email') || 'admin@aips.com';
+  const handleOrgSwitch = async (orgId: string) => {
+    try {
+      await switchOrganization(orgId);
+      setOrgMenuOpen(false);
+    } catch (error) {
+      // Error handled by auth context
     }
-    return 'admin@aips.com';
   };
 
-  // Don't show layout for login and home pages
-  if (pathname === '/' || pathname === '/login') {
+  // Don't show layout for login, register and home pages
+  if (pathname === '/' || pathname === '/login' || pathname === '/register') {
     return <>{children}</>;
+  }
+
+  // Show loading or redirect if not authenticated
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    router.push('/login');
+    return null;
   }
 
   return (
@@ -154,11 +200,120 @@ function InnerLayout({ children }: AppLayoutProps) {
         {/* Navigation */}
         <nav style={{ flex: 1, padding: '24px 16px' }}>
           {navigation.map((item) => {
-            const isActive = pathname === item.href;
+            const isActive = pathname === item.href || (item.children && item.children.some(child => pathname === child.href));
+            const hasChildren = item.children && item.children.length > 0;
+            
             return (
+              <div key={item.name} style={{ marginBottom: '8px' }}>
+                <Link
+                  href={item.href}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    textDecoration: 'none',
+                    color: isActive ? '#60a5fa' : '#94a3b8',
+                    backgroundColor: isActive ? '#0b1325' : 'transparent',
+                    fontWeight: isActive ? '600' : '500',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = '#0b1325';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <item.icon style={{ width: '20px', height: '20px', marginRight: '12px' }} />
+                    {item.name}
+                  </div>
+                  {hasChildren && (
+                    <ChevronDown style={{ width: '16px', height: '16px' }} />
+                  )}
+                </Link>
+                {hasChildren && (
+                  <div style={{ marginLeft: '32px', marginTop: '4px' }}>
+                    {item.children!.map((child) => {
+                      const isChildActive = pathname === child.href;
+                      return (
+                        <Link
+                          key={child.name}
+                          href={child.href}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            padding: '8px 12px',
+                            marginBottom: '4px',
+                            borderRadius: '6px',
+                            textDecoration: 'none',
+                            color: isChildActive ? '#60a5fa' : '#94a3b8',
+                            backgroundColor: isChildActive ? '#0b1325' : 'transparent',
+                            fontWeight: isChildActive ? '600' : '400',
+                            fontSize: '14px',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isChildActive) {
+                              e.currentTarget.style.backgroundColor = '#0b1325';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isChildActive) {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }
+                          }}
+                        >
+                          <child.icon style={{ width: '16px', height: '16px', marginRight: '8px' }} />
+                          {child.name}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {user?.active_membership.role === 'member' && (
+            <Link
+              href="/my-organization"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                padding: '12px 16px',
+                marginBottom: '8px',
+                borderRadius: '8px',
+                textDecoration: 'none',
+                color: pathname === '/my-organization' ? '#60a5fa' : '#94a3b8',
+                backgroundColor: pathname === '/my-organization' ? '#0b1325' : 'transparent',
+                fontWeight: pathname === '/my-organization' ? '600' : '500',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                if (pathname !== '/my-organization') {
+                  e.currentTarget.style.backgroundColor = '#0b1325';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (pathname !== '/my-organization') {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }
+              }}
+            >
+              <Building2 style={{ width: '20px', height: '20px', marginRight: '12px' }} />
+              My Organization
+            </Link>
+          )}
+          {user?.active_membership.role === 'manager' && (
+            <>
               <Link
-                key={item.name}
-                href={item.href}
+                href="/organizations"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -166,72 +321,82 @@ function InnerLayout({ children }: AppLayoutProps) {
                   marginBottom: '8px',
                   borderRadius: '8px',
                   textDecoration: 'none',
-                  color: isActive ? '#60a5fa' : '#94a3b8',
-                  backgroundColor: isActive ? '#0b1325' : 'transparent',
-                  fontWeight: isActive ? '600' : '500',
+                  color: pathname === '/organizations' ? '#60a5fa' : '#94a3b8',
+                  backgroundColor: pathname === '/organizations' ? '#0b1325' : 'transparent',
+                  fontWeight: pathname === '/organizations' ? '600' : '500',
                   transition: 'all 0.2s'
                 }}
-                onMouseEnter={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.backgroundColor = '#0b1325';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }
+              >
+                <Building2 style={{ width: '20px', height: '20px', marginRight: '12px' }} />
+                Organizations
+              </Link>
+              <Link
+                href="/managers"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '12px 16px',
+                  marginBottom: '8px',
+                  borderRadius: '8px',
+                  textDecoration: 'none',
+                  color: pathname === '/managers' ? '#60a5fa' : '#94a3b8',
+                  backgroundColor: pathname === '/managers' ? '#0b1325' : 'transparent',
+                  fontWeight: pathname === '/managers' ? '600' : '500',
+                  transition: 'all 0.2s'
                 }}
               >
-                <item.icon style={{ width: '20px', height: '20px', marginRight: '12px' }} />
-                {item.name}
+                <Users style={{ width: '20px', height: '20px', marginRight: '12px' }} />
+                Team Management
               </Link>
-            );
-          })}
+            </>
+          )}
         </nav>
 
         {/* User info in sidebar */}
-        <div style={{ padding: '16px', borderTop: '1px solid #1f2937' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            padding: '12px',
-            borderRadius: '8px',
-            backgroundColor: '#0b1325'
-          }}>
+        {user && (
+          <div style={{ padding: '16px', borderTop: '1px solid #1f2937' }}>
             <div style={{
-              width: '32px',
-              height: '32px',
-              backgroundColor: '#dbeafe',
-              borderRadius: '50%',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: '12px'
+              padding: '12px',
+              borderRadius: '8px',
+              backgroundColor: '#0b1325'
             }}>
-              <User style={{ width: '16px', height: '16px', color: '#1d4ed8' }} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{
-                fontSize: '14px',
-                fontWeight: '500',
-                color: '#e5e7eb',
-                margin: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap'
+              <div style={{
+                width: '32px',
+                height: '32px',
+                backgroundColor: '#dbeafe',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginRight: '12px'
               }}>
-                {getUserEmail()}
-              </p>
-              <p style={{
-                fontSize: '12px',
-                color: '#94a3b8',
-                margin: 0
-              }}>
-                Administrator
-              </p>
+                <User style={{ width: '16px', height: '16px', color: '#1d4ed8' }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#e5e7eb',
+                  margin: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}>
+                  {user.user.name}
+                </p>
+                <p style={{
+                  fontSize: '12px',
+                  color: '#94a3b8',
+                  margin: 0
+                }}>
+                  {user.active_membership.role === 'manager' ? 'Manager' : 'Member'}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Main content area */}
@@ -281,8 +446,98 @@ function InnerLayout({ children }: AppLayoutProps) {
           </h1>
         </div>
 
-        {/* Right side - language, theme, notifications and user menu */}
+        {/* Right side - organization switcher, language, notifications and user menu */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {/* Organization Switcher */}
+          {user && user.memberships.length > 1 && (
+            <div style={{ position: 'relative' }}>
+              <button
+                data-org-menu-trigger
+                onClick={() => setOrgMenuOpen(!orgMenuOpen)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  cursor: 'pointer',
+                  color: '#94a3b8'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#0b1325';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                <Building2 style={{ width: '16px', height: '16px' }} />
+                <span style={{ fontSize: '14px', fontWeight: '500' }}>
+                  {user.active_membership.organization.name}
+                </span>
+                <ChevronDown style={{ width: '16px', height: '16px' }} />
+              </button>
+
+              {orgMenuOpen && (
+                <div 
+                  data-org-menu
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: '100%',
+                    marginTop: '8px',
+                    width: '250px',
+                    backgroundColor: '#0f172a',
+                    borderRadius: '8px',
+                    boxShadow: '0 12px 30px rgba(2,6,23,.45)',
+                    border: '1px solid #1f2937',
+                    zIndex: 1000
+                  }}
+                >
+                  <div style={{ padding: '8px' }}>
+                    {user.memberships.map((membership) => (
+                      <button
+                        key={membership.id}
+                        onClick={() => handleOrgSwitch(membership.organization.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          width: '100%',
+                          padding: '12px',
+                          textAlign: 'left',
+                          color: membership.id === user.active_membership.id ? '#60a5fa' : '#94a3b8',
+                          fontSize: '14px',
+                          border: 'none',
+                          backgroundColor: membership.id === user.active_membership.id ? '#0b1325' : 'transparent',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          marginBottom: '4px'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (membership.id !== user.active_membership.id) {
+                            e.currentTarget.style.backgroundColor = '#0b1325';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (membership.id !== user.active_membership.id) {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }
+                        }}
+                      >
+                        <span>{membership.organization.name}</span>
+                        {membership.id === user.active_membership.id && (
+                          <span style={{ fontSize: '12px', color: '#60a5fa' }}>Active</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Language toggle (VI / EN) with underline like Sirix */}
           <div style={{ display: 'flex', gap: '18px', alignItems: 'center' }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }} onClick={() => setLanguageLocal('vi')}>
@@ -330,6 +585,7 @@ function InnerLayout({ children }: AppLayoutProps) {
           {/* User menu */}
           <div style={{ position: 'relative' }}>
             <button
+              data-user-menu-trigger
               onClick={() => setUserMenuOpen(!userMenuOpen)}
               style={{
                 display: 'flex',
@@ -364,24 +620,27 @@ function InnerLayout({ children }: AppLayoutProps) {
                 fontWeight: '500',
                 color: '#e5e7eb'
               }}>
-                {getUserEmail()}
+                {user?.user.name || 'User'}
               </span>
               <ChevronDown style={{ width: '16px', height: '16px', color: '#94a3b8' }} />
             </button>
 
             {userMenuOpen && (
-              <div style={{
-                position: 'absolute',
-                right: 0,
-                top: '100%',
-                marginTop: '8px',
-                width: '200px',
-                backgroundColor: '#0f172a',
-                borderRadius: '8px',
-                boxShadow: '0 12px 30px rgba(2,6,23,.45)',
-                border: '1px solid #1f2937',
-                zIndex: 50
-              }}>
+              <div 
+                data-user-menu
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: '100%',
+                  marginTop: '8px',
+                  width: '200px',
+                  backgroundColor: '#0f172a',
+                  borderRadius: '8px',
+                  boxShadow: '0 12px 30px rgba(2,6,23,.45)',
+                  border: '1px solid #1f2937',
+                  zIndex: 1000
+                }}
+              >
                 <div style={{
                   padding: '16px',
                   borderBottom: '1px solid #1f2937'
@@ -392,18 +651,35 @@ function InnerLayout({ children }: AppLayoutProps) {
                     color: '#e5e7eb',
                     margin: 0
                   }}>
-                    {getUserEmail()}
+                    {user?.user.name || 'User'}
                   </p>
                   <p style={{
                     fontSize: '12px',
                     color: '#94a3b8',
                     margin: 0
                   }}>
-                    Administrator
+                    {user?.user.email}
+                  </p>
+                  <p style={{
+                    fontSize: '12px',
+                    color: '#60a5fa',
+                    margin: '4px 0 0 0'
+                  }}>
+                    {user?.active_membership.role === 'manager' ? 'Manager' : 'Member'} • {user?.active_membership.organization.name}
                   </p>
                 </div>
                 <button
-                  onClick={handleLogout}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    logout();
+                    setUserMenuOpen(false);
+                  }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  type="button"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -414,7 +690,8 @@ function InnerLayout({ children }: AppLayoutProps) {
                     fontSize: '14px',
                     border: 'none',
                     backgroundColor: 'transparent',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    zIndex: 1001
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.backgroundColor = '#0b1325';
@@ -438,25 +715,11 @@ function InnerLayout({ children }: AppLayoutProps) {
         </main>
       </div>
 
-      {/* Click outside to close user menu */}
-      {userMenuOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 40
-          }}
-          onClick={() => { setUserMenuOpen(false); }}
-        />
-      )}
+      {/* Click outside to close menus - using event listener instead of overlay */}
     </div>
   );
 }
 
 export default function AppLayout({ children }: AppLayoutProps) {
-  return (
-    <I18nProvider>
-      <InnerLayout>{children}</InnerLayout>
-    </I18nProvider>
-  );
+  return <InnerLayout>{children}</InnerLayout>;
 }

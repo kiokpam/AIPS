@@ -12,10 +12,14 @@ import {
   ArrowRight,
   Play,
   CheckCircle,
-  Star
+  Star,
+  User,
+  LogOut,
+  ChevronDown
 } from 'lucide-react';
 import Link from 'next/link';
 import { useI18n } from '@/src/contexts/I18nContext';
+import { useAuth } from '@/src/contexts/AuthContext';
 
 function LanguageButton() {
   const { lang, setLanguage } = useI18n();
@@ -37,6 +41,28 @@ function LanguageButton() {
 export default function HomePage() {
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const { lang } = useI18n();
+  const { user, isAuthenticated, logout } = useAuth();
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showUserMenu && !target.closest('.user-menu-container')) {
+        setShowUserMenu(false);
+      }
+    };
+
+    if (showUserMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showUserMenu]);
+
+  // Prevent menu from closing when clicking inside the menu
+  const handleMenuClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+  };
 
   const t = (key: string): string => {
     const dict: Record<string, { en: string; vi: string }> = {
@@ -121,7 +147,60 @@ export default function HomePage() {
             <div className="flex items-center space-x-4">
               {/* Language selector (EN/VI) */}
               <LanguageButton />
-              <Link href="/login" className="btn-primary btn-md">{t('nav_signin')}</Link>
+              {isAuthenticated && user ? (
+                <div className="relative user-menu-container">
+                  <button
+                    onClick={() => setShowUserMenu(!showUserMenu)}
+                    className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition-colors"
+                  >
+                    <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
+                      <User className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="text-left hidden sm:block">
+                      <p className="text-sm font-medium text-slate-100">{user.user.name}</p>
+                      <p className="text-xs text-slate-400">{user.active_membership.organization.name}</p>
+                    </div>
+                    <ChevronDown className="w-4 h-4 text-slate-400" />
+                  </button>
+                  {showUserMenu && (
+                    <div 
+                      className="absolute right-0 mt-2 w-56 bg-slate-800 rounded-lg border border-slate-700 shadow-xl z-50"
+                      onClick={handleMenuClick}
+                    >
+                      <div className="p-4 border-b border-slate-700">
+                        <p className="text-sm font-medium text-slate-100">{user.user.name}</p>
+                        <p className="text-xs text-slate-400 mt-1">{user.user.email}</p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {user.active_membership.role === 'manager' ? 'Manager' : 'Member'} • {user.active_membership.organization.name}
+                        </p>
+                      </div>
+                      <div className="p-2">
+                        <Link
+                          href="/cameras"
+                          className="block px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-colors"
+                          onClick={() => setShowUserMenu(false)}
+                        >
+                          Go to Dashboard
+                        </Link>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            logout();
+                            setShowUserMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded-lg transition-colors mt-1"
+                          type="button"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          Sign Out
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Link href="/login" className="btn-primary btn-md">{t('nav_signin')}</Link>
+              )}
             </div>
           </div>
         </div>
@@ -132,7 +211,7 @@ export default function HomePage() {
         {/* Animated gradient background overlay */}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_90%_100%_at_10%_10%,rgba(57,179,246,0.18)_0%,rgba(70,69,212,0.15)_40%,rgba(12,16,64,0)_100%)] pointer-events-none animate-gradient-fade z-0" />
         {/* Stars pattern overlay */}
-        <div className="absolute inset-0 bg-[url('/noise-dark2.png')] opacity-10 pointer-events-none z-0" />
+        <div className="absolute inset-0 bg-slate-900 opacity-40 pointer-events-none z-0" />
         {/* Subtle animated grid overlay */}
         <div className="absolute inset-0 pointer-events-none z-0" aria-hidden>
           <div className="w-full h-full opacity-[0.06]" style={{
@@ -171,10 +250,17 @@ export default function HomePage() {
                 {/* Micro-stats removed per request */}
               </div>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Link href="/login" className="btn-primary btn-lg group">
-                  {t('cta_get_started')}
-                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-                </Link>
+                {isAuthenticated ? (
+                  <Link href="/cameras" className="btn-primary btn-lg group">
+                    Go to Dashboard
+                    <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                  </Link>
+                ) : (
+                  <Link href="/login" className="btn-primary btn-lg group">
+                    {t('cta_get_started')}
+                    <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                  </Link>
+                )}
                 <button 
                   onClick={() => setIsVideoPlaying(!isVideoPlaying)}
                   className="btn-outline btn-lg group"
@@ -304,10 +390,17 @@ export default function HomePage() {
             <h2 className="text-4xl font-bold text-white">{t('cta2_title')}</h2>
             <p className="text-xl text-slate-300 max-w-2xl mx-auto">{t('cta2_sub')}</p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link href="/login" className="btn-primary btn-lg group">
-                {t('cta2_btn_trial')}
-                <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-              </Link>
+              {isAuthenticated ? (
+                <Link href="/cameras" className="btn-primary btn-lg group">
+                  Go to Dashboard
+                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                </Link>
+              ) : (
+                <Link href="/login" className="btn-primary btn-lg group">
+                  {t('cta2_btn_trial')}
+                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                </Link>
+              )}
               <button className="btn-outline btn-lg text-white border-white hover:bg-white hover:text-slate-900">{t('cta2_btn_demo')}</button>
             </div>
           </motion.div>

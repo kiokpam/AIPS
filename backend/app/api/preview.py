@@ -3,14 +3,26 @@ Preview API endpoints for testing video sources
 """
 
 import cv2
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from app.api.deps import (
+    CurrentMembership,
+    get_current_membership_optional,
+    require_manager,
+    get_db,
+)
 from app.services.streaming_service import streaming_service
 
 router = APIRouter(prefix="/preview", tags=["preview"])
 
 @router.get("/stream")
-def preview_stream(source: str = Query(..., description="Video source (RTSP URL, file path, or webcam ID)")):
+def preview_stream(
+    request: Request,
+    source: str = Query(..., description="Video source (RTSP URL, file path, or webcam ID)"),
+    current: CurrentMembership = Depends(get_current_membership_optional),
+    db: Session = Depends(get_db),
+):
     """Preview video stream from any source without adding to system"""
     if not source.strip():
         raise HTTPException(status_code=400, detail="Source parameter is required")
@@ -33,7 +45,12 @@ def preview_stream(source: str = Query(..., description="Video source (RTSP URL,
         raise HTTPException(status_code=500, detail=f"Preview error: {str(e)}")
 
 @router.get("/test")
-def test_source(source: str = Query(..., description="Video source to test")):
+def test_source(
+    request: Request,
+    source: str = Query(..., description="Video source to test"),
+    current: CurrentMembership = Depends(get_current_membership_optional),
+    db: Session = Depends(get_db),
+):
     """Test if a video source is accessible"""
     try:
         import threading
@@ -156,7 +173,12 @@ def test_source(source: str = Query(..., description="Video source to test")):
         }
 
 @router.get("/debug")
-def debug_rtsp(rtsp_url: str = Query(..., description="RTSP URL to debug")):
+def debug_rtsp(
+    request: Request,
+    rtsp_url: str = Query(..., description="RTSP URL to debug"),
+    current: CurrentMembership = Depends(get_current_membership_optional),
+    db: Session = Depends(get_db),
+):
     """Debug RTSP connection with detailed information"""
     import socket
     from urllib.parse import urlparse

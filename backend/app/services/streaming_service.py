@@ -85,10 +85,24 @@ class StreamingService:
                     else:
                         time.sleep(0.033)  # ~30 FPS fallback
                         
+                except GeneratorExit:
+                    # Client disconnected, exit gracefully
+                    break
                 except Exception as e:
-                    print(f"Stream error for camera {camera_id}: {e}")
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Stream error for camera {camera_id}: {e}", exc_info=True)
                     time.sleep(0.1)
+                    # Continue streaming if possible
+                    continue
                     
+        except GeneratorExit:
+            # Client disconnected during stream setup
+            pass
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Fatal stream error for camera {camera_id}: {e}", exc_info=True)
         finally:
             # Mark stream as inactive
             with self.stream_lock:

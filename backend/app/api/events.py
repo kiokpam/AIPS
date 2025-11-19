@@ -1,35 +1,32 @@
 import uuid
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.db.session import SessionLocal
+from app.api.deps import CurrentMembership, get_current_membership, get_db
+from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel
 from app.schemas.events import CounterUpdateEvent, AnomalyDetectedEvent
-from app.models.core import Alert as AlertModel
 
 router = APIRouter(prefix="/events", tags=["events"])
-
-def get_db() -> Session:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 @router.post("/counter-update")
 def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_db)):
     """Receive counter update events from People Counting AI"""
     try:
-        # Insert into TimescaleDB hypertable
+        store = db.query(StoreModel).filter(StoreModel.id == event.store_id).first()
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+
         db.execute(text("""
-            INSERT INTO people_counts (time, store_id, zone_id, value)
-            VALUES (:time, :store_id, :zone_id, :value)
+            INSERT INTO people_counts (time, store_id, zone_id, value, org_id)
+            VALUES (:time, :store_id, :zone_id, :value, :org_id)
         """), {
             "time": event.ts,
             "store_id": event.store_id,
             "zone_id": event.zone_id,
-            "value": event.value
+            "value": event.value,
+            "org_id": store.org_id,
         })
         db.commit()
         return {"status": "success", "message": "Counter update stored"}
@@ -51,6 +48,19 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
             severity_str = "low"
         
         # Create alert in database
+        store = db.query(StoreModel).filter(StoreModel.id == event.store_id).first()
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+
+        if event.camera_id:
+            camera = (
+                db.query(CameraModel)
+                .filter(CameraModel.id == event.camera_id, CameraModel.org_id == store.org_id)
+                .first()
+            )
+            if not camera:
+                raise HTTPException(status_code=404, detail="Camera not found")
+
         alert = AlertModel(
             id=str(uuid.uuid4()),
             type="anomaly",
@@ -61,7 +71,8 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
             anomaly_type=event.type,
             confidence=severity_float,
             timestamp=datetime.fromisoformat(event.ts.replace('Z', '+00:00')) if isinstance(event.ts, str) else event.ts,
-            acknowledged=False
+            acknowledged=False,
+            org_id=store.org_id,
         )
         
         db.add(alert)
@@ -75,27 +86,31 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/people-counts")
-def get_people_counts(store_id: str = None, limit: int = 100, db: Session = Depends(get_db)):
+def get_people_counts(
+    store_id: Optional[str] = None,
+    limit: int = 100,
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
     """Get recent people count data"""
-    query = "SELECT * FROM people_counts"
-    params = {}
-    
+    base_query = "SELECT time, store_id, zone_id, value FROM people_counts WHERE org_id = :org_id"
+    params = {"org_id": current.organization.id, "limit": limit}
+
     if store_id:
-        query += " WHERE store_id = :store_id"
+        base_query += " AND store_id = :store_id"
         params["store_id"] = store_id
-    
-    query += " ORDER BY time DESC LIMIT :limit"
-    params["limit"] = limit
-    
-    result = db.execute(text(query), params)
+
+    base_query += " ORDER BY time DESC LIMIT :limit"
+
+    result = db.execute(text(base_query), params)
     rows = result.fetchall()
-    
+
     return [
         {
             "time": row.time.isoformat(),
             "store_id": row.store_id,
             "zone_id": row.zone_id,
-            "value": row.value
+            "value": row.value,
         }
         for row in rows
     ]

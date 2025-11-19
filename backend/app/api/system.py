@@ -5,30 +5,36 @@ Provides system health, performance, and device information
 
 import os
 import sys
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, Optional
+from sqlalchemy.orm import Session
+from app.api.deps import CurrentMembership, get_current_membership, get_db, require_manager
+from app.models.core import Camera as CameraModel
 from app.services.system_monitor import system_monitor
 from app.services.camera_manager import camera_manager
 
 router = APIRouter(prefix="/system", tags=["system"])
 
 @router.get("/gpu_info")
-def get_gpu_info() -> Dict[str, Any]:
+def get_gpu_info(current: CurrentMembership = Depends(require_manager)) -> Dict[str, Any]:
     """Get GPU/CPU device information (from codedash_ai)"""
     return system_monitor.get_device_info()
 
 @router.get("/performance")
-def get_system_performance() -> Dict[str, Any]:
+def get_system_performance(current: CurrentMembership = Depends(require_manager)) -> Dict[str, Any]:
     """Get current system performance metrics"""
     return system_monitor.get_system_performance()
 
 @router.get("/performance/history")
-def get_performance_history(minutes: int = Query(60, description="History in minutes")) -> Dict[str, Any]:
+def get_performance_history(
+    minutes: int = Query(60, description="History in minutes"),
+    current: CurrentMembership = Depends(require_manager),
+) -> Dict[str, Any]:
     """Get system performance history"""
     return system_monitor.get_performance_history(minutes)
 
 @router.get("/health")
-async def get_system_health() -> Dict[str, Any]:
+async def get_system_health(current: CurrentMembership = Depends(require_manager)) -> Dict[str, Any]:
     """Get health status of all AI services"""
     ai_health = await system_monitor.get_ai_service_health()
     performance = system_monitor.get_system_performance()
@@ -59,7 +65,10 @@ async def get_system_health() -> Dict[str, Any]:
     }
 
 @router.get("/metrics")
-async def get_system_metrics() -> Dict[str, Any]:
+async def get_system_metrics(
+    current: CurrentMembership = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
     """Get comprehensive system metrics"""
     try:
         # Get AI service metrics
@@ -69,8 +78,12 @@ async def get_system_metrics() -> Dict[str, Any]:
         performance = system_monitor.get_system_performance()
         
         # Get camera statistics
-        cameras = camera_manager.list_cameras()
-        total_cameras = len(cameras)
+        allowed_ids = {
+            row[0]
+            for row in db.query(CameraModel.id).filter(CameraModel.org_id == current.organization.id).all()
+        }
+        cameras = [cam for cam in camera_manager.list_cameras() if cam.get('camera_id') in allowed_ids]
+        total_cameras = len(allowed_ids)
         active_cameras = sum(1 for cam in cameras if cam.get('running', False))
         total_people = sum(cam.get('current_count', 0) for cam in cameras)
         total_fps = sum(cam.get('fps', 0) for cam in cameras)
@@ -78,6 +91,7 @@ async def get_system_metrics() -> Dict[str, Any]:
         # Get stream status
         from app.services.streaming_service import streaming_service
         stream_status = streaming_service.get_stream_status()
+        stream_active = sum(status for cid, status in stream_status.items() if cid in allowed_ids)
         
         return {
             "timestamp": performance.get('timestamp'),
@@ -93,7 +107,7 @@ async def get_system_metrics() -> Dict[str, Any]:
                 "active": active_cameras,
                 "total_people": total_people,
                 "total_fps": total_fps,
-                "active_streams": sum(stream_status.values())
+                "active_streams": stream_active,
             },
             "ai_services": ai_metrics,
             "device_info": system_monitor.get_device_info()
@@ -103,27 +117,37 @@ async def get_system_metrics() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to get system metrics: {str(e)}")
 
 @router.get("/stats/summary")
-def get_system_stats_summary() -> Dict[str, Any]:
-    """Get system-wide statistics summary (from codedash_ai)"""
-    cameras = camera_manager.list_cameras()
-    total_cameras = len(cameras)
-    total_people = sum(cam.get('current_count', 0) for cam in cameras)
-    active_cameras = sum(1 for cam in cameras if cam.get('running', False))
-    
-    # Get stream status
+def get_system_stats_summary(
+    current: CurrentMembership = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Get system-wide statistics summary (scoped to organization)"""
+    allowed_ids = {
+        row[0]
+        for row in db.query(CameraModel.id).filter(CameraModel.org_id == current.organization.id).all()
+    }
+    cameras = [cam for cam in camera_manager.list_cameras() if cam.get("camera_id") in allowed_ids]
+    total_people = sum(cam.get("current_count", 0) for cam in cameras)
+    active_cameras = sum(1 for cam in cameras if cam.get("running", False))
+
     from app.services.streaming_service import streaming_service
+
     stream_status = streaming_service.get_stream_status()
-    
+    active_streams = sum(status for cid, status in stream_status.items() if cid in allowed_ids)
+
     return {
-        "total_cameras": total_cameras,
+        "total_cameras": len(allowed_ids),
         "active_cameras": active_cameras,
         "total_people": total_people,
-        "active_streams": sum(stream_status.values()),
-        "system_uptime": system_monitor.get_system_performance().get('system_uptime', 0)
+        "active_streams": active_streams,
+        "system_uptime": system_monitor.get_system_performance().get("system_uptime", 0),
     }
 
 @router.get("/alerts")
-def get_system_alerts() -> Dict[str, Any]:
+def get_system_alerts(
+    current: CurrentMembership = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
     """Get current system alerts and warnings"""
     alerts = []
     warnings = []
@@ -172,7 +196,11 @@ def get_system_alerts() -> Dict[str, Any]:
             })
         
         # Check camera status
-        cameras = camera_manager.list_cameras()
+        allowed_ids = {
+            row[0]
+            for row in db.query(CameraModel.id).filter(CameraModel.org_id == current.organization.id).all()
+        }
+        cameras = [cam for cam in camera_manager.list_cameras() if cam.get('camera_id') in allowed_ids]
         offline_cameras = [cam for cam in cameras if not cam.get('running', False)]
         if offline_cameras:
             warnings.append({
@@ -203,7 +231,7 @@ def get_system_alerts() -> Dict[str, Any]:
         }
 
 @router.get("/info")
-def get_system_info() -> Dict[str, Any]:
+def get_system_info(current: CurrentMembership = Depends(require_manager)) -> Dict[str, Any]:
     """Get comprehensive system information"""
     performance = system_monitor.get_system_performance()
     device_info = system_monitor.get_device_info()

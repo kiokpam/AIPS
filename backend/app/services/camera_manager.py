@@ -23,6 +23,7 @@ PEOPLE_COUNTING_URL = os.getenv("PEOPLE_COUNTING_URL", "http://localhost:8001")
 BEHAVIOR_DETECTION_URL = os.getenv("BEHAVIOR_DETECTION_URL", "http://localhost:8002")
 AI_CORE_URL = os.getenv("AI_CORE_URL", "http://localhost:8003")
 PEOPLE_COUNTING_MODE = os.getenv("PEOPLE_COUNTING_MODE", "ai_core").lower()  # 'ai_core' | 'external'
+ENABLE_AI_SERVICES = os.getenv("ENABLE_AI_SERVICES", "true").lower() == "true"
 
 class VideoStream:
     """Enhanced video stream handler for RTSP, webcam, and file sources"""
@@ -235,10 +236,15 @@ class CameraWorker:
         self.frame_times = deque(maxlen=90)  # ~3s buffer for FPS calculation
         
         # AI service clients
-        self.people_counting_client = httpx.AsyncClient(timeout=10.0)
-        self.behavior_detection_client = httpx.AsyncClient(timeout=10.0)
-        self.ai_core_client = httpx.AsyncClient(timeout=10.0)
+        self.people_counting_client = None
+        self.behavior_detection_client = None
+        self.ai_core_client = None
         self._pc_registered = False
+
+        if ENABLE_AI_SERVICES:
+            self.people_counting_client = httpx.AsyncClient(timeout=10.0)
+            self.behavior_detection_client = httpx.AsyncClient(timeout=10.0)
+            self.ai_core_client = httpx.AsyncClient(timeout=10.0)
         
         # Statistics
         self.stats = {
@@ -273,26 +279,29 @@ class CameraWorker:
             self.thread.join(timeout=2)
         
         # Close HTTP clients (ensure event loop context)
-        try:
-            asyncio.run(self.people_counting_client.aclose())
-        except RuntimeError:
-            # If an event loop is already running elsewhere, fall back to threadsafe
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(self.people_counting_client.aclose())
-            loop.close()
-        try:
-            asyncio.run(self.behavior_detection_client.aclose())
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(self.behavior_detection_client.aclose())
-            loop.close()
+        if self.people_counting_client:
+            try:
+                asyncio.run(self.people_counting_client.aclose())
+            except RuntimeError:
+                # If an event loop is already running elsewhere, fall back to threadsafe
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(self.people_counting_client.aclose())
+                loop.close()
+        if self.behavior_detection_client:
+            try:
+                asyncio.run(self.behavior_detection_client.aclose())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(self.behavior_detection_client.aclose())
+                loop.close()
 
-        try:
-            asyncio.run(self.ai_core_client.aclose())
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(self.ai_core_client.aclose())
-            loop.close()
+        if self.ai_core_client:
+            try:
+                asyncio.run(self.ai_core_client.aclose())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(self.ai_core_client.aclose())
+                loop.close()
     
     def _run(self):
         """Main processing loop"""
@@ -324,6 +333,9 @@ class CameraWorker:
     
     async def _process_with_ai(self, frame: np.ndarray):
         """Process frame with AI services"""
+        if not ENABLE_AI_SERVICES:
+            return
+
         start_time = time.time()
         
         try:

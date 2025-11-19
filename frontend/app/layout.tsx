@@ -3,6 +3,8 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { Toaster } from 'react-hot-toast';
 import AppLayout from './app-layout';
+import { I18nProvider } from '@/src/contexts/I18nContext';
+import { AuthProvider } from '@/src/contexts/AuthContext';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -34,9 +36,13 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full">
       <body className={`${inter.className} h-full antialiased dark-blue`}>
-        <AppLayout>
-          {children}
-        </AppLayout>
+        <I18nProvider>
+          <AuthProvider>
+            <AppLayout>
+              {children}
+            </AppLayout>
+          </AuthProvider>
+        </I18nProvider>
         <Toaster
           position="top-right"
           toastOptions={{

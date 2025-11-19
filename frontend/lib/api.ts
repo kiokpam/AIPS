@@ -1,8 +1,15 @@
 import axios from 'axios';
 
 // Create axios instance with base configuration
+const resolveBaseUrl = () => {
+  const raw = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  // Ensure trailing /api is present
+  const url = raw.endsWith('/api') ? raw : `${raw.replace(/\/+$/, '')}/api`;
+  return url;
+};
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api',
+  baseURL: resolveBaseUrl(),
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -206,12 +213,16 @@ export const cameraApi = {
 
   // Get camera stream URL
   getCameraStreamUrl: (id: string, overlay: boolean = true): string => {
-    return `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/cameras/${id}/stream?overlay=${overlay}`;
+    const base = resolveBaseUrl().replace(/\/api$/, '');
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    return `${base}/api/cameras/${id}/stream?overlay=${overlay}${tokenParam}`;
   },
 
   // Get camera frame URL
   getCameraFrameUrl: (id: string, overlay: boolean = true): string => {
-    return `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/cameras/${id}/frame?overlay=${overlay}`;
+    const base = resolveBaseUrl().replace(/\/api$/, '');
+    return `${base}/api/cameras/${id}/frame?overlay=${overlay}`;
   },
 };
 
@@ -321,6 +332,44 @@ export const uploadApi = {
   },
 };
 
+export interface StoreMemberAccountCreate {
+  username: string;
+  password: string;
+  camera_ids: string[];
+  can_access_dashboard: boolean;
+}
+
+export interface StoreMemberAccountResponse {
+  message: string;
+  user: UserInfo;
+  username: string;
+  store_id: string;
+  store_name: string;
+}
+
+export interface StoreMemberCameraAccess {
+  camera_id: string;
+  camera_name?: string | null;
+}
+
+export interface StoreMemberAccountSummary {
+  membership_id: string;
+  user_id: string;
+  username: string;
+  email: string;
+  store_id: string;
+  store_name: string;
+  can_access_dashboard: boolean;
+  camera_access: StoreMemberCameraAccess[];
+  created_at: string;
+}
+
+export interface StoreMemberAccountUpdate {
+  camera_ids: string[];
+  can_access_dashboard: boolean;
+  password?: string;
+}
+
 export const storeApi = {
   // Get all stores
   getStores: async (): Promise<Store[]> => {
@@ -333,23 +382,262 @@ export const storeApi = {
     const response = await api.post('/stores/', { name });
     return response.data;
   },
+
+  getStoreMembers: async (storeId: string): Promise<StoreMemberAccountSummary[]> => {
+    const response = await api.get(`/stores/${storeId}/members`);
+    return response.data;
+  },
+
+  // Create member account for a store
+  createStoreMemberAccount: async (
+    storeId: string,
+    data: StoreMemberAccountCreate
+  ): Promise<StoreMemberAccountResponse> => {
+    const response = await api.post(`/stores/${storeId}/member-account`, data);
+    return response.data;
+  },
+
+  updateStoreMemberAccount: async (
+    storeId: string,
+    membershipId: string,
+    data: StoreMemberAccountUpdate
+  ): Promise<StoreMemberAccountSummary> => {
+    const response = await api.put(`/stores/${storeId}/members/${membershipId}`, data);
+    return response.data;
+  },
 };
 
-// Auth API (placeholder - implement based on your auth system)
+// Auth types
+export interface UserInfo {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export interface OrganizationInfo {
+  id: string;
+  name: string;
+}
+
+export interface MembershipInfo {
+  id: string;
+  organization: OrganizationInfo;
+  role: 'manager' | 'member';
+}
+
+export interface ProfileResponse {
+  user: UserInfo;
+  active_membership: MembershipInfo;
+  memberships: MembershipInfo[];
+}
+
+export interface AuthResponse extends ProfileResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface MemberSignupRequest {
+  email: string;
+  password: string;
+  name: string;
+  invite_token?: string;
+  join_code?: string;
+}
+
+export interface ManagerSignupRequest {
+  email: string;
+  password: string;
+  name: string;
+  organization_name: string;
+}
+
+export interface CreateOrganizationRequest {
+  name: string;
+}
+
+export interface OrganizationResponse {
+  id: string;
+  name: string;
+  join_code?: string;
+  created_at: string;
+}
+
+export interface InviteResponse {
+  id: string;
+  token: string;
+  invite_url: string;
+  email?: string;
+  role: 'manager' | 'member';
+  expires_at?: string;
+  used_at?: string;
+  created_at: string;
+}
+
+export interface InvitesResponse {
+  invites: InviteResponse[];
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+  organization_id?: string;
+}
+
+export interface MemberLoginRequest {
+  organization_id?: string;
+  organization_name?: string;
+  join_code?: string;
+  password: string;
+}
+
+export interface SetMemberPasswordRequest {
+  password: string;
+}
+
+export interface InviteMemberRequest {
+  email: string;
+  name: string;
+  password?: string;
+  role: 'manager' | 'member';
+}
+
+export interface MembershipResponse {
+  id: string;
+  user: UserInfo;
+  organization: OrganizationInfo;
+  role: 'manager' | 'member';
+}
+
+export interface MembersResponse {
+  members: MembershipResponse[];
+}
+
+export interface MemberPermissionRequest {
+  membership_id: string;
+  camera_ids: string[];
+  can_access_dashboard: boolean;
+}
+
+export interface MemberPermissionResponse {
+  membership_id: string;
+  user: UserInfo;
+  accessible_cameras: string[];
+  can_access_dashboard: boolean;
+}
+
+// Auth API
 export const authApi = {
-  login: async (email: string, password: string) => {
-    // Implement based on your authentication system
-    const response = await api.post('/auth/login', { email, password });
+  signupMember: async (data: MemberSignupRequest): Promise<AuthResponse> => {
+    const response = await api.post('/auth/signup/member', data);
     return response.data;
   },
 
-  logout: async () => {
-    localStorage.removeItem('auth_token');
+  signupManager: async (data: ManagerSignupRequest): Promise<AuthResponse> => {
+    const response = await api.post('/auth/signup/manager', data);
+    return response.data;
   },
 
-  getCurrentUser: async () => {
+  login: async (data: LoginRequest): Promise<AuthResponse | any> => {
+    const response = await api.post('/auth/login', data);
+    // Check if response indicates no organization
+    if (response.headers?.['x-no-organization'] === 'true') {
+      return response.data; // Return the detail message
+    }
+    return response.data;
+  },
+
+  memberLogin: async (data: MemberLoginRequest): Promise<AuthResponse> => {
+    const response = await api.post('/auth/login/member', data);
+    return response.data;
+  },
+
+  switchOrg: async (organizationId: string): Promise<AuthResponse> => {
+    const response = await api.post('/auth/switch-org', { organization_id: organizationId });
+    return response.data;
+  },
+
+  getCurrentUser: async (): Promise<ProfileResponse> => {
     const response = await api.get('/auth/me');
     return response.data;
+  },
+
+  getMembers: async (orgId: string): Promise<MembersResponse> => {
+    const response = await api.get(`/auth/orgs/${orgId}/members`);
+    return response.data;
+  },
+
+  addMember: async (orgId: string, data: InviteMemberRequest): Promise<MembershipResponse> => {
+    const response = await api.post(`/auth/orgs/${orgId}/members`, data);
+    return response.data;
+  },
+
+  updateMemberRole: async (orgId: string, membershipId: string, role: 'manager' | 'member'): Promise<MembershipResponse> => {
+    const response = await api.patch(`/auth/orgs/${orgId}/members/${membershipId}/role`, { role });
+    return response.data;
+  },
+
+  removeMember: async (orgId: string, membershipId: string): Promise<void> => {
+    await api.delete(`/auth/orgs/${orgId}/members/${membershipId}`);
+  },
+
+  createOrganization: async (name: string): Promise<AuthResponse> => {
+    const response = await api.post('/auth/organizations', { name });
+    return response.data;
+  },
+
+  listOrganizations: async (): Promise<OrganizationResponse[]> => {
+    const response = await api.get('/auth/organizations');
+    return response.data;
+  },
+
+  createInvite: async (orgId: string, data: { email?: string; role: 'manager' | 'member'; expires_in_days?: number }): Promise<InviteResponse> => {
+    const response = await api.post(`/auth/orgs/${orgId}/invites`, data);
+    return response.data;
+  },
+
+  listInvites: async (orgId: string): Promise<InvitesResponse> => {
+    const response = await api.get(`/auth/orgs/${orgId}/invites`);
+    return response.data;
+  },
+
+  deleteInvite: async (inviteId: string): Promise<void> => {
+    await api.delete(`/auth/invites/${inviteId}`);
+  },
+
+  getInviteInfo: async (token: string): Promise<InviteResponse> => {
+    const response = await api.get(`/auth/invites/${token}/info`);
+    return response.data;
+  },
+
+  generateJoinCode: async (orgId: string, enabled: boolean): Promise<OrganizationResponse> => {
+    const response = await api.post(`/auth/orgs/${orgId}/join-code`, { enabled });
+    return response.data;
+  },
+
+  getMemberPermissions: async (orgId: string, membershipId: string): Promise<MemberPermissionResponse> => {
+    const response = await api.get(`/auth/orgs/${orgId}/members/${membershipId}/permissions`);
+    return response.data;
+  },
+
+  updateMemberPermissions: async (orgId: string, membershipId: string, data: MemberPermissionRequest): Promise<MemberPermissionResponse> => {
+    const response = await api.put(`/auth/orgs/${orgId}/members/${membershipId}/permissions`, data);
+    return response.data;
+  },
+
+  setMemberPassword: async (orgId: string, data: SetMemberPasswordRequest): Promise<OrganizationResponse> => {
+    const response = await api.put(`/auth/orgs/${orgId}/member-password`, data);
+    return response.data;
+  },
+
+  removeMemberPassword: async (orgId: string): Promise<OrganizationResponse> => {
+    const response = await api.delete(`/auth/orgs/${orgId}/member-password`);
+    return response.data;
+  },
+
+  logout: () => {
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
+    localStorage.removeItem('auth_membership');
   },
 };
 

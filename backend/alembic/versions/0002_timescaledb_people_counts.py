@@ -1,6 +1,6 @@
 """add people_counts hypertable
 
-Revision ID: 0002
+Revision ID: 0002_timescaledb_people_counts
 Revises: 0001
 Create Date: 2025-10-14
 
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = '0002'
+revision = '0002_timescaledb_people_counts'
 down_revision = '0001'
 branch_labels = None
 depends_on = None

@@ -117,11 +117,11 @@ After starting the system, you can access:
 
 ## 🔐 Demo Credentials
 
-Use these credentials to test the system:
+Use these sample credentials to test the system:
 
 ```
-Email:    admin@aips.com
-Password: password123
+Email:    manager@example.com
+Password: StrongPass123!
 ```
 
 ## 📋 Common Commands
