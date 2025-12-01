@@ -33,6 +33,108 @@ import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import toast from 'react-hot-toast';
 
+// Simple drawing canvas component used for overlaying zones/lines on top of the preview image.
+// This is intentionally kept local to this page so that the AI/drawing logic can evolve
+// without affecting the rest of the app structure.
+type DrawingCanvasProps = React.CanvasHTMLAttributes<HTMLCanvasElement> & {
+  drawnAreas: any[];
+  currentDrawing: any;
+  drawingMode: 'zone' | 'line' | null;
+  drawZone: (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft?: boolean) => void;
+  drawLine: (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft?: boolean) => void;
+};
+
+const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
+  drawnAreas,
+  currentDrawing,
+  drawingMode,
+  drawZone,
+  drawLine,
+  ...rest
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Clear previous drawings
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Helper to normalize width/height from CSS to canvas pixels
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width && rect.height) {
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+
+    // Redraw saved areas
+    drawnAreas.forEach((area) => {
+      if (area.type === 'zone' && area.isComplete) {
+        drawZone(ctx, area.points, '#10b981', 2);
+      } else if (area.type === 'line' && area.isComplete) {
+        drawLine(ctx, area.p1, area.p2, '#3b82f6', 3);
+      }
+    });
+
+    // Draw current draft
+    if (currentDrawing) {
+      if (currentDrawing.type === 'zone') {
+        drawZone(ctx, currentDrawing.points || [], '#3b82f6', 2, true);
+      } else if (currentDrawing.type === 'line') {
+        drawLine(ctx, currentDrawing.p1, currentDrawing.p2, '#3b82f6', 3, true);
+      }
+    }
+  }, [drawnAreas, currentDrawing, drawingMode, drawZone, drawLine]);
+
+  return <canvas ref={canvasRef} {...rest} />;
+};
+
+// Temporary placeholder APIs for AI-related services.
+// These do NOT call any real backend AI services and are meant only
+// to keep the UI compiling and working until AI microservices are integrated.
+const inOutApi: any = {
+  // Return zeroed counts for now
+  getCounts: async (_cameraId: string) => ({
+    count_in: 0,
+    count_out: 0,
+    cumulative: 0,
+  }),
+  // Return empty "today" stats
+  getTodayStats: async (_cameraId: string) => ({
+    count_in_today: 0,
+    count_out_today: 0,
+  }),
+  // Registration / reset / unregister are no-ops for now
+  registerCamera: async (_cameraId: string) => {
+    return;
+  },
+  resetCounts: async (_cameraId: string) => {
+    return;
+  },
+  unregisterCamera: async (_cameraId: string) => {
+    return;
+  },
+};
+
+const tasksApi: any = {
+  // Return empty task config so the overlay logic can run without errors
+  getCameraTaskConfig: async (_cameraId: string) => ({
+    zones: [],
+    lines: [],
+  }),
+  // No-op setters so camera creation flow can complete
+  setCameraTasks: async (_cameraId: string, _payload: any) => {
+    return;
+  },
+  clearCameraTasks: async (_cameraId: string) => {
+    return;
+  },
+};
+
 
 const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   camera: CameraType;
