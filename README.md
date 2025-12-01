@@ -125,6 +125,32 @@ Flow:
 
 Prereqs: Docker Desktop + Compose. On Windows with WSL, LF line endings are important for YAMLs.
 
+### Option 1 – Using the helper script (`start-system.sh`)
+
+This script wraps `docker-compose` and basic health checks for you.
+
+```bash
+cd /path/to/AIPS               # e.g. /mnt/d/Capstone/github/AIPS on WSL
+chmod +x start-system.sh       # first time only
+./start-system.sh
+```
+
+What it does:
+- Verifies Docker and `docker-compose` are available.
+- Creates `models/` and `backend/uploads/` directories if missing.
+- Runs `docker-compose up --build -d`.
+- Waits briefly, then checks:
+  - DB readiness
+  - Backend: `http://localhost:8000/api/healthz`
+  - Frontend: `http://localhost:3000`
+
+On Windows without WSL, you can use the batch script instead:
+
+```powershell
+cd D:\Capstone\github\AIPS
+start-system.bat
+```
+
 ### Quick Start (Docker Compose)
 
 Bring up the full stack (backend, frontend, db, AI services, optional stream gateway):
