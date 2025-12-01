@@ -7,7 +7,6 @@ import os
 import time
 import psutil
 import asyncio
-import httpx
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import torch
@@ -17,9 +16,6 @@ class SystemMonitor:
     
     def __init__(self):
         self.start_time = time.time()
-        self.ai_core_url = os.getenv("AI_CORE_URL", "http://localhost:8003")
-        self.people_counting_url = os.getenv("PEOPLE_COUNTING_URL", "http://localhost:8001")
-        self.behavior_detection_url = os.getenv("BEHAVIOR_DETECTION_URL", "http://localhost:8002")
         
         # Performance tracking
         self.performance_history = []
@@ -142,100 +138,14 @@ class SystemMonitor:
             }
     
     async def get_ai_service_health(self) -> Dict[str, Any]:
-        """Get health status of AI services"""
-        health_status = {}
-        
-        # Check AI Core service
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.ai_core_url}/health")
-                if response.status_code == 200:
-                    data = response.json()
-                    health_status['ai_core'] = {
-                        'status': 'healthy',
-                        'response_time_ms': response.elapsed.total_seconds() * 1000,
-                        'details': data
-                    }
-                else:
-                    health_status['ai_core'] = {
-                        'status': 'unhealthy',
-                        'error': f"HTTP {response.status_code}"
-                    }
-        except Exception as e:
-            health_status['ai_core'] = {
-                'status': 'unreachable',
-                'error': str(e)
-            }
-        
-        # Check People Counting service
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.people_counting_url}/health")
-                if response.status_code == 200:
-                    data = response.json()
-                    health_status['people_counting'] = {
-                        'status': 'healthy',
-                        'response_time_ms': response.elapsed.total_seconds() * 1000,
-                        'details': data
-                    }
-                else:
-                    health_status['people_counting'] = {
-                        'status': 'unhealthy',
-                        'error': f"HTTP {response.status_code}"
-                    }
-        except Exception as e:
-            health_status['people_counting'] = {
-                'status': 'unreachable',
-                'error': str(e)
-            }
-        
-        # Check Behavior Detection service
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.behavior_detection_url}/health")
-                if response.status_code == 200:
-                    data = response.json()
-                    health_status['behavior_detection'] = {
-                        'status': 'healthy',
-                        'response_time_ms': response.elapsed.total_seconds() * 1000,
-                        'details': data
-                    }
-                else:
-                    health_status['behavior_detection'] = {
-                        'status': 'unhealthy',
-                        'error': f"HTTP {response.status_code}"
-                    }
-        except Exception as e:
-            health_status['behavior_detection'] = {
-                'status': 'unreachable',
-                'error': str(e)
-            }
-        
-        return health_status
+        """Get health status of AI services - placeholder for future AI service integration"""
+        # AI engineers can extend this method to check their service health
+        return {}
     
     async def get_ai_service_metrics(self) -> Dict[str, Any]:
-        """Get metrics from AI services"""
-        metrics = {}
-        
-        # Get metrics from each service
-        services = [
-            ('ai_core', self.ai_core_url),
-            ('people_counting', self.people_counting_url),
-            ('behavior_detection', self.behavior_detection_url)
-        ]
-        
-        for service_name, service_url in services:
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.get(f"{service_url}/metrics")
-                    if response.status_code == 200:
-                        metrics[service_name] = response.json()
-                    else:
-                        metrics[service_name] = {'error': f"HTTP {response.status_code}"}
-            except Exception as e:
-                metrics[service_name] = {'error': str(e)}
-        
-        return metrics
+        """Get metrics from AI services - placeholder for future AI service integration"""
+        # AI engineers can extend this method to get metrics from their services
+        return {}
     
     def get_performance_history(self, minutes: int = 60) -> Dict[str, Any]:
         """Get performance history for the last N minutes"""

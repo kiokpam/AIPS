@@ -1,5 +1,0 @@
-ultralytics
-opencv-python
-numpy
-cvzone
-deep-sort-realtime

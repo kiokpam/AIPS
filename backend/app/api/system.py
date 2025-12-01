@@ -35,7 +35,7 @@ def get_performance_history(
 
 @router.get("/health")
 async def get_system_health(current: CurrentMembership = Depends(require_manager)) -> Dict[str, Any]:
-    """Get health status of all AI services"""
+    """Get system health status"""
     ai_health = await system_monitor.get_ai_service_health()
     performance = system_monitor.get_system_performance()
     
@@ -250,8 +250,6 @@ def get_system_info(current: CurrentMembership = Depends(require_manager)) -> Di
         },
         "gpu": device_info,
         "services": {
-            "ai_core_url": system_monitor.ai_core_url,
-            "people_counting_url": system_monitor.people_counting_url,
-            "behavior_detection_url": system_monitor.behavior_detection_url
+            "note": "AI services can be configured and monitored here"
         }
     }

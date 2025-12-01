@@ -22,192 +22,17 @@ import {
   Undo,
   Trash2,
   Save,
-  Brain
+  Brain,
+  TrendingUp,
+  TrendingDown,
+  BarChart3,
+  Activity
 } from 'lucide-react';
-import { cameraApi, storeApi, tasksApi, type Camera as CameraType } from '@/lib/api';
+import { cameraApi, storeApi, eventsApi, type Camera as CameraType } from '@/lib/api';
+import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import toast from 'react-hot-toast';
 
-// Drawing Canvas Component
-const DrawingCanvas = ({
-  width,
-  height,
-  className,
-  onClick,
-  onMouseEnter,
-  onMouseLeave,
-  drawnAreas,
-  currentDrawing,
-  drawingMode,
-  drawZone
-}: {
-  width: number;
-  height: number;
-  className: string;
-  onClick: (e: React.MouseEvent<HTMLCanvasElement>) => void;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
-  drawnAreas: any[];
-  currentDrawing: any;
-  drawingMode: 'zone' | null;
-  drawZone: (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft?: boolean) => void;
-}) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const updateCanvasSize = () => {
-      // Find the video element to match its dimensions
-      const videoElement = canvas.parentElement?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement;
-      if (videoElement) {
-        // Get the actual video/image dimensions and position
-        const videoRect = videoElement.getBoundingClientRect();
-        const containerRect = canvas.parentElement?.getBoundingClientRect();
-        
-        if (!containerRect) return;
-        
-        // Calculate the video's position relative to the container
-        const videoLeft = videoRect.left - containerRect.left;
-        const videoTop = videoRect.top - containerRect.top;
-        
-        // Prefer the media's intrinsic resolution for the canvas drawing buffer
-        const naturalW = (videoElement as HTMLVideoElement).videoWidth || (videoElement as HTMLImageElement).naturalWidth || videoRect.width;
-        const naturalH = (videoElement as HTMLVideoElement).videoHeight || (videoElement as HTMLImageElement).naturalHeight || videoRect.height;
-        canvas.width = naturalW;
-        canvas.height = naturalH;
-        
-        // Position canvas exactly over the video element
-        canvas.style.position = 'absolute';
-        canvas.style.left = videoLeft + 'px';
-        canvas.style.top = videoTop + 'px';
-        canvas.style.width = videoRect.width + 'px';
-        canvas.style.height = videoRect.height + 'px';
-        canvas.style.pointerEvents = 'auto';
-        canvas.style.zIndex = '20';
-        
-        console.log('=== CANVAS POSITIONING DEBUG ===');
-        console.log('Video rect:', videoRect);
-        console.log('Container rect:', containerRect);
-        console.log('Video position in container:', videoLeft, videoTop);
-        console.log('Canvas size:', videoRect.width, 'x', videoRect.height);
-        console.log('Canvas position:', canvas.style.left, canvas.style.top);
-        console.log('================================');
-        
-        // Store video element reference for click handling
-        (canvas as any).videoElement = videoElement;
-      } else {
-        // Fallback to container size
-        const rect = canvas.getBoundingClientRect();
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-        console.log('Canvas fallback size:', rect.width, 'x', rect.height);
-      }
-    };
-
-    // More robust video detection and positioning
-    const setupVideoTracking = () => {
-      const videoElement = canvas.parentElement?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement;
-      if (videoElement) {
-        // Multiple event listeners for different load states
-        videoElement.addEventListener('load', updateCanvasSize);
-        videoElement.addEventListener('loadeddata', updateCanvasSize);
-        videoElement.addEventListener('loadedmetadata', updateCanvasSize);
-        videoElement.addEventListener('canplay', updateCanvasSize);
-        
-        // Also listen for video resize events
-        videoElement.addEventListener('resize', updateCanvasSize);
-        
-        // Store reference for later use
-        (canvas as any).videoElement = videoElement;
-        
-        console.log('Video tracking setup complete');
-      }
-    };
-
-    // Initial setup with multiple attempts
-    setupVideoTracking();
-    setTimeout(setupVideoTracking, 100);
-    setTimeout(setupVideoTracking, 500);
-    setTimeout(setupVideoTracking, 1000);
-    setTimeout(setupVideoTracking, 2000);
-
-    // Handle window resize
-    const handleResize = () => {
-      updateCanvasSize();
-      redrawCanvas();
-    };
-
-    window.addEventListener('resize', handleResize);
-    
-    // Use MutationObserver to detect when video element is added
-    const observer = new MutationObserver(() => {
-      setupVideoTracking();
-      updateCanvasSize();
-    });
-    
-    if (canvas.parentElement) {
-      observer.observe(canvas.parentElement, { 
-        childList: true, 
-        subtree: true 
-      });
-    }
-
-    const redrawCanvas = () => {
-      if (!canvas || !ctx) return;
-      
-      // Ensure canvas is properly positioned before drawing
-      updateCanvasSize();
-      
-      // Clear canvas
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      console.log('Drawing canvas - drawnAreas:', drawnAreas, 'currentDrawing:', currentDrawing);
-
-      // Draw completed areas
-      drawnAreas.forEach(area => {
-        if (area.type === 'zone' && area.isComplete) {
-          console.log('Drawing completed zone:', area);
-          drawZone(ctx, area.points, '#10b981', 2);
-        }
-      });
-
-      // Draw current drawing
-      if (currentDrawing) {
-        if (currentDrawing.type === 'zone') {
-          drawZone(ctx, currentDrawing.points, '#3b82f6', 2, true);
-        }
-      }
-    };
-
-    // Initial draw
-    redrawCanvas();
-
-    // Cleanup
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      observer.disconnect();
-    };
-  }, [drawnAreas, currentDrawing]);
-
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={width}
-      height={height}
-      className={className}
-      onClick={onClick}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      style={{ zIndex: 10 }}
-    />
-  );
-};
 
 const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   camera: CameraType;
@@ -225,8 +50,19 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   const [aiModel, setAiModel] = useState(camera.model_name || 'yolov8n.pt');
   const [aiDevice, setAiDevice] = useState(camera.device || 'auto');
   // conf_thresh removed - using backend defaults
-  const [taskInfo, setTaskInfo] = useState<{ zones: any[] } | null>(null);
+  const [taskInfo, setTaskInfo] = useState<{ zones: any[]; lines: any[] } | null>(null);
   const [saving, setSaving] = useState(false);
+  
+  // In/Out counting state
+  const hasInOutCounting = camera.ai_services?.includes('in_out_counting') || false;
+  const [inOutCounts, setInOutCounts] = useState<{ count_in: number; count_out: number; cumulative: number } | null>(null);
+  const [isInOutRegistered, setIsInOutRegistered] = useState(false);
+  const [isRegisteringInOut, setIsRegisteringInOut] = useState(false);
+  
+  // Today's stats and behaviors
+  const [todayStats, setTodayStats] = useState<{ count_in_today: number; count_out_today: number } | null>(null);
+  const [recentBehaviors, setRecentBehaviors] = useState<Array<{ type: string; severity: string; timestamp: string }>>([]);
+  const router = useRouter();
 
   // Client-side overlay fallback: draw zones over MJPEG <img>
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -366,6 +202,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     const canvas = overlayRef.current;
     const img = imgRef.current;
     if (!canvas || !img || !taskInfo || !frameSize) return;
+    
+    // Redraw when taskInfo, frameSize, or streaming state changes
 
     const container = img.parentElement as HTMLElement | null;
     if (!container) return;
@@ -390,11 +228,21 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
       const offsetX = (cw - contentW) / 2;
       const offsetY = (ch - contentH) / 2;
 
-      const mapPoint = (p: number[]) => {
-        // p can be normalized [0..1] or pixel [x,y]
-        const x = (p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1) ? p[0] * frameW : p[0];
-        const y = (p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1) ? p[1] * frameH : p[1];
-        return [offsetX + x * scale, offsetY + y * scale];
+      /**
+       * Map pixel coordinates (relative to frame) to overlay canvas coordinates
+       * Backend stores coordinates as pixels [x, y] relative to frame size
+       */
+      const mapPoint = (p: number[]): [number, number] => {
+        // Backend always stores pixel coordinates [x, y] relative to frame size
+        // We need to scale and offset them to fit the overlay canvas
+        const frameX = p[0]; // Pixel X in frame coordinates
+        const frameY = p[1]; // Pixel Y in frame coordinates
+        
+        // Scale pixel coordinates to overlay canvas
+        const canvasX = offsetX + frameX * scale;
+        const canvasY = offsetY + frameY * scale;
+        
+        return [canvasX, canvasY];
       };
 
       // Draw zones
@@ -417,7 +265,36 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         }
       });
 
-      // Lines removed - only zones are supported
+      // Draw lines
+      (taskInfo.lines || []).forEach((line: any) => {
+        if (line.p1 && line.p2 && Array.isArray(line.p1) && Array.isArray(line.p2)) {
+          // Backend stores lines as pixel coordinates [x, y]
+          const p1 = mapPoint(line.p1);
+          const p2 = mapPoint(line.p2);
+          const isIn = line.name?.toLowerCase().includes('in');
+          ctx.strokeStyle = isIn ? '#22c55e' : '#3b82f6';
+          ctx.lineWidth = 3;
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(p1[0], p1[1]);
+          ctx.lineTo(p2[0], p2[1]);
+          ctx.stroke();
+          // Draw endpoints
+          ctx.fillStyle = isIn ? '#22c55e' : '#3b82f6';
+          ctx.beginPath();
+          ctx.arc(p1[0], p1[1], 6, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(p2[0], p2[1], 6, 0, 2 * Math.PI);
+          ctx.fill();
+          // Draw label
+          if (line.name) {
+            ctx.fillStyle = isIn ? '#22c55e' : '#3b82f6';
+            ctx.font = '14px sans-serif';
+            ctx.fillText(String(line.name), (p1[0] + p2[0]) / 2 + 4, (p1[1] + p2[1]) / 2 + 16);
+          }
+        }
+      });
     };
 
     resizeAndDraw();
@@ -457,6 +334,94 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     return () => { isMounted = false; if (timer) clearTimeout(timer); };
   }, [camera.id]);
 
+  // Poll in/out counts if camera has in_out_counting enabled
+  useEffect(() => {
+    if (!hasInOutCounting) return;
+    
+    let isMounted = true;
+    let timer: any;
+
+    const checkRegistration = async () => {
+      try {
+        const counts = await inOutApi.getCounts(camera.id);
+        if (isMounted) {
+          setInOutCounts({
+            count_in: counts.count_in,
+            count_out: counts.count_out,
+            cumulative: counts.cumulative
+          });
+          setIsInOutRegistered(true);
+        }
+      } catch (error: any) {
+        if (isMounted) {
+          if (error.response?.status === 404) {
+            setIsInOutRegistered(false);
+          }
+          setInOutCounts(null);
+        }
+      }
+    };
+
+    const fetchCounts = async () => {
+      try {
+        const counts = await inOutApi.getCounts(camera.id);
+        if (isMounted) {
+          setInOutCounts({
+            count_in: counts.count_in,
+            count_out: counts.count_out,
+            cumulative: counts.cumulative
+          });
+        }
+      } catch (_) {
+        // Ignore errors, will retry
+      } finally {
+        timer = setTimeout(fetchCounts, 5000);
+      }
+    };
+
+    // First check if registered
+    checkRegistration().then(() => {
+      if (isInOutRegistered) {
+        fetchCounts();
+      }
+    });
+
+    return () => { isMounted = false; if (timer) clearTimeout(timer); };
+  }, [camera.id, hasInOutCounting, isInOutRegistered]);
+
+  // Fetch today's stats and recent behaviors
+  useEffect(() => {
+    let isMounted = true;
+    
+    const fetchStats = async () => {
+      try {
+        // Fetch today's in/out stats if camera has in_out_counting
+        if (hasInOutCounting) {
+          const stats = await inOutApi.getTodayStats(camera.id);
+          if (isMounted) setTodayStats(stats);
+        }
+        
+        // Fetch recent behaviors if camera has behavior_detection
+        if (camera.ai_services?.includes('behavior_detection')) {
+          const behaviors = await eventsApi.getCameraRecentBehaviors(camera.id, 3);
+          if (isMounted) setRecentBehaviors(behaviors);
+        }
+      } catch (error) {
+        // Silently fail - stats are optional
+        console.warn('Failed to fetch camera stats:', error);
+      }
+    };
+
+    fetchStats();
+    // Refresh every 30 seconds
+    const timer = setInterval(fetchStats, 30000);
+    
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, [camera.id, hasInOutCounting, camera.ai_services]);
+
   // Load AI details when modal opens
   useEffect(() => {
     if (!showAIDetails) return;
@@ -472,7 +437,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
       } catch {}
       try {
         const tasks = await tasksApi.getCameraTaskConfig(camera.id);
-        if (mounted) setTaskInfo({ zones: tasks?.zones || [] });
+        if (mounted) setTaskInfo({ zones: tasks?.zones || [], lines: tasks?.lines || [] });
       } catch {}
     })();
     return () => { mounted = false; };
@@ -485,8 +450,14 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     const loadTasks = async () => {
       try {
         const tasks = await tasksApi.getCameraTaskConfig(camera.id);
-        if (mounted) setTaskInfo({ zones: tasks?.zones || [] });
-      } catch {}
+        if (mounted) {
+          const newTaskInfo = { zones: tasks?.zones || [], lines: tasks?.lines || [] };
+          console.log('Loaded taskInfo for camera', camera.id, ':', newTaskInfo);
+          setTaskInfo(newTaskInfo);
+        }
+      } catch (e) {
+        console.warn('Failed to load task config:', e);
+      }
       timer = setTimeout(loadTasks, 5000);
     };
     loadTasks();
@@ -550,6 +521,19 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
           <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
             {t('people_count')}: {currentCount !== null ? currentCount : '—'}
           </span>
+          {hasInOutCounting && inOutCounts && (
+            <div className="flex gap-2 mt-1">
+              <span className="text-xs text-white bg-green-600/70 px-2 py-1 rounded">
+                IN: {inOutCounts.count_in}
+              </span>
+              <span className="text-xs text-white bg-blue-600/70 px-2 py-1 rounded">
+                OUT: {inOutCounts.count_out}
+              </span>
+              <span className="text-xs text-white bg-purple-600/70 px-2 py-1 rounded">
+                Net: {inOutCounts.cumulative}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Stream Toggle */}
@@ -597,6 +581,67 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   <Brain className="w-4 h-4 mr-3" />
                   {t('ai_details')}
                 </button>
+                {hasInOutCounting && (
+                  <>
+                    {!isInOutRegistered ? (
+                      <button
+                        onClick={async () => {
+                          try {
+                            setIsRegisteringInOut(true);
+                            await inOutApi.registerCamera(camera.id);
+                            setIsInOutRegistered(true);
+                            toast.success('Camera registered for in/out counting');
+                            setShowMenu(false);
+                          } catch (error: any) {
+                            toast.error(error.response?.data?.detail || 'Failed to register camera');
+                          } finally {
+                            setIsRegisteringInOut(false);
+                          }
+                        }}
+                        disabled={isRegisteringInOut}
+                        className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                      >
+                        <TrendingUp className="w-4 h-4 mr-3" />
+                        {isRegisteringInOut ? 'Registering...' : 'Enable In/Out Counting'}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await inOutApi.resetCounts(camera.id);
+                              toast.success('Counts reset');
+                              setShowMenu(false);
+                            } catch (error: any) {
+                              toast.error(error.response?.data?.detail || 'Failed to reset counts');
+                            }
+                          }}
+                          className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          <Undo className="w-4 h-4 mr-3" />
+                          Reset Counts
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await inOutApi.unregisterCamera(camera.id);
+                              setIsInOutRegistered(false);
+                              setInOutCounts(null);
+                              toast.success('Camera unregistered from in/out counting');
+                              setShowMenu(false);
+                            } catch (error: any) {
+                              toast.error(error.response?.data?.detail || 'Failed to unregister camera');
+                            }
+                          }}
+                          className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          <X className="w-4 h-4 mr-3" />
+                          Disable In/Out Counting
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
                 <button
                   onClick={() => {
                     onToggle(camera.id, !camera.is_active);
@@ -652,6 +697,74 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
           <div className="flex justify-between">
             <span>AI Services:</span>
             <span className="font-medium">{camera.ai_services.length}</span>
+          </div>
+        </div>
+
+        {/* Today's Stats Summary */}
+        <div className="mt-4 pt-4 border-t border-slate-200">
+          <div className="space-y-3">
+            {/* Today's In/Out Counts */}
+            {hasInOutCounting && (
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-slate-700">Today's Counts</span>
+                  <Clock className="w-3 h-3 text-slate-400" />
+                </div>
+                {todayStats ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-green-600">{todayStats.count_in_today}</div>
+                      <div className="text-xs text-slate-500">IN</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-blue-600">{todayStats.count_out_today}</div>
+                      <div className="text-xs text-slate-500">OUT</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400 text-center py-1">No data today</div>
+                )}
+              </div>
+            )}
+
+            {/* Recent Behaviors */}
+            {camera.ai_services?.includes('behavior_detection') && (
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-slate-700">Recent Behaviors</span>
+                  <Activity className="w-3 h-3 text-slate-400" />
+                </div>
+                {recentBehaviors.length > 0 ? (
+                  <div className="space-y-1">
+                    {recentBehaviors.slice(0, 3).map((behavior, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-xs">
+                        <span className="text-slate-600 capitalize truncate flex-1">{behavior.type}</span>
+                        <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${
+                          behavior.severity === 'high' ? 'bg-red-100 text-red-700' :
+                          behavior.severity === 'medium' ? 'bg-orange-100 text-orange-700' :
+                          'bg-yellow-100 text-yellow-700'
+                        }`}>
+                          {behavior.severity}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400 text-center py-1">No behaviors detected</div>
+                )}
+              </div>
+            )}
+
+            {/* View Details Button - Always show if camera has any AI services */}
+            {(hasInOutCounting || camera.ai_services?.includes('behavior_detection')) && (
+              <button
+                onClick={() => router.push('/dashboard/in-out')}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <BarChart3 className="w-3 h-3" />
+                View Dashboard
+              </button>
+            )}
           </div>
         </div>
 
@@ -734,6 +847,28 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   <div className="text-slate-900">{taskInfo?.zones?.length ?? 0}</div>
                 </div>
               </div>
+              {hasInOutCounting && inOutCounts && (
+                <div className="mt-4 grid md:grid-cols-3 gap-4">
+                  <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                    <div className="text-sm text-green-600 mb-2 flex items-center">
+                      <TrendingUp className="w-4 h-4 mr-1" />
+                      Count In
+                    </div>
+                    <div className="text-2xl font-bold text-green-900">{inOutCounts.count_in}</div>
+                  </div>
+                  <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                    <div className="text-sm text-blue-600 mb-2 flex items-center">
+                      <TrendingDown className="w-4 h-4 mr-1" />
+                      Count Out
+                    </div>
+                    <div className="text-2xl font-bold text-blue-900">{inOutCounts.count_out}</div>
+                  </div>
+                  <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                    <div className="text-sm text-purple-600 mb-2">Net (Inside)</div>
+                    <div className="text-2xl font-bold text-purple-900">{inOutCounts.cumulative}</div>
+                  </div>
+                </div>
+              )}
               <div className="mt-4 grid md:grid-cols-2 gap-6 max-h-48 overflow-auto">
                 <div>
                   <div className="text-sm font-medium text-slate-700 mb-2">{t('zones')}</div>
@@ -798,7 +933,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string>('');
   const [currentDrawing, setCurrentDrawing] = useState<any>(null);
-  const [drawingMode, setDrawingMode] = useState<'zone' | null>(null);
+  const [drawingMode, setDrawingMode] = useState<'zone' | 'line' | null>(null);
   const [drawSize, setDrawSize] = useState<{ w: number; h: number } | null>(null);
   const [contentBox, setContentBox] = useState<{
     displayW: number; displayH: number; offsetX: number; offsetY: number; naturalW: number; naturalH: number
@@ -857,6 +992,36 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
   };
 
+  const drawLine = (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false) => {
+    if (!p1 || !p2) return;
+
+    // Convert coordinates if needed
+    const point1 = (p1.x !== undefined && p1.y !== undefined)
+      ? { x: p1.x, y: p1.y }
+      : normalizedToCanvas(p1.fx || 0, p1.fy || 0, ctx.canvas);
+    
+    const point2 = (p2.x !== undefined && p2.y !== undefined)
+      ? { x: p2.x, y: p2.y }
+      : normalizedToCanvas(p2.fx || 0, p2.fy || 0, ctx.canvas);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(isDraft ? [5, 5] : []);
+    ctx.beginPath();
+    ctx.moveTo(point1.x, point1.y);
+    ctx.lineTo(point2.x, point2.y);
+    ctx.stroke();
+
+    // Draw endpoints
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(point1.x, point1.y, 6, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(point2.x, point2.y, 6, 0, 2 * Math.PI);
+    ctx.fill();
+  };
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -875,7 +1040,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       }
 
       // Convert drawn areas to backend format using normalized coordinates
-      // For now, we'll store the normalized coordinates and convert them in handleAddCamera
       const zones = drawnAreas
         .filter(area => area.type === 'zone' && area.isComplete)
         .map((area, index) => ({
@@ -883,6 +1047,20 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           name: `Zone ${index + 1}`,
           points: area.points.map((p: any) => ({ x: p.x, y: p.y, fx: p.fx, fy: p.fy }))
         }));
+
+      // Convert drawn lines to backend format - preserve normalized coordinates
+      const lines = drawnAreas
+        .filter(area => area.type === 'line' && area.isComplete)
+        .map((area, index) => {
+          // Determine if it's IN or OUT line based on name or order
+          const isIn = area.name?.toLowerCase().includes('in') || index === 0;
+          return {
+            id: `line_${index + 1}`,
+            name: isIn ? 'IN' : 'OUT',
+            p1: { fx: area.p1.fx, fy: area.p1.fy }, // Store normalized coordinates
+            p2: { fx: area.p2.fx, fy: area.p2.fy }  // Store normalized coordinates
+          };
+        });
 
       const cameraData = {
         name: formData.name.trim(),
@@ -892,6 +1070,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         skip_frame: formData.skip_frame,
         allowMultipleAreas: formData.allowMultipleAreas,
         zones,
+        lines,
         canvasSize: drawSize ? { w: drawSize.w, h: drawSize.h } : null,
         contentBox: contentBox ? { ...contentBox } : null
       };
@@ -1156,6 +1335,31 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     
     if (drawingMode === 'zone') {
       handleZoneClick(x, y, fx, fy);
+    } else if (drawingMode === 'line') {
+      handleLineClick(x, y, fx, fy);
+    }
+  };
+
+  const handleLineClick = (x: number, y: number, fx: number, fy: number) => {
+    if (!currentDrawing) {
+      // Start new line - first point
+      setCurrentDrawing({
+        id: Date.now(),
+        type: 'line',
+        p1: { x, y, fx, fy },
+        p2: null,
+        isComplete: false
+      });
+    } else if (currentDrawing.type === 'line' && !currentDrawing.p2) {
+      // Complete the line - second point
+      const completedLine = {
+        ...currentDrawing,
+        p2: { x, y, fx, fy },
+        isComplete: true,
+        name: `Line ${drawnAreas.filter(a => a.type === 'line').length + 1}`
+      };
+      setDrawnAreas(prev => [...prev, completedLine]);
+      setCurrentDrawing(null);
     }
   };
 
@@ -1322,6 +1526,21 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                              <button
                                type="button"
                                onClick={() => {
+                                 setDrawingMode('line');
+                                 setIsDrawing(true);
+                                 setCurrentDrawing(null);
+                               }}
+                               className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                                 drawingMode === 'line'
+                                   ? 'bg-blue-600 text-white'
+                                   : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                               }`}
+                             >
+                               Draw Line (IN/OUT)
+                             </button>
+                             <button
+                               type="button"
+                               onClick={() => {
                                  setDrawingMode(null);
                                  setIsDrawing(false);
                                  setCurrentDrawing(null);
@@ -1339,7 +1558,9 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                <strong>{t('drawing_mode')} {currentDrawing.type}:</strong> 
                                  {currentDrawing.type === 'zone' 
                                    ? ` ${currentDrawing.points.length} points (minimum 3)`
-                                   : ` ${currentDrawing.points.length}/2 points`
+                                   : currentDrawing.type === 'line'
+                                   ? ` Click ${currentDrawing.p2 ? 'to finish' : 'second point'}`
+                                   : ''
                                  }
                                </p>
                                <div className="flex space-x-2 mt-2">
@@ -1446,6 +1667,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                               currentDrawing={currentDrawing}
                               drawingMode={drawingMode}
                               drawZone={drawZone}
+                              drawLine={drawLine}
                             />
                           </div>
                   
@@ -1581,8 +1803,8 @@ export default function CamerasPage() {
 
   const handleAddCamera = async (cameraData: any) => {
     try {
-      // Extract zones for future config API (optional)
-      const { zones, ...cameraConfig } = cameraData;
+      // Extract zones and lines for future config API (optional)
+      const { zones, lines, ...cameraConfig } = cameraData;
 
       // Build backend payload according to CameraCreate
       // Ensure a store exists; create a default one if backend has none
@@ -1606,11 +1828,18 @@ export default function CamerasPage() {
         throw new Error('No store available');
       }
 
+      // Auto-add in_out_counting if lines are drawn
+      const hasLines = lines && lines.length >= 2;
+      const aiServices = ['people_counting', 'behavior_detection'];
+      if (hasLines) {
+        aiServices.push('in_out_counting');
+      }
+
       const payload = {
         store_id: storeId,
         name: cameraConfig.name,
         source: cameraConfig.source, // RTSP URL only
-        ai_services: ['people_counting', 'behavior_detection'],
+        ai_services: aiServices,
         model_name: cameraConfig.model_name || 'yolov8n.pt',
         device: cameraConfig.device || 'auto',
         skip_frame: cameraConfig.skip_frame || 3
@@ -1662,8 +1891,6 @@ export default function CamerasPage() {
 
       // Persist zones to backend tasks using normalized coordinates
       try {
-        const taskType: 'zone' = 'zone'; // Only zones are supported now
-        
         // Prefer frame dimensions from preview contentBox (most accurate), fallback to backend fetch
         const frameSize = (() => {
           // Use contentBox natural dimensions if available (from preview media element)
@@ -1753,31 +1980,84 @@ export default function CamerasPage() {
         const frameW = finalFrameSize.w;
         const frameH = finalFrameSize.h;
         
-        console.log('Frame dimensions for coordinate conversion:', frameW, 'x', frameH);
-        console.log('Original zones with normalized coords:', zones);
-        
         // Backend schemas require integer pixels; convert from normalized to frame pixels
         const scaledZones = zones.map((z: any) => ({
           name: z.name,
-          polygon: z.points.map((p: any) => [
-            Math.round((p.fx || 0) * frameW),
-            Math.round((p.fy || 0) * frameH)
-          ]),
+          polygon: z.points.map((p: any) => {
+            // Ensure we have normalized coordinates
+            const fx = p.fx ?? 0;
+            const fy = p.fy ?? 0;
+            return [
+              Math.round(Math.max(0, Math.min(1, fx)) * frameW),
+              Math.round(Math.max(0, Math.min(1, fy)) * frameH)
+            ];
+          }),
           is_active: true,
           camera_id: created.id,
         }));
-        
-        console.log('Converted zones:', scaledZones);
 
-        if (scaledZones.length > 0) {
+        // Convert lines if present - convert normalized coordinates to pixel coordinates
+        const scaledLines = lines && lines.length > 0 ? lines.map((l: any) => {
+          // Lines should have normalized coordinates {fx, fy} in p1 and p2
+          const p1_fx = (l.p1 && typeof l.p1 === 'object' && 'fx' in l.p1) ? l.p1.fx : 0;
+          const p1_fy = (l.p1 && typeof l.p1 === 'object' && 'fy' in l.p1) ? l.p1.fy : 0;
+          const p2_fx = (l.p2 && typeof l.p2 === 'object' && 'fx' in l.p2) ? l.p2.fx : 0;
+          const p2_fy = (l.p2 && typeof l.p2 === 'object' && 'fy' in l.p2) ? l.p2.fy : 0;
+          
+          // Clamp normalized coordinates to [0, 1] range
+          const clamped_p1_fx = Math.max(0, Math.min(1, p1_fx));
+          const clamped_p1_fy = Math.max(0, Math.min(1, p1_fy));
+          const clamped_p2_fx = Math.max(0, Math.min(1, p2_fx));
+          const clamped_p2_fy = Math.max(0, Math.min(1, p2_fy));
+          
+          // Convert normalized to pixel coordinates
+          const p1_pixel = [
+            Math.round(clamped_p1_fx * frameW),
+            Math.round(clamped_p1_fy * frameH)
+          ];
+          const p2_pixel = [
+            Math.round(clamped_p2_fx * frameW),
+            Math.round(clamped_p2_fy * frameH)
+          ];
+          
+          // Log for debugging if needed
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Converting line:', l.name, 
+              'normalized p1:', [clamped_p1_fx, clamped_p1_fy], 
+              'normalized p2:', [clamped_p2_fx, clamped_p2_fy],
+              'frame:', frameW, 'x', frameH,
+              'pixel p1:', p1_pixel, 'pixel p2:', p2_pixel);
+          }
+          
+          return {
+            name: l.name,
+            p1: p1_pixel,
+            p2: p2_pixel,
+            is_active: true,
+            camera_id: created.id,
+          };
+        }) : undefined;
+
+        console.log('Converted lines:', scaledLines);
+
+        const hasZones = scaledZones && scaledZones.length > 0;
+        const hasLines = scaledLines && scaledLines.length > 0;
+        const finalTaskType: 'zone' | 'line' | 'both' = hasZones && hasLines ? 'both' : hasZones ? 'zone' : 'line';
+
+        if (hasZones || hasLines) {
           await tasksApi.setCameraTasks(created.id, {
-            task_type: taskType,
-            zones: scaledZones
+            task_type: finalTaskType,
+            zones: scaledZones,
+            lines: scaledLines
           });
+          console.log('✅ Tasks saved successfully:', { zones: scaledZones?.length || 0, lines: scaledLines?.length || 0 });
         }
       } catch (e) {
-        console.warn('Failed to save tasks (zones):', e);
+        console.warn('Failed to save tasks (zones/lines):', e);
       }
+      
+      // Refresh camera list to ensure taskInfo is loaded
+      await loadCameras();
 
       // Refresh list from backend to reflect final state (but preserve running status if we detected it)
       const finalCameras = await cameraApi.getCameras();
@@ -1799,19 +2079,50 @@ export default function CamerasPage() {
 
   const handleToggleCamera = async (id: string, isActive: boolean) => {
     try {
-      // Invert current state on click: if active -> stop; if inactive -> start
-      if (isActive) {
-        await cameraApi.stopCamera(id);
-        toast.success(t('camera_stopped'));
-      } else {
-        await cameraApi.startCamera(id);
-        toast.success(t('camera_started'));
+      // Find the camera to get its current state
+      const camera = cameras.find(c => c.id === id);
+      if (!camera) {
+        toast.error('Camera not found');
+        return;
       }
-      // Refresh list to reflect real backend state
+      
+      // Use the camera's current state, not the passed parameter
+      // The button passes !camera.is_active, but we need the actual current state
+      if (camera.is_active) {
+        // Stop camera
+        try {
+          await cameraApi.stopCamera(id);
+          toast.success(t('camera_stopped'));
+        } catch (error: any) {
+          // Even if stop fails, try to refresh state
+          console.warn('Stop camera warning:', error);
+          const errorMessage = error.response?.data?.detail || error.message || 'Failed to stop camera';
+          toast.error(errorMessage);
+        }
+      } else {
+        // Start camera
+        try {
+          await cameraApi.startCamera(id);
+          toast.success(t('camera_started'));
+        } catch (error: any) {
+          console.error('Failed to start camera:', error);
+          const errorMessage = error.response?.data?.detail || error.message || 'Failed to start camera';
+          toast.error(errorMessage);
+        }
+      }
+      
+      // Always refresh list to reflect real backend state
       await loadCameras();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to toggle camera', error);
-      toast.error(t('failed_toggle_camera'));
+      const errorMessage = error.response?.data?.detail || error.message || t('failed_toggle_camera');
+      toast.error(errorMessage);
+      // Still try to refresh to get current state
+      try {
+        await loadCameras();
+      } catch (e) {
+        console.error('Failed to refresh cameras after toggle error:', e);
+      }
     }
   };
 
@@ -1821,8 +2132,12 @@ export default function CamerasPage() {
         await cameraApi.deleteCamera(id);
         await loadCameras();
         toast.success(t('camera_deleted'));
-      } catch (error) {
-        toast.error(t('camera_failed_delete'));
+      } catch (error: any) {
+        console.error('Failed to delete camera:', error);
+        // Don't show generic error - show the actual error message
+        const errorMessage = error.response?.data?.detail || error.message || t('camera_failed_delete');
+        toast.error(`Failed to delete camera: ${errorMessage}`);
+        // Don't reload cameras on error - keep the list as is
       }
     }
   };

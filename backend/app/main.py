@@ -39,6 +39,23 @@ app.include_router(api_router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
+    """Initialize database on startup with retry logic"""
+    import time
+    max_retries = 10
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("✅ Database connection established and tables created")
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"⚠️ Database not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                print(f"❌ Failed to connect to database after {max_retries} attempts: {e}")
+                # Don't raise - let the app start and retry on first request
+                print("⚠️ Application will start but database operations may fail until connection is established")
 
 

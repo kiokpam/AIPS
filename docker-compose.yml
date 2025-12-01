@@ -9,6 +9,11 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aips"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   backend:
     build: ./backend
@@ -16,17 +21,13 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg://aips:aips@db:5432/aips
       - CORS_ORIGINS=http://localhost:3000
-      - PEOPLE_COUNTING_URL=http://people-counting:8001
-      - BEHAVIOR_DETECTION_URL=http://behavior-detection:8002
       - JWT_SECRET=dev-secret-change-me
       - JWT_EXPIRES_SECONDS=3600
-      - ENABLE_AI_SERVICES=false
     ports:
       - "8000:8000"
     depends_on:
-      - db
-      - people-counting
-      - behavior-detection
+      db:
+        condition: service_healthy
 
   frontend:
     build: ./frontend
@@ -41,41 +42,6 @@ services:
       - /app/node_modules
       - /app/.next
 
-  people-counting:
-    build: ./ai/people-counting
-    ports:
-      - "8001:8001"
-    environment:
-      - BACKEND_URL=http://backend:8000
-      - AI_CORE_URL=http://ai-core:8003
-    depends_on:
-      - ai-core
-
-  behavior-detection:
-    build: ./ai/behavior-detection
-    ports:
-      - "8002:8002"
-    environment:
-      - BACKEND_URL=http://backend:8000
-      - AI_CORE_URL=http://ai-core:8003
-    depends_on:
-      - ai-core
-
-  ai-core:
-    build: ./ai/ai-core
-    ports:
-      - "8003:8003"
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-    volumes:
-      - ./models:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
 volumes:
   db_data:

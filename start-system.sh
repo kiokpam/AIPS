@@ -73,24 +73,8 @@ else
     echo "❌ Frontend: Not ready"
 fi
 
-# Check AI services
-if check_http_endpoint "http://localhost:8001/health"; then
-    echo "✅ People Counting: Ready"
-else
-    echo "❌ People Counting: Not ready"
-fi
-
-if check_http_endpoint "http://localhost:8002/health"; then
-    echo "✅ Behavior Detection: Ready"
-else
-    echo "❌ Behavior Detection: Not ready"
-fi
-
-if check_http_endpoint "http://localhost:8003/health"; then
-    echo "✅ AI Core: Ready"
-else
-    echo "❌ AI Core: Not ready"
-fi
+# Note: AI services can be added later by AI engineers
+# See ai/README.md for integration guide
 
 echo ""
 echo "🎉 AIPS System is starting up!"
@@ -98,9 +82,8 @@ echo "=================================================="
 echo "📱 Frontend:     http://localhost:3000"
 echo "🔧 Backend API:  http://localhost:8000"
 echo "📊 API Docs:     http://localhost:8000/docs"
-echo "📹 People Count: http://localhost:8001"
-echo "🧠 Behavior:     http://localhost:8002"
-echo "🤖 AI Core:      http://localhost:8003"
+echo ""
+echo "ℹ️  AI Services: Not configured (see ai/README.md for integration)"
 echo ""
 echo "🔐 Authentication:"
 echo "   Use POST /api/auth/signup to create your first manager account."

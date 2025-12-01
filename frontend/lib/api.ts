@@ -226,40 +226,6 @@ export const cameraApi = {
   },
 };
 
-// Task types
-export interface TaskZoneCreate {
-  name: string;
-  polygon: number[][]; // [[x,y], ...]
-  is_active?: boolean;
-}
-
-export interface TaskLineCreate {
-  name: string;
-  p1: number[]; // [x,y]
-  p2: number[]; // [x,y]
-  is_active?: boolean;
-}
-
-export interface TaskSetRequest {
-  task_type: 'zone' | 'line' | 'both';
-  zones?: TaskZoneCreate[] | null;
-  lines?: TaskLineCreate[] | null;
-}
-
-export const tasksApi = {
-  setCameraTasks: async (cameraId: string, payload: TaskSetRequest) => {
-    const response = await api.post(`/tasks/camera/${cameraId}/set`, payload);
-    return response.data;
-  },
-  getCameraTaskConfig: async (cameraId: string) => {
-    const response = await api.get(`/tasks/camera/${cameraId}/config`);
-    return response.data;
-  },
-  clearCameraTasks: async (cameraId: string) => {
-    const response = await api.post(`/tasks/camera/${cameraId}/clear`);
-    return response.data;
-  },
-};
 
 export const systemApi = {
   // Get system stats
@@ -331,6 +297,7 @@ export const uploadApi = {
     return response.data;
   },
 };
+
 
 export interface StoreMemberAccountCreate {
   username: string;
@@ -560,6 +527,19 @@ export const eventsApi = {
 
   acknowledgeAllAlerts: async (storeId?: string): Promise<{ status: string; message: string; count: number }> => {
     const response = await api.put('/events/alerts/acknowledge-all', null, { params: storeId ? { store_id: storeId } : {} });
+    return response.data;
+  },
+
+  // Get recent behaviors for a camera
+  getCameraRecentBehaviors: async (cameraId: string, limit: number = 5): Promise<Array<{
+    id: string;
+    type: string;
+    severity: string;
+    message: string;
+    timestamp: string;
+    confidence?: number;
+  }>> => {
+    const response = await api.get(`/events/camera/${cameraId}/recent-behaviors`, { params: { limit } });
     return response.data;
   },
 };

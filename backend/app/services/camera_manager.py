@@ -1,29 +1,19 @@
 """
 Camera Management Service
-Handles camera registration, stream management, and integration with AI services
+Handles camera registration, stream management, and frame processing
 """
 
 import os
 import time
 import threading
-import asyncio
-import httpx
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import cv2
 import numpy as np
-import base64
 from collections import deque
 
 # Mitigate FFmpeg threading assertion issues on some Windows setups
 os.environ.setdefault('OPENCV_FFMPEG_THREADS', '1')
-
-# Configuration
-PEOPLE_COUNTING_URL = os.getenv("PEOPLE_COUNTING_URL", "http://localhost:8001")
-BEHAVIOR_DETECTION_URL = os.getenv("BEHAVIOR_DETECTION_URL", "http://localhost:8002")
-AI_CORE_URL = os.getenv("AI_CORE_URL", "http://localhost:8003")
-PEOPLE_COUNTING_MODE = os.getenv("PEOPLE_COUNTING_MODE", "ai_core").lower()  # 'ai_core' | 'external'
-ENABLE_AI_SERVICES = os.getenv("ENABLE_AI_SERVICES", "true").lower() == "true"
 
 class VideoStream:
     """Enhanced video stream handler for RTSP, webcam, and file sources"""
@@ -221,8 +211,6 @@ class CameraWorker:
         self.running = False
         self.thread = None
         self.frame_count = 0
-        self.last_ai_processing = 0
-        self.ai_processing_interval = self.skip_frame  # Use skip_frame for processing interval
         
         # Task configuration
         self.zones = []  # List of zone configurations
@@ -235,23 +223,9 @@ class CameraWorker:
         self.cached_rendered_frame = None
         self.frame_times = deque(maxlen=90)  # ~3s buffer for FPS calculation
         
-        # AI service clients
-        self.people_counting_client = None
-        self.behavior_detection_client = None
-        self.ai_core_client = None
-        self._pc_registered = False
-
-        if ENABLE_AI_SERVICES:
-            self.people_counting_client = httpx.AsyncClient(timeout=10.0)
-            self.behavior_detection_client = httpx.AsyncClient(timeout=10.0)
-            self.ai_core_client = httpx.AsyncClient(timeout=10.0)
-        
         # Statistics
         self.stats = {
             "frames_processed": 0,
-            "ai_processing_count": 0,
-            "last_processing_time": None,
-            "avg_processing_time_ms": 0,
             "errors": 0,
             "current_count": 0,
             "model_loaded": False,
@@ -277,31 +251,6 @@ class CameraWorker:
             self.stream.stop()
         if self.thread:
             self.thread.join(timeout=2)
-        
-        # Close HTTP clients (ensure event loop context)
-        if self.people_counting_client:
-            try:
-                asyncio.run(self.people_counting_client.aclose())
-            except RuntimeError:
-                # If an event loop is already running elsewhere, fall back to threadsafe
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self.people_counting_client.aclose())
-                loop.close()
-        if self.behavior_detection_client:
-            try:
-                asyncio.run(self.behavior_detection_client.aclose())
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self.behavior_detection_client.aclose())
-                loop.close()
-
-        if self.ai_core_client:
-            try:
-                asyncio.run(self.ai_core_client.aclose())
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self.ai_core_client.aclose())
-                loop.close()
     
     def _run(self):
         """Main processing loop"""
@@ -314,15 +263,8 @@ class CameraWorker:
                 
                 self.frame_count += 1
                 
-                # Process with AI services at intervals
-                if self.frame_count % self.ai_processing_interval == 0:
-                    # Run coroutine in this worker thread using a fresh event loop
-                    try:
-                        asyncio.run(self._process_with_ai(frame))
-                    except RuntimeError:
-                        loop = asyncio.new_event_loop()
-                        loop.run_until_complete(self._process_with_ai(frame))
-                        loop.close()
+                # Frame processing can be extended here for future AI services
+                # AI engineers can integrate their services by extending this method
                 
                 time.sleep(0.01)  # Small delay to prevent excessive CPU usage
                 
@@ -331,215 +273,6 @@ class CameraWorker:
                 self.stats["errors"] += 1
                 time.sleep(0.1)
     
-    async def _process_with_ai(self, frame: np.ndarray):
-        """Process frame with AI services"""
-        if not ENABLE_AI_SERVICES:
-            return
-
-        start_time = time.time()
-        
-        try:
-            # Encode frame to base64
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            frame_data = base64.b64encode(buffer).decode('utf-8')
-            
-            # Process with people counting service
-            if "people_counting" in self.ai_services:
-                await self._process_people_counting(frame_data)
-            
-            # Process with behavior detection service
-            if "behavior_detection" in self.ai_services:
-                await self._process_behavior_detection(frame_data)
-            
-            # Update statistics
-            processing_time = (time.time() - start_time) * 1000
-            self.stats["ai_processing_count"] += 1
-            self.stats["last_processing_time"] = datetime.now().isoformat()
-            
-            # Update average processing time
-            if self.stats["avg_processing_time_ms"] == 0:
-                self.stats["avg_processing_time_ms"] = processing_time
-            else:
-                self.stats["avg_processing_time_ms"] = (
-                    self.stats["avg_processing_time_ms"] * 0.9 + processing_time * 0.1
-                )
-            
-        except Exception as e:
-            print(f"AI processing error for camera {self.camera_id}: {e}")
-            self.stats["errors"] += 1
-    
-    async def _process_people_counting(self, frame_data: str):
-        """Process frame with people counting service"""
-        try:
-            # Get current task configuration
-            zones = []
-            lines = []
-            
-            for zone in self.zones:
-                zones.append({
-                    "id": zone["id"],
-                    "polygon": zone["polygon"]
-                })
-            
-            for line in self.lines:
-                lines.append({
-                    "id": line["id"],
-                    "p1": line["p1"],
-                    "p2": line["p2"]
-                })
-            
-            # Create camera config with current tasks
-            config = {
-                "camera_id": self.camera_id,
-                "store_id": self.store_id,
-                "rtsp_url": self.source,
-                "zones": zones,
-                "lines": lines,
-                "model_name": self.model_name,
-                "device": self.device,
-                "conf_thresh": self.conf_thresh
-            }
-            
-            payload = {
-                "camera_id": self.camera_id,
-                "frame_data": frame_data,
-                "config": config
-            }
-            
-            async def _ai_core_count() -> int:
-                det_resp = await self.ai_core_client.post(
-                    f"{AI_CORE_URL}/detect",
-                    json={
-                        "frame_data": frame_data,
-                        "model_name": self.model_name,
-                        "device": self.device,
-                        "classes": [0],
-                        "conf_thresh": self.conf_thresh,
-                    },
-                    timeout=8.0,
-                )
-                det_resp.raise_for_status()
-                det = det_resp.json()
-                detections = det.get("detections", [])
-                total = 0
-                for zone_cfg in zones:
-                    try:
-                        cz_resp = await self.ai_core_client.post(
-                            f"{AI_CORE_URL}/count-zone",
-                            json={
-                                "frame_data": frame_data,
-                                "detections": detections,
-                                "zone_polygon": zone_cfg.get("polygon", []),
-                            },
-                            timeout=6.0,
-                        )
-                        if cz_resp.status_code == 200:
-                            cz = cz_resp.json()
-                            total += int(cz.get("count", 0))
-                    except Exception:
-                        continue
-                return total
-
-            async def _external_infer() -> Optional[int]:
-                try:
-                    response = await self.people_counting_client.post(
-                        f"{PEOPLE_COUNTING_URL}/infer",
-                        json=payload,
-                        timeout=5.0
-                    )
-                    if response.status_code == 200:
-                        result = response.json()
-                        return int(sum(z.get("count", 0) for z in result.get("zones", [])))
-                    else:
-                        try:
-                            err_text = response.text
-                        except Exception:
-                            err_text = "<no body>"
-                        print(f"People counting HTTP {response.status_code} for {self.camera_id}: {err_text}")
-                except Exception:
-                    return None
-                return None
-
-            total_count = 0
-            if PEOPLE_COUNTING_MODE == "ai_core":
-                # Use AI Core directly
-                total_count = await _ai_core_count()
-            else:
-                # Try external, fallback to AI Core
-                ext = await _external_infer()
-                if ext is not None:
-                    total_count = ext
-                else:
-                    total_count = await _ai_core_count()
-
-            self.current_count = total_count
-            self.stats["current_count"] = total_count
-            print(f"People counting ({PEOPLE_COUNTING_MODE}) for {self.camera_id}: {total_count}")
-            
-        except Exception as e:
-            print(f"People counting error: {e}")
-
-    async def _register_people_counting_if_needed(self):
-        """Register camera with people-counting service to initialize trackers for line counting."""
-        if self._pc_registered:
-            return
-        try:
-            zones = [{
-                "id": z.get("id", z.get("name", "zone")),
-                "polygon": z.get("polygon", [])
-            } for z in self.zones]
-            lines = [{
-                "id": l.get("id", l.get("name", "line")),
-                "p1": l.get("p1"),
-                "p2": l.get("p2")
-            } for l in self.lines]
-
-            if not zones and not lines:
-                return
-
-            config = {
-                "camera_id": self.camera_id,
-                "store_id": self.store_id,
-                "rtsp_url": self.source,
-                "zones": zones,
-                "lines": lines,
-                "model_name": self.model_name,
-                "device": self.device,
-                "conf_thresh": self.conf_thresh,
-            }
-            resp = await self.people_counting_client.post(
-                f"{PEOPLE_COUNTING_URL}/camera/register",
-                json=config,
-                timeout=5.0,
-            )
-            if resp.status_code == 200:
-                self._pc_registered = True
-        except Exception as e:
-            print(f"People counting register error: {e}")
-    
-    async def _process_behavior_detection(self, frame_data: str):
-        """Process frame with behavior detection service"""
-        try:
-            payload = {
-                "camera_id": self.camera_id,
-                "frame_data": frame_data
-            }
-            
-            response = await self.behavior_detection_client.post(
-                f"{BEHAVIOR_DETECTION_URL}/infer",
-                json=payload,
-                timeout=5.0
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                # Handle behavior detection results
-                if result.get("anomalies"):
-                    print(f"Anomalies detected for {self.camera_id}: {result['anomalies']}")
-            
-        except Exception as e:
-            print(f"Behavior detection error: {e}")
-    
     def update_task_config(self, zones: List[Dict[str, Any]], lines: List[Dict[str, Any]]):
         """Update task configuration for this camera"""
         self.zones = zones
@@ -547,15 +280,7 @@ class CameraWorker:
         # Mark whether we currently have any task configured
         self.stats["has_task"] = bool(self.zones or self.lines)
         print(f"Updated task config for camera {self.camera_id}: {len(zones)} zones, {len(lines)} lines")
-        # Register with people-counting if service is enabled
-        if "people_counting" in self.ai_services:
-            try:
-                # run async registration in a fresh loop since we are in worker thread
-                asyncio.run(self._register_people_counting_if_needed())
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self._register_people_counting_if_needed())
-                loop.close()
+        # AI engineers can extend this method to register with their services
     
     def clear_tasks(self):
         """Clear all tasks for this camera"""
@@ -563,17 +288,7 @@ class CameraWorker:
         self.lines = []
         self.current_count = 0
         print(f"Cleared tasks for camera {self.camera_id}")
-        # Unregister from people-counting to free trackers
-        try:
-            if self._pc_registered:
-                # best-effort async call
-                asyncio.run(self.people_counting_client.post(
-                    f"{PEOPLE_COUNTING_URL}/camera/{self.camera_id}/unregister",
-                    timeout=3.0,
-                ))
-                self._pc_registered = False
-        except Exception:
-            pass
+        # AI engineers can extend this method to unregister from their services
     
     def get_task_config(self) -> Dict[str, Any]:
         """Get current task configuration"""
@@ -599,7 +314,6 @@ class CameraWorker:
             self.max_det = kwargs['max_det']
         if 'skip_frame' in kwargs:
             self.skip_frame = max(1, kwargs['skip_frame'])
-            self.ai_processing_interval = self.skip_frame
     
     def get_config(self) -> Dict[str, Any]:
         """Get current camera configuration"""

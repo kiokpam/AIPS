@@ -13,7 +13,7 @@ Services (Dockerized):
 - backend/ (FastAPI)
   - REST API for cameras, tasks (zones/lines), frames, preview, health.
   - Manages `CameraWorker` instances (OpenCV capture, overlays, AI integration).
-  - TimescaleDB/Postgres via SQLAlchemy models and Alembic migrations.
+  - TimescaleDB/Postgres via SQLAlchemy models with automatic table creation.
 
 - frontend/ (Next.js 14)
   - Web UI for camera CRUD, live preview, drawing zones/lines, and configuration.
@@ -41,7 +41,6 @@ backend/                # FastAPI backend service
       camera_manager.py # CameraWorker, frame processing, AI integration
       streaming_service.py # MJPEG generation and preview helpers
     main.py             # App factory, CORS, router wiring
-  alembic/              # Database migrations
 
 frontend/               # Next.js frontend application
   app/                  # Next.js app router pages
@@ -159,7 +158,6 @@ Backend (FastAPI with reload):
 ```bash
 cd backend
 pip install -r requirements-dev.txt || pip install -r requirements.txt
-alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -229,12 +227,10 @@ cd backend
 uvicorn app.main:app --reload --port 8000
 ```
 
-Database migrations:
+Database setup:
 ```bash
-cd backend
-alembic upgrade head
-# create migration when models change
-alembic revision -m "message" --autogenerate
+# Database tables are automatically created on backend startup
+# No manual migration steps required
 ```
 
 AI services (examples):

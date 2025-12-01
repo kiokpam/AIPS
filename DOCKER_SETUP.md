@@ -168,7 +168,8 @@ docker stats
 docker-compose exec db psql -U aips -d aips
 
 # Run database migrations
-docker-compose exec backend alembic upgrade head
+# Database tables are automatically created on backend startup
+# No manual migration steps required
 
 # Backup database
 docker-compose exec db pg_dump -U aips aips > backup.sql

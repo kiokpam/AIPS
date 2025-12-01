@@ -115,6 +115,64 @@ def get_people_counts(
         for row in rows
     ]
 
+@router.get("/camera/{camera_id}/recent-behaviors")
+def get_camera_recent_behaviors(
+    camera_id: str,
+    limit: int = Query(5, ge=1, le=20),
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """Get recent behaviors/alerts for a specific camera"""
+    # Verify camera exists and user has access
+    camera = (
+        db.query(CameraModel)
+        .filter(CameraModel.id == camera_id, CameraModel.org_id == current.organization.id)
+        .first()
+    )
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    # Check permissions for members
+    if current.role == MembershipRole.member:
+        permission = (
+            db.query(MemberPermission)
+            .filter(
+                MemberPermission.membership_id == current.id,
+                MemberPermission.camera_id == camera_id,
+                MemberPermission.can_view == True
+            )
+            .first()
+        )
+        if not permission:
+            raise HTTPException(status_code=403, detail="You don't have permission to view this camera")
+    
+    # Get recent alerts for this camera
+    query = (
+        db.query(AlertModel)
+        .filter(
+            AlertModel.camera_id == camera_id,
+            AlertModel.org_id == current.organization.id,
+            AlertModel.type == "anomaly"  # Only behavior/anomaly alerts
+        )
+        .order_by(AlertModel.timestamp.desc())
+        .limit(limit)
+    )
+    
+    alerts = query.all()
+    
+    return [
+        {
+            "id": alert.id,
+            "type": alert.anomaly_type or "unknown",
+            "severity": alert.severity,
+            "message": alert.message,
+            "timestamp": alert.timestamp.isoformat(),
+            "confidence": alert.confidence,
+        }
+        for alert in alerts
+    ]
+
+
 @router.get("/alerts", response_model=AlertsResponse)
 def get_alerts(
     limit: int = Query(50, ge=1, le=100),

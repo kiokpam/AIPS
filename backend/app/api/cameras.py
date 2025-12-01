@@ -18,8 +18,6 @@ from app.api.deps import (
 )
 from app.models.core import (
     Camera as CameraModel,
-    CountingLine as CountingLineModel,
-    CountingZone as CountingZoneModel,
     MemberPermission,
     MembershipRole,
     Store as StoreModel,
@@ -150,8 +148,6 @@ def create_camera(
         db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera stream")
 
-    _apply_existing_tasks(db, item.id)
-
     return CameraSchema(
         id=item.id,
         store_id=item.store_id,
@@ -250,7 +246,6 @@ def update_camera(
         )
         if not success:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to restart camera with new configuration")
-        _apply_existing_tasks(db, camera.id)
 
     return CameraSchema(
         id=camera.id,
@@ -274,12 +269,42 @@ def delete_camera(
     current: CurrentMembership = Depends(require_manager),
     db: Session = Depends(get_db),
 ):
-    """Delete a camera"""
-    camera = _get_camera_or_404(db, camera_id, current.organization.id)
-    camera_manager.remove_camera(camera_id)
-    db.delete(camera)
-    db.commit()
-    return {"message": "Camera deleted successfully"}
+    """Delete a camera with proper cleanup"""
+    try:
+        camera = _get_camera_or_404(db, camera_id, current.organization.id)
+        
+        # 1. Remove from camera manager (stops any running streams/workers)
+        # This is safe to call even if camera is not running
+        try:
+            camera_manager.remove_camera(camera_id)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to remove camera {camera_id} from manager (may not be running): {e}")
+        
+        # 2. Also unregister from streaming service
+        try:
+            from app.services.streaming_service import streaming_service
+            streaming_service.stop_stream(camera_id)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to stop stream for camera {camera_id}: {e}")
+        
+        # 3. Delete from database (CASCADE will handle related records)
+        db.delete(camera)
+        db.commit()
+        
+        return {"message": "Camera deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to delete camera {camera_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete camera: {str(e)}"
+        )
 
 @router.get("/{camera_id}/stats", response_model=CameraStats)
 def get_camera_stats(
@@ -362,8 +387,14 @@ def start_camera(
 ):
     """Start a camera worker"""
     camera = _get_camera_or_404(db, camera_id, current.organization.id)
+    
+    # If camera is already running in manager, just update database state
     if camera_manager.get_camera(camera_id):
+        camera.is_active = True
+        db.commit()
         return {"message": "Camera is already running"}
+    
+    # Try to start the camera
     success = camera_manager.add_camera(
         camera_id=camera.id,
         store_id=camera.store_id,
@@ -377,9 +408,17 @@ def start_camera(
         max_det=camera.max_det,
         skip_frame=camera.skip_frame,
     )
+    
     if not success:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera")
-    _apply_existing_tasks(db, camera.id)
+        # Update database state even if start failed
+        camera.is_active = False
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera. Check RTSP stream accessibility.")
+    
+    # Update database state to active
+    camera.is_active = True
+    db.commit()
+    
     return {"message": "Camera started successfully"}
 
 @router.post("/{camera_id}/stop")
@@ -389,10 +428,15 @@ def stop_camera(
     db: Session = Depends(get_db),
 ):
     """Stop a camera worker"""
-    _get_camera_or_404(db, camera_id, current.organization.id)
-    success = camera_manager.remove_camera(camera_id)
-    if not success:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found or not running")
+    camera = _get_camera_or_404(db, camera_id, current.organization.id)
+    
+    # Remove from camera manager (if running)
+    camera_manager.remove_camera(camera_id)
+    
+    # Update database state
+    camera.is_active = False
+    db.commit()
+    
     return {"message": "Camera stopped successfully"}
 
 @router.get("/stats/summary")
@@ -543,47 +587,6 @@ def _get_camera_or_404(db: Session, camera_id: str, org_id: str) -> CameraModel:
     if not camera:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
     return camera
-
-
-def _apply_existing_tasks(db: Session, camera_id: str) -> None:
-    camera_worker = camera_manager.get_camera(camera_id)
-    if not camera_worker:
-        return
-
-    zones = (
-        db.query(CountingZoneModel)
-        .filter(CountingZoneModel.camera_id == camera_id, CountingZoneModel.is_active == True)
-        .order_by(CountingZoneModel.name.asc())
-        .all()
-    )
-    lines = (
-        db.query(CountingLineModel)
-        .filter(CountingLineModel.camera_id == camera_id, CountingLineModel.is_active == True)
-        .order_by(CountingLineModel.name.asc())
-        .all()
-    )
-
-    zone_payload = [
-        {
-            "id": zone.id,
-            "name": zone.name,
-            "polygon": zone.polygon,
-            "is_active": zone.is_active,
-        }
-        for zone in zones
-    ]
-    line_payload = [
-        {
-            "id": line.id,
-            "name": line.name,
-            "p1": line.p1,
-            "p2": line.p2,
-            "is_active": line.is_active,
-        }
-        for line in lines
-    ]
-
-    camera_worker.update_task_config(zone_payload, line_payload)
 
 
 def _list_org_camera_ids(db: Session, org_id: str) -> List[str]:
