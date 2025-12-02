@@ -80,6 +80,19 @@ export const en = {
   lines: 'Lines',
   close: 'Close',
   confirm_delete: 'Delete this camera?',
+  
+  // Stream hints
+  stream_loading_hint: 'Loading stream... Refresh page if video doesn\'t appear',
+  refresh_hint: 'Stream not showing? Click to refresh page',
+  new_camera_hint: 'New camera added! Refresh the page if streams don\'t load properly.',
+  
+  // Behavior types
+  behavior_shoplifting: 'Shoplifting',
+  behavior_violence: 'Violence',
+  behavior_normal: 'Normal',
+  behavior_shoplifting_desc: 'Potential shoplifting behavior detected',
+  behavior_violence_desc: 'Violent behavior detected - immediate attention required',
+  behavior_normal_desc: 'Normal customer activity',
 };
 
 

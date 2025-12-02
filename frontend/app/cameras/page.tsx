@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera,
@@ -636,11 +636,24 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
             />
             {/* Client-side overlay fallback to ensure zones/lines are visible */}
             <canvas ref={overlayRef} className="absolute inset-0 pointer-events-none" />
+            
+            {/* Stream loading hint - shows when retrying */}
+            {isStarting && streamRetry > 3 && (
+              <div className="absolute bottom-12 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur-sm text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 animate-pulse">
+                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>{t('stream_loading_hint') || 'Loading stream... Refresh page if video doesn\'t appear'}</span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="video-placeholder">
             <Camera className="w-12 h-12 text-slate-400" />
             <p className="text-sm text-slate-500 mt-2">{isStarting ? t('starting') : t('camera_offline')}</p>
+            {camera.is_active && !isStarting && (
+              <p className="text-xs text-blue-500 mt-2 cursor-pointer hover:underline" onClick={() => window.location.reload()}>
+                {t('refresh_hint') || 'Stream not showing? Click to refresh page'}
+              </p>
+            )}
           </div>
         )}
         
@@ -868,11 +881,12 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                       <div key={idx} className="flex items-center justify-between text-xs">
                         <span className="text-slate-600 capitalize truncate flex-1">{behavior.type}</span>
                         <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${
-                          behavior.severity === 'high' ? 'bg-red-100 text-red-700' :
-                          behavior.severity === 'medium' ? 'bg-orange-100 text-orange-700' :
-                          'bg-yellow-100 text-yellow-700'
+                          behavior.type === 'shoplifting' ? 'bg-red-100 text-red-700' :
+                          behavior.type === 'violence' ? 'bg-purple-100 text-purple-700' :
+                          behavior.type === 'normal' ? 'bg-green-100 text-green-700' :
+                          'bg-blue-100 text-blue-700'
                         }`}>
-                          {behavior.severity}
+                          {behavior.type}
                         </span>
                       </div>
                     ))}
@@ -1047,6 +1061,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string>('');
+  const [previewNonce, setPreviewNonce] = useState<number>(Date.now());
   const [currentDrawing, setCurrentDrawing] = useState<any>(null);
   const [drawingMode, setDrawingMode] = useState<'zone' | 'line' | null>(null);
   const [drawSize, setDrawSize] = useState<{ w: number; h: number } | null>(null);
@@ -1215,6 +1230,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     setIsPreviewConnected(false);
     setPreviewUrl('');
     setPreviewError('');
+    setPreviewNonce(Date.now()); // Reset nonce for fresh connection
     setCurrentDrawing(null);
     setDrawingMode(null);
     setIsDrawing(false);
@@ -1230,10 +1246,12 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
   const handleConnectPreview = async () => {
     if (isPreviewConnected) {
-      // Disconnect preview
+      // Disconnect preview - clear URL first to stop the stream
       setPreviewUrl('');
       setIsPreviewConnected(false);
       setPreviewError('');
+      // Generate new nonce for next connection
+      setPreviewNonce(Date.now());
       toast.success('Preview disconnected');
       return;
     }
@@ -1257,9 +1275,11 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         throw new Error('Authentication required. Please log in again.');
       }
 
-      // Use backend preview endpoint for RTSP
+      // Use backend preview endpoint for RTSP with cache-busting nonce
       const encodedSource = encodeURIComponent(formData.source);
-      const sourceUrl = `${baseUrl}/preview/stream?source=${encodedSource}&token=${encodeURIComponent(token)}`;
+      const nonce = Date.now();
+      setPreviewNonce(nonce);
+      const sourceUrl = `${baseUrl}/preview/stream?source=${encodedSource}&token=${encodeURIComponent(token)}&t=${nonce}`;
       
       // Test the source first with timeout and retry
       try {
@@ -1721,49 +1741,29 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                     </div>
                   )}
                   
-                  {/* Debug Controls */}
+                  {/* Retry Preview Button - for when stream shows black */}
                   <div className="absolute top-2 right-2 flex gap-2">
                     <button
                       type="button"
                       onClick={() => {
-                        const canvas = document.querySelector('canvas');
-                        if (canvas) {
-                          const videoElement = canvas.parentElement?.querySelector('video, img');
-                          if (videoElement) {
-                            const videoRect = videoElement.getBoundingClientRect();
-                            const containerRect = canvas.parentElement?.getBoundingClientRect();
-                            console.log('=== MANUAL DEBUG ===');
-                            console.log('Video rect:', videoRect);
-                            console.log('Container rect:', containerRect);
-                            console.log('Canvas rect:', canvas.getBoundingClientRect());
-                            console.log('Canvas size:', canvas.width, 'x', canvas.height);
-                            console.log('==================');
-                          }
-                        }
+                        // Refresh the preview stream with new nonce
+                        const newNonce = Date.now();
+                        setPreviewNonce(newNonce);
+                        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                        const baseUrl = apiBaseUrl.endsWith('/api') ? apiBaseUrl : `${apiBaseUrl.replace(/\/+$/, '')}/api`;
+                        const token = localStorage.getItem('auth_token');
+                        const encodedSource = encodeURIComponent(formData.source);
+                        const newUrl = `${baseUrl}/preview/stream?source=${encodedSource}&token=${encodeURIComponent(token || '')}&t=${newNonce}`;
+                        setPreviewUrl(''); // Clear first
+                        setTimeout(() => setPreviewUrl(newUrl), 100); // Then set new URL
+                        toast.success('Refreshing preview...');
                       }}
-                      className="bg-red-500 text-white px-2 py-1 rounded text-xs"
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1 shadow-lg"
                     >
-                      Debug
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const canvas = document.querySelector('canvas');
-                        if (canvas) {
-                          const ctx = canvas.getContext('2d');
-                          if (ctx) {
-                            ctx.clearRect(0, 0, canvas.width, canvas.height);
-                            // Trigger redraw
-                            setTimeout(() => {
-                              const event = new Event('resize');
-                              window.dispatchEvent(event);
-                            }, 100);
-                          }
-                        }
-                      }}
-                      className="bg-green-500 text-white px-2 py-1 rounded text-xs"
-                    >
-                      Refresh
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Retry Preview
                     </button>
                   </div>
                 </div>
@@ -1826,16 +1826,21 @@ export default function CamerasPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingCamera, setEditingCamera] = useState<CameraType | null>(null);
+  const isInitialLoadRef = useRef(true);
 
   useEffect(() => {
     loadCameras();
   }, []);
 
-  const loadCameras = async () => {
+  const loadCameras = async (showSpinner = false) => {
     try {
-      setIsLoading(true);
+      // Only show loading spinner on initial load, not on refresh
+      if (isInitialLoadRef.current || showSpinner) {
+        setIsLoading(true);
+      }
       const list = await cameraApi.getCameras();
       setCameras(list);
+      isInitialLoadRef.current = false;
     } catch (error) {
       console.error('Failed to load cameras:', error);
       toast.error(t('failed_load_cameras'));
@@ -2110,6 +2115,14 @@ export default function CamerasPage() {
         return c;
       }));
       toast.success('Camera added' + (cameraRunning ? ' and started' : ' (check RTSP stream)'));
+      
+      // Show helpful hint about refreshing if streams don't load
+      setTimeout(() => {
+        toast(t('new_camera_hint') || 'New camera added! Refresh the page if streams don\'t load properly.', {
+          icon: '💡',
+          duration: 6000,
+        });
+      }, 2000);
     } catch (error: any) {
       console.error('Error in handleAddCamera:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Failed to create camera';

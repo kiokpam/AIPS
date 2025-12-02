@@ -39,11 +39,12 @@ app.include_router(api_router, prefix="/api")
 
 @app.on_event("startup")
 def on_startup() -> None:
-    """Initialize database on startup with retry logic"""
+    """Initialize database and services on startup"""
     import time
     max_retries = 10
     retry_delay = 2
     
+    # Initialize database
     for attempt in range(max_retries):
         try:
             Base.metadata.create_all(bind=engine)
@@ -57,5 +58,25 @@ def on_startup() -> None:
                 print(f"❌ Failed to connect to database after {max_retries} attempts: {e}")
                 # Don't raise - let the app start and retry on first request
                 print("⚠️ Application will start but database operations may fail until connection is established")
+    
+    # Initialize email service
+    try:
+        from app.services.email_service import email_service
+        email_service.initialize(
+            provider=settings.email_provider,
+            frontend_url=settings.frontend_url,
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_username=settings.smtp_username,
+            smtp_password=settings.smtp_password,
+            smtp_use_tls=settings.smtp_use_tls,
+            sendgrid_api_key=settings.sendgrid_api_key,
+            from_email=settings.email_from_address,
+            from_name=settings.email_from_name,
+        )
+        print(f"✅ Email service initialized (provider: {settings.email_provider})")
+    except Exception as e:
+        print(f"⚠️ Email service initialization failed: {e}")
+        print("⚠️ Password reset emails will not be sent")
 
 

@@ -109,25 +109,25 @@ export default function BehaviorDashboardPage() {
         cameraName: 'Entrance Camera',
         confidence: 85,
         timestamp: new Date(Date.now() - 2 * 60000),
-        description: 'Suspicious behavior detected'
+        description: 'Potential shoplifting behavior detected'
       },
       {
         id: '2',
-        type: 'loitering',
+        type: 'violence',
         storeName: 'Main Store',
         cameraName: 'Aisle 3 Camera',
-        confidence: 72,
+        confidence: 78,
         timestamp: new Date(Date.now() - 5 * 60000),
-        description: 'Person loitering for extended period'
+        description: 'Violent behavior detected - immediate attention required'
       },
       {
         id: '3',
-        type: 'crowd',
+        type: 'normal',
         storeName: 'Branch Store',
         cameraName: 'Checkout Camera',
-        confidence: 90,
+        confidence: 95,
         timestamp: new Date(Date.now() - 10 * 60000),
-        description: 'Large crowd forming'
+        description: 'Normal customer activity'
       }
     ];
 
@@ -188,9 +188,8 @@ export default function BehaviorDashboardPage() {
   const getBehaviorColor = (type: string) => {
     const colors: Record<string, string> = {
       shoplifting: 'bg-red-100 text-red-800 border-red-200',
-      loitering: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-      crowd: 'bg-orange-100 text-orange-800 border-orange-200',
-      fighting: 'bg-red-100 text-red-800 border-red-200',
+      violence: 'bg-purple-100 text-purple-800 border-purple-200',
+      normal: 'bg-green-100 text-green-800 border-green-200',
       default: 'bg-blue-100 text-blue-800 border-blue-200'
     };
     return colors[type] || colors.default;
@@ -369,8 +368,8 @@ export default function BehaviorDashboardPage() {
                 <div className="flex items-center gap-2">
                   <div className={`w-3 h-3 rounded-full ${
                     type === 'shoplifting' ? 'bg-red-500' :
-                    type === 'loitering' ? 'bg-yellow-500' :
-                    type === 'crowd' ? 'bg-orange-500' : 'bg-blue-500'
+                    type === 'violence' ? 'bg-purple-500' :
+                    type === 'normal' ? 'bg-green-500' : 'bg-blue-500'
                   }`}></div>
                   <span className="text-slate-200 capitalize">{type}</span>
                 </div>

@@ -13,6 +13,7 @@ from app.models.core import (
     Membership,
     MembershipRole,
     Organization,
+    PasswordResetToken,
     Store,
     User,
 )
@@ -20,6 +21,8 @@ from app.schemas.auth import (
     AuthResponse,
     CreateInviteRequest,
     CreateOrganizationRequest,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     GenerateJoinCodeRequest,
     InviteMemberRequest,
     InviteResponse,
@@ -36,6 +39,8 @@ from app.schemas.auth import (
     OrganizationInfo,
     OrganizationResponse,
     ProfileResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     SetMemberPasswordRequest,
     SwitchOrganizationRequest,
     UpdateMemberRoleRequest,
@@ -296,10 +301,14 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
     else:
         active_membership, active_org = membership_rows[0]
 
+    # If remember_me is true, use 7 days expiration, otherwise use default (1 hour)
+    expires_delta = timedelta(days=7) if payload.remember_me else None
+    
     token = create_access_token(
         subject=user.id,
         org_id=active_org.id,
         role=active_membership.role.value,
+        expires_delta=expires_delta,
     )
 
     return AuthResponse(
@@ -377,6 +386,163 @@ def member_login(payload: MemberLoginRequest, db: Session = Depends(get_db)) -> 
         db.refresh(organization)
     
     return _build_auth_response(db, member_user, membership, organization)
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> ForgotPasswordResponse:
+    """Request a password reset link. Sends email in production, returns link in development."""
+    import secrets
+    import logging
+    from app.services.email_service import email_service
+    
+    logger = logging.getLogger(__name__)
+    email = payload.email.lower()
+    user = db.query(User).filter(User.email == email).first()
+    
+    # Always return success to prevent email enumeration
+    # But only create token and send email if user exists
+    if user:
+        # Invalidate any existing tokens for this user
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None)
+        ).delete()
+        
+        # Generate new token
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(hours=1)  # Token expires in 1 hour
+        
+        reset_token = PasswordResetToken(
+            id=generate_id(),
+            user_id=user.id,
+            token=token,
+            expires_at=expires_at,
+            created_at=datetime.utcnow(),
+        )
+        db.add(reset_token)
+        db.commit()
+        
+        # Send password reset email
+        email_sent = email_service.send_password_reset_email(
+            to_email=user.email,
+            reset_token=token,
+            user_name=user.name
+        )
+        
+        if email_sent:
+            logger.info(f"Password reset email sent to {user.email}")
+        else:
+            logger.warning(f"Failed to send password reset email to {user.email}")
+        
+        # In development mode (console provider), also return the reset URL for testing
+        # In production (SMTP/SendGrid), don't expose the URL
+        if not email_service.is_production:
+            reset_url = f"/reset-password?token={token}"
+            return ForgotPasswordResponse(
+                message="If an account with that email exists, a password reset link has been sent.",
+                reset_url=reset_url  # Only in development
+            )
+        
+        return ForgotPasswordResponse(
+            message="If an account with that email exists, a password reset link has been sent."
+        )
+    
+    # Return same message even if user doesn't exist (security best practice)
+    return ForgotPasswordResponse(
+        message="If an account with that email exists, a password reset link has been sent."
+    )
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> ResetPasswordResponse:
+    """Reset password using a valid reset token."""
+    # Find the token
+    reset_token = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token == payload.token
+    ).first()
+    
+    if not reset_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token"
+        )
+    
+    # Check if token is expired
+    if reset_token.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has expired. Please request a new one."
+        )
+    
+    # Check if token was already used
+    if reset_token.used_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This reset token has already been used."
+        )
+    
+    # Find the user
+    user = db.query(User).filter(User.id == reset_token.user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User not found"
+        )
+    
+    # Update the password
+    user.password_hash = hash_password(payload.new_password)
+    
+    # Mark token as used
+    reset_token.used_at = datetime.utcnow()
+    
+    db.commit()
+    
+    return ResetPasswordResponse(
+        message="Password has been reset successfully. You can now log in with your new password."
+    )
+
+
+@router.get("/reset-password/{token}/validate")
+def validate_reset_token(token: str, db: Session = Depends(get_db)):
+    """Validate a reset token without using it. Returns user email for confirmation."""
+    reset_token = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token == token
+    ).first()
+    
+    if not reset_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset token"
+        )
+    
+    if reset_token.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has expired"
+        )
+    
+    if reset_token.used_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has already been used"
+        )
+    
+    user = db.query(User).filter(User.id == reset_token.user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User not found"
+        )
+    
+    # Mask email for privacy (show first 2 chars and domain)
+    email_parts = user.email.split('@')
+    masked_email = email_parts[0][:2] + '***@' + email_parts[1] if len(email_parts) == 2 else '***'
+    
+    return {
+        "valid": True,
+        "email": masked_email,
+        "expires_at": reset_token.expires_at.isoformat()
+    }
 
 
 @router.post("/switch-org", response_model=AuthResponse)

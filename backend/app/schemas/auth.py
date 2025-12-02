@@ -76,6 +76,7 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
     organization_id: Optional[str] = None
+    remember_me: bool = False  # If true, token will have longer expiration
 
 
 class MemberLoginRequest(BaseModel):
@@ -192,3 +193,39 @@ class MemberPermissionResponse(BaseModel):
     store_id: Optional[str] = None  # Store ID if this is store-specific access
     accessible_cameras: List[str] = []  # List of camera IDs the member can access
     can_access_dashboard: bool
+
+
+# Password Reset Schemas
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+    # In production, don't include reset_url - send via email instead
+    # For development, we include it so you can test without email service
+    reset_url: Optional[str] = None
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if len(v) > 128:
+            raise ValueError('Password must be less than 128 characters')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Password must contain at least one number')
+        return v
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str

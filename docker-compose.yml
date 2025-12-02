@@ -23,6 +23,16 @@ services:
       - CORS_ORIGINS=http://localhost:3000
       - JWT_SECRET=dev-secret-change-me
       - JWT_EXPIRES_SECONDS=3600
+      - FRONTEND_URL=http://localhost:3000
+      # Email configuration - Gmail SMTP
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-console}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-noreply@aips.local}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-AIPS}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
     ports:
       - "8000:8000"
     depends_on:

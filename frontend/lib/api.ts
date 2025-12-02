@@ -447,6 +447,32 @@ export interface LoginRequest {
   email: string;
   password: string;
   organization_id?: string;
+  remember_me?: boolean;
+}
+
+// Password Reset Types
+export interface ForgotPasswordRequest {
+  email: string;
+}
+
+export interface ForgotPasswordResponse {
+  message: string;
+  reset_url?: string; // Only in development mode
+}
+
+export interface ResetPasswordRequest {
+  token: string;
+  new_password: string;
+}
+
+export interface ResetPasswordResponse {
+  message: string;
+}
+
+export interface ValidateResetTokenResponse {
+  valid: boolean;
+  email: string;
+  expires_at: string;
 }
 
 export interface MemberLoginRequest {
@@ -655,6 +681,23 @@ export const authApi = {
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_user');
     localStorage.removeItem('auth_membership');
+    localStorage.removeItem('remember_me');
+  },
+
+  // Password Reset
+  forgotPassword: async (email: string): Promise<ForgotPasswordResponse> => {
+    const response = await api.post('/auth/forgot-password', { email });
+    return response.data;
+  },
+
+  resetPassword: async (token: string, newPassword: string): Promise<ResetPasswordResponse> => {
+    const response = await api.post('/auth/reset-password', { token, new_password: newPassword });
+    return response.data;
+  },
+
+  validateResetToken: async (token: string): Promise<ValidateResetTokenResponse> => {
+    const response = await api.get(`/auth/reset-password/${token}/validate`);
+    return response.data;
   },
 };
 

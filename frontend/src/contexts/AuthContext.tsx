@@ -9,7 +9,7 @@ interface AuthContextType {
   user: ProfileResponse | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string, organizationId?: string) => Promise<void>;
+  login: (email: string, password: string, organizationId?: string, rememberMe?: boolean) => Promise<void>;
   memberLogin: (password: string, organizationId?: string, organizationName?: string, joinCode?: string) => Promise<void>;
   signupManager: (payload: { email: string; password: string; name: string; organizationName: string }) => Promise<void>;
   signupMember: (payload: { email: string; password: string; name: string; inviteToken?: string; joinCode?: string }) => Promise<void>;
@@ -90,9 +90,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(profile);
   };
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, organizationId?: string, rememberMe?: boolean) => {
     try {
-      const response = await authApi.login({ email, password });
+      const response = await authApi.login({ email, password, organization_id: organizationId, remember_me: rememberMe });
       
       // Check if response indicates no organization (response has detail but no access_token)
       if (response && typeof response === 'object' && 'detail' in response && !('access_token' in response)) {
@@ -106,6 +106,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Normal login response
       if (response && 'access_token' in response) {
         saveAuth(response);
+        // Store remember_me preference
+        if (rememberMe) {
+          localStorage.setItem('remember_me', 'true');
+        } else {
+          localStorage.removeItem('remember_me');
+        }
         toast.success('Login successful!');
         router.push('/cameras');
       }

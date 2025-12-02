@@ -80,6 +80,19 @@ export const vi = {
   lines: 'Đường',
   close: 'Đóng',
   confirm_delete: 'Xóa camera này?',
+  
+  // Stream hints
+  stream_loading_hint: 'Đang tải luồng... Làm mới trang nếu video không hiển thị',
+  refresh_hint: 'Không thấy luồng video? Nhấn để làm mới trang',
+  new_camera_hint: 'Đã thêm camera mới! Làm mới trang nếu luồng video không tải được.',
+  
+  // Behavior types
+  behavior_shoplifting: 'Trộm cắp',
+  behavior_violence: 'Bạo lực',
+  behavior_normal: 'Bình thường',
+  behavior_shoplifting_desc: 'Phát hiện hành vi trộm cắp tiềm ẩn',
+  behavior_violence_desc: 'Phát hiện hành vi bạo lực - cần chú ý ngay',
+  behavior_normal_desc: 'Hoạt động khách hàng bình thường',
 };
 
 
