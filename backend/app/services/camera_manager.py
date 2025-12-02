@@ -21,10 +21,11 @@ class VideoStream:
     
     def __init__(self, src: str):
         self.src = self._normalize_source(src)
+        logger = logging.getLogger(__name__)
 
         # Prefer stable backend per source type (especially on Windows)
         self.cap = self._open_capture(self.src)
-        if not self.cap.isOpened():
+        if not self.cap or not self.cap.isOpened():
             raise RuntimeError(self._error_message(self.src))
 
         # Lấy FPS metadata
@@ -45,7 +46,10 @@ class VideoStream:
         self.frame_times = deque(maxlen=30)
         self.start_time = time.time()  # Track when stream started
 
-        threading.Thread(target=self._update, daemon=True).start()
+        # Log stream creation for debugging
+        logger.info(f"Created VideoStream for source: {self.src}")
+
+        threading.Thread(target=self._update, daemon=True, name=f"VideoStream-{id(self)}").start()
     
     def _error_message(self, src):
         if isinstance(src, int):
@@ -117,59 +121,114 @@ class VideoStream:
         last_time = time.time()
         fail_count = 0
         max_failures = 100  # Increased threshold before giving up
+        consecutive_read_failures = 0
+        max_consecutive_read_failures = 50  # Reduced from 30 to be more aggressive about reconnecting
         
         while self.running:
             try:
-                if not self.cap or not self.cap.isOpened():
+                # Check if capture is still valid
+                if not self.cap:
                     # Try to reopen if closed
                     if fail_count < max_failures:
                         try:
                             self.cap = self._open_capture(self.src)
                             fail_count = 0
+                            consecutive_read_failures = 0
+                            logger = logging.getLogger(__name__)
+                            logger.info(f"Reopened stream {self.src}")
                         except Exception as e:
                             fail_count += 1
                             if fail_count % 10 == 0:
-                                print(f"Failed to reopen stream {self.src} (attempt {fail_count}): {e}")
+                                logger = logging.getLogger(__name__)
+                                logger.warning(f"Failed to reopen stream {self.src} (attempt {fail_count}): {e}")
                             time.sleep(1.0)  # Wait longer before retry
                         continue
                     else:
-                        print(f"Stream {self.src} failed too many times, stopping")
+                        logger = logging.getLogger(__name__)
+                        logger.error(f"Stream {self.src} failed too many times, stopping")
                         self.running = False
                         break
                 
-                ret, frame = self.cap.read()
-                if not ret:
-                    fail_count += 1
-                    
-                    if self.is_video_file:
-                        # Loop video file
-                        try:
-                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                            fail_count = 0
-                        except:
-                            pass
-                    else:
-                        # Try to reconnect for network streams
-                        if fail_count >= 30:
+                # Check if capture is opened - use try/except as isOpened() can sometimes throw
+                try:
+                    if not self.cap.isOpened():
+                        # Capture closed, try to reopen
+                        consecutive_read_failures += 1
+                        if consecutive_read_failures < max_consecutive_read_failures:
                             try:
                                 self.cap.release()
                             except:
                                 pass
                             try:
                                 self.cap = self._open_capture(self.src)
-                                fail_count = 0
+                                consecutive_read_failures = 0
+                                logger = logging.getLogger(__name__)
+                                logger.info(f"Reopened closed stream {self.src}")
                             except Exception as e:
-                                if fail_count % 10 == 0:
-                                    print(f"Reconnection attempt failed for {self.src}: {e}")
+                                if consecutive_read_failures % 10 == 0:
+                                    logger = logging.getLogger(__name__)
+                                    logger.warning(f"Failed to reopen closed stream {self.src}: {e}")
+                                time.sleep(0.5)
+                        else:
+                            logger = logging.getLogger(__name__)
+                            logger.error(f"Stream {self.src} capture closed too many times, stopping")
+                            self.running = False
+                            break
+                        continue
+                except Exception as e:
+                    # isOpened() threw an exception - capture might be invalid
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Error checking if stream {self.src} is opened: {e}")
+                    try:
+                        self.cap.release()
+                    except:
+                        pass
+                    self.cap = None
+                    consecutive_read_failures += 1
+                    time.sleep(0.5)
+                    continue
+                
+                # Try to read frame
+                ret, frame = self.cap.read()
+                if not ret or frame is None:
+                    consecutive_read_failures += 1
+                    fail_count += 1
+                    
+                    if self.is_video_file:
+                        # Loop video file
+                        try:
+                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            consecutive_read_failures = 0
+                            fail_count = 0
+                        except:
+                            pass
+                    else:
+                        # For network streams, be more aggressive about reconnecting
+                        if consecutive_read_failures >= 20:  # Reduced threshold
+                            try:
+                                self.cap.release()
+                            except:
+                                pass
+                            try:
+                                self.cap = self._open_capture(self.src)
+                                consecutive_read_failures = 0
+                                logger = logging.getLogger(__name__)
+                                logger.info(f"Reconnected stream {self.src} after read failures")
+                            except Exception as e:
+                                if consecutive_read_failures % 10 == 0:
+                                    logger = logging.getLogger(__name__)
+                                    logger.warning(f"Reconnection attempt failed for {self.src}: {e}")
                                 time.sleep(0.5)  # Wait before retry
                     time.sleep(0.05)
                     continue
                 
+                # Successfully read frame
+                consecutive_read_failures = 0
+                fail_count = 0
+                
                 with self.lock:
                     self.latest_frame = frame
                     self.frame_times.append(time.time())
-                
-                fail_count = 0
                 
                 # Sync FPS
                 elapsed = time.time() - last_time
@@ -180,9 +239,11 @@ class VideoStream:
                 
             except Exception as e:
                 fail_count += 1
-                print(f"Error in video stream update loop for {self.src}: {e}")
+                consecutive_read_failures += 1
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error in video stream update loop for {self.src}: {e}", exc_info=True)
                 if fail_count >= max_failures:
-                    print(f"Too many errors for {self.src}, stopping stream")
+                    logger.error(f"Too many errors for {self.src}, stopping stream")
                     self.running = False
                     break
                 time.sleep(0.1)
@@ -219,12 +280,16 @@ class VideoStream:
     
     def stop(self):
         """Stop the video stream"""
+        logger = logging.getLogger(__name__)
         self.running = False
         if self.cap:
             try:
+                # Wait a bit for the update thread to finish current operation
+                time.sleep(0.1)
                 self.cap.release()
+                logger.debug(f"Released VideoCapture for {self.src}")
             except Exception as e:
-                print(f"Error releasing VideoCapture: {e}")
+                logger.warning(f"Error releasing VideoCapture for {self.src}: {e}")
             finally:
                 self.cap = None
 
@@ -275,10 +340,26 @@ class CameraWorker:
             # Only create new stream if not using shared stream
             if self.stream is None:
                 self.stream = VideoStream(self.source)
-                # Give stream a moment to initialize and start reading
-                time.sleep(0.2)
+                # Give stream more time to initialize and read first frame
+                # This helps prevent conflicts when multiple streams are created
+                time.sleep(0.5)
+                
+                # Verify stream is actually working by checking for a frame
+                max_wait = 2.0  # Wait up to 2 seconds for first frame
+                wait_start = time.time()
+                while time.time() - wait_start < max_wait:
+                    frame = self.stream.read()
+                    if frame is not None:
+                        logger = logging.getLogger(__name__)
+                        logger.info(f"Camera {self.camera_id} stream initialized successfully")
+                        break
+                    time.sleep(0.1)
+                else:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Camera {self.camera_id} stream created but no frames yet (will continue trying)")
+            
             self.running = True
-            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread = threading.Thread(target=self._run, daemon=True, name=f"CameraWorker-{self.camera_id}")
             self.thread.start()
             return True
         except Exception as e:
@@ -450,6 +531,10 @@ class CameraManager:
                 logger.info(f"Reusing existing VideoStream for source {source} (camera {camera_id}, ref_count: {self.source_ref_count[source]})")
             
             try:
+                # Add small delay between camera additions to avoid resource conflicts
+                if len(self.cameras) > 0:
+                    time.sleep(0.3)  # 300ms delay to let previous streams stabilize
+                
                 worker = CameraWorker(
                     camera_id, store_id, source, name, ai_services,
                     skip_frame, shared_stream=shared_stream  # Pass shared stream if available
@@ -463,6 +548,9 @@ class CameraManager:
                     if shared_stream is None:
                         self.source_to_streams[source] = worker.stream
                         self.source_ref_count[source] = 1
+                    
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Successfully added camera {camera_id} (source: {source}, total cameras: {len(self.cameras)})")
                     return True
                 else:
                     # Cleanup failed worker

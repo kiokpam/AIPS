@@ -130,6 +130,8 @@ class StreamingService:
     
     def generate_preview_stream(self, source: str):
         """Generate preview stream for testing sources. Reuses existing camera stream if available."""
+        import logging
+        logger = logging.getLogger(__name__)
         stream = None
         reuse_existing = False
         
@@ -141,14 +143,34 @@ class StreamingService:
             if existing_camera and existing_camera.stream:
                 # Reuse existing camera stream instead of opening new connection
                 reuse_existing = True
-                print(f"Preview: Reusing existing camera stream for {source}")
+                logger.info(f"Preview: Reusing existing camera stream for {source}")
                 
                 try:
+                    no_frame_count = 0
+                    max_no_frame_wait = 300  # Wait up to 3 seconds for first frame
+                    
                     while True:
                         frame = existing_camera.stream.read()
                         if frame is None:
-                            time.sleep(0.01)
+                            no_frame_count += 1
+                            # If we've been waiting too long, yield a "waiting" frame
+                            if no_frame_count > max_no_frame_wait:
+                                waiting_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                                cv2.putText(waiting_frame, "Waiting for stream...", (120, 220),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                                cv2.putText(waiting_frame, f"Source: {source[:50]}", (120, 260),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+                                ret, jpeg = cv2.imencode('.jpg', waiting_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                                if ret:
+                                    yield (b'--frame\r\n'
+                                           b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                                time.sleep(0.1)
+                            else:
+                                time.sleep(0.01)
                             continue
+                        
+                        # Reset no_frame_count when we get a frame
+                        no_frame_count = 0
                         
                         # Encode frame to JPEG
                         ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -165,11 +187,11 @@ class StreamingService:
                     # Client disconnected, exit gracefully
                     pass
                 except Exception as e:
-                    print(f"Preview stream error (reusing existing): {e}")
+                    logger.warning(f"Preview stream error (reusing existing): {e}", exc_info=True)
                     # Yield error frame
                     error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                    cv2.putText(error_frame, f"Error: {str(e)}", (50, 240),
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    cv2.putText(error_frame, f"Error: {str(e)[:40]}", (50, 240),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                     ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     if ret:
                         yield (b'--frame\r\n'
@@ -178,14 +200,38 @@ class StreamingService:
             
             # If no existing camera, create temporary video stream
             from app.services.camera_manager import VideoStream
+            logger.info(f"Preview: Creating new VideoStream for {source}")
             stream = VideoStream(source)
+            
+            # Wait for stream to initialize and get first frame
+            max_wait = 3.0  # Wait up to 3 seconds
+            wait_start = time.time()
+            no_frame_count = 0
+            max_no_frame_wait = 300  # Wait up to 3 seconds (300 * 0.01s) for first frame
             
             try:
                 while True:
                     frame = stream.read()
                     if frame is None:
-                        time.sleep(0.01)
+                        no_frame_count += 1
+                        # If we've been waiting too long, yield a "waiting" frame
+                        if no_frame_count > max_no_frame_wait:
+                            waiting_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv2.putText(waiting_frame, "Connecting to stream...", (100, 220),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                            cv2.putText(waiting_frame, f"Source: {source[:50]}", (100, 260),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+                            ret, jpeg = cv2.imencode('.jpg', waiting_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            if ret:
+                                yield (b'--frame\r\n'
+                                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                            time.sleep(0.1)
+                        else:
+                            time.sleep(0.01)
                         continue
+                    
+                    # Reset no_frame_count when we get a frame
+                    no_frame_count = 0
                     
                     # Encode frame to JPEG
                     ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -203,11 +249,12 @@ class StreamingService:
                 if stream and not reuse_existing:
                     try:
                         stream.stop()
+                        logger.debug(f"Stopped preview stream for {source}")
                     except Exception as e:
-                        print(f"Error stopping preview stream: {e}")
+                        logger.warning(f"Error stopping preview stream: {e}")
                 
         except Exception as e:
-            print(f"Preview stream error for source {source}: {e}")
+            logger.error(f"Preview stream error for source {source}: {e}", exc_info=True)
             # Return error frame
             error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
             error_msg = str(e)
