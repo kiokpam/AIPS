@@ -149,9 +149,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   const [showMenu, setShowMenu] = useState(false);
   const [currentCount, setCurrentCount] = useState<number | null>(null);
   const [showAIDetails, setShowAIDetails] = useState(false);
-  const [aiModel, setAiModel] = useState(camera.model_name || 'yolov8n.pt');
-  const [aiDevice, setAiDevice] = useState(camera.device || 'auto');
-  // conf_thresh removed - using backend defaults
+  // Model configuration removed - AI services will handle all model settings
   const [taskInfo, setTaskInfo] = useState<{ zones: any[]; lines: any[] } | null>(null);
   const [saving, setSaving] = useState(false);
   
@@ -531,11 +529,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     (async () => {
       try {
         const cfg = await cameraApi.getCameraConfig(camera.id);
-        if (mounted) {
-          setAiModel(cfg?.config?.model_name ?? aiModel);
-          setAiDevice(cfg?.config?.device ?? aiDevice);
-          // conf_thresh removed - using backend defaults
-        }
+        // Model configuration removed - AI services will handle all model settings
       } catch {}
       try {
         const tasks = await tasksApi.getCameraTaskConfig(camera.id);
@@ -789,14 +783,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
 
         <div className="space-y-2 text-xs text-slate-500">
           <div className="flex justify-between">
-            <span>Model:</span>
-            <span className="font-medium">{camera.model_name}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Device:</span>
-            <span className="font-medium">{camera.device}</span>
-          </div>
-          <div className="flex justify-between">
             <span>AI Services:</span>
             <span className="font-medium">{camera.ai_services.length}</span>
           </div>
@@ -929,16 +915,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                 <h3 className="text-lg font-semibold text-slate-900">{t('ai_details')}</h3>
                 <button className="text-slate-500 hover:text-slate-700" onClick={() => setShowAIDetails(false)}>{t('close')}</button>
               </div>
-              <div className="grid md:grid-cols-3 gap-4">
-                <div>
-                  <label className="label block mb-2">{t('model')}</label>
-                  <input className="input" value={aiModel} onChange={(e) => setAiModel(e.target.value)} />
-                </div>
-                <div>
-                  <label className="label block mb-2">{t('device')}</label>
-                  <input className="input" value={aiDevice} onChange={(e) => setAiDevice(e.target.value)} />
-                </div>
-              </div>
+              {/* Model configuration removed - AI services will handle all model settings */}
               <div className="mt-6 grid md:grid-cols-2 gap-6">
                 <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
                   <div className="text-sm text-slate-500 mb-2">{t('people_count')}</div>
@@ -988,11 +965,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                   onClick={async () => {
                     try {
                       setSaving(true);
-                      await cameraApi.updateCameraConfig(camera.id, {
-                        model_name: aiModel,
-                        device: aiDevice,
-                        // conf_thresh, iou_thresh, max_det removed - using backend defaults
-                      });
+                      // Model configuration removed - AI services will handle all model settings
+                      await cameraApi.updateCameraConfig(camera.id, {});
                       toast.success(t('save_changes'));
                     } catch (e) {
                       toast.error(t('preview_error'));
@@ -1021,8 +995,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [formData, setFormData] = useState({
     name: '',
     source: '', // RTSP URL only
-    model_name: 'yolov8n.pt',
-    device: 'auto',
+    // Model configuration removed - AI services will handle all model settings
     skip_frame: 3,
     allowMultipleAreas: true
   });
@@ -1167,8 +1140,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       const cameraData = {
         name: formData.name.trim(),
         source: formData.source.trim(), // RTSP URL only
-        model_name: formData.model_name,
-        device: formData.device,
+        // Model configuration removed - AI services will handle all model settings
         skip_frame: formData.skip_frame,
         allowMultipleAreas: formData.allowMultipleAreas,
         zones,
@@ -1194,8 +1166,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       setFormData({
         name: '',
         source: '', // RTSP URL only
-        model_name: 'yolov8n.pt',
-        device: 'auto',
+        // Model configuration removed - AI services will handle all model settings
         skip_frame: 3,
         allowMultipleAreas: true
     });
@@ -1942,10 +1913,8 @@ export default function CamerasPage() {
         name: cameraConfig.name,
         source: cameraConfig.source, // RTSP URL only
         ai_services: aiServices,
-        model_name: cameraConfig.model_name || 'yolov8n.pt',
-        device: cameraConfig.device || 'auto',
+        // Model configuration removed - AI services will handle all model settings
         skip_frame: cameraConfig.skip_frame || 3
-        // conf_thresh, iou_thresh, max_det will use defaults from backend
       };
 
       console.log('Creating camera via API:', payload);

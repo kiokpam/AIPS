@@ -146,14 +146,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
 
         <div className="space-y-2 text-xs text-slate-500">
           <div className="flex justify-between">
-            <span>Model:</span>
-            <span className="font-medium">{camera.model_name}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Device:</span>
-            <span className="font-medium">{camera.device}</span>
-          </div>
-          <div className="flex justify-between">
             <span>AI Services:</span>
             <span className="font-medium">{camera.ai_services.length}</span>
           </div>
@@ -201,11 +193,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [formData, setFormData] = useState({
     name: '',
     source: '',
-    model_name: 'yolov8n.pt',
-    device: 'auto',
-    conf_thresh: 0.5,
-    iou_thresh: 0.45,
-    max_det: 300,
+    // Model configuration removed - AI services will handle all model settings
     skip_frame: 3
   });
   const [isLoading, setIsLoading] = useState(false);
@@ -220,11 +208,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       setFormData({
         name: '',
         source: '',
-        model_name: 'yolov8n.pt',
-        device: 'auto',
-        conf_thresh: 0.5,
-        iou_thresh: 0.45,
-        max_det: 300,
+        // Model configuration removed - AI services will handle all model settings
         skip_frame: 3
       });
     } catch (error) {
@@ -274,76 +258,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               />
             </div>
 
-            <div>
-              <label className="label block mb-2">Model</label>
-              <select
-                value={formData.model_name}
-                onChange={(e) => setFormData({...formData, model_name: e.target.value})}
-                className="input"
-              >
-                <option value="yolov8n.pt">YOLOv8 Nano (Fastest)</option>
-                <option value="yolov8s.pt">YOLOv8 Small</option>
-                <option value="yolov8m.pt">YOLOv8 Medium</option>
-                <option value="yolov8l.pt">YOLOv8 Large</option>
-                <option value="yolov8x.pt">YOLOv8 Extra Large</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="label block mb-2">Device</label>
-              <select
-                value={formData.device}
-                onChange={(e) => setFormData({...formData, device: e.target.value})}
-                className="input"
-              >
-                <option value="auto">Auto (GPU if available)</option>
-                <option value="cuda">GPU (CUDA)</option>
-                <option value="cpu">CPU</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="label block mb-2">
-                Confidence Threshold: {formData.conf_thresh}
-              </label>
-              <input
-                type="range"
-                min="0.1"
-                max="1.0"
-                step="0.05"
-                value={formData.conf_thresh}
-                onChange={(e) => setFormData({...formData, conf_thresh: parseFloat(e.target.value)})}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label className="label block mb-2">
-                IOU Threshold: {formData.iou_thresh}
-              </label>
-              <input
-                type="range"
-                min="0.1"
-                max="1.0"
-                step="0.05"
-                value={formData.iou_thresh}
-                onChange={(e) => setFormData({...formData, iou_thresh: parseFloat(e.target.value)})}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label className="label block mb-2">Max Detections</label>
-              <input
-                type="number"
-                min="1"
-                max="1000"
-                value={formData.max_det}
-                onChange={(e) => setFormData({...formData, max_det: parseInt(e.target.value)})}
-                className="input"
-              />
-            </div>
-
+            {/* Model configuration removed - AI services will handle all model settings */}
             <div>
               <label className="label block mb-2">Skip Frames</label>
               <input
@@ -400,11 +315,7 @@ export default function CamerasPage() {
           name: 'Entrance Camera',
           source: 'rtsp://192.168.1.100:554/stream',
           ai_services: ['people_counting', 'behavior_detection'],
-          model_name: 'yolov8n.pt',
-          device: 'auto',
-          conf_thresh: 0.5,
-          iou_thresh: 0.45,
-          max_det: 300,
+          // Model configuration removed - AI services will handle all model settings
           skip_frame: 3,
           is_active: true
         },
@@ -414,11 +325,7 @@ export default function CamerasPage() {
           name: 'Checkout Camera',
           source: 'rtsp://192.168.1.101:554/stream',
           ai_services: ['people_counting'],
-          model_name: 'yolov8s.pt',
-          device: 'cuda',
-          conf_thresh: 0.6,
-          iou_thresh: 0.5,
-          max_det: 200,
+          // Model configuration removed - AI services will handle all model settings
           skip_frame: 2,
           is_active: true
         },
@@ -428,11 +335,7 @@ export default function CamerasPage() {
           name: 'Security Camera 1',
           source: 'rtsp://192.168.1.102:554/stream',
           ai_services: ['behavior_detection'],
-          model_name: 'yolov8m.pt',
-          device: 'auto',
-          conf_thresh: 0.7,
-          iou_thresh: 0.4,
-          max_det: 150,
+          // Model configuration removed - AI services will handle all model settings
           skip_frame: 1,
           is_active: false
         },
@@ -442,11 +345,7 @@ export default function CamerasPage() {
           name: 'Parking Lot Camera',
           source: 'rtsp://192.168.1.103:554/stream',
           ai_services: ['people_counting', 'behavior_detection'],
-          model_name: 'yolov8n.pt',
-          device: 'cpu',
-          conf_thresh: 0.4,
-          iou_thresh: 0.6,
-          max_det: 500,
+          // Model configuration removed - AI services will handle all model settings
           skip_frame: 5,
           is_active: true
         }

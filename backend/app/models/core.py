@@ -70,11 +70,11 @@ class Camera(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)  # RTSP URL, file path, or webcam ID
     ai_services: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    model_name: Mapped[str] = mapped_column(String, nullable=False, default="yolov8n.pt")
-    device: Mapped[str] = mapped_column(String, nullable=False, default="auto")
-    conf_thresh: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
-    iou_thresh: Mapped[float] = mapped_column(Float, nullable=False, default=0.45)
-    max_det: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    model_name: Mapped[str] = mapped_column(String, nullable=True, default=None)  # Optional - AI services not implemented yet
+    device: Mapped[str] = mapped_column(String, nullable=True, default=None)  # Optional - AI services not implemented yet
+    conf_thresh: Mapped[float] = mapped_column(Float, nullable=True, default=None)  # Optional - AI services not implemented yet
+    iou_thresh: Mapped[float] = mapped_column(Float, nullable=True, default=None)  # Optional - AI services not implemented yet
+    max_det: Mapped[int] = mapped_column(Integer, nullable=True, default=None)  # Optional - AI services not implemented yet
     skip_frame: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)

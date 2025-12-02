@@ -114,40 +114,76 @@ class VideoStream:
         """Main capture loop"""
         last_time = time.time()
         fail_count = 0
+        max_failures = 100  # Increased threshold before giving up
         
         while self.running:
-            ret, frame = self.cap.read()
-            if not ret:
-                fail_count += 1
-                
-                if self.is_video_file:
-                    # Loop video file
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    fail_count = 0
-                else:
-                    # Try to reconnect for network streams
-                    if fail_count >= 30:
+            try:
+                if not self.cap or not self.cap.isOpened():
+                    # Try to reopen if closed
+                    if fail_count < max_failures:
                         try:
-                            self.cap.release()
+                            self.cap = self._open_capture(self.src)
+                            fail_count = 0
+                        except Exception as e:
+                            fail_count += 1
+                            if fail_count % 10 == 0:
+                                print(f"Failed to reopen stream {self.src} (attempt {fail_count}): {e}")
+                            time.sleep(1.0)  # Wait longer before retry
+                        continue
+                    else:
+                        print(f"Stream {self.src} failed too many times, stopping")
+                        self.running = False
+                        break
+                
+                ret, frame = self.cap.read()
+                if not ret:
+                    fail_count += 1
+                    
+                    if self.is_video_file:
+                        # Loop video file
+                        try:
+                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            fail_count = 0
                         except:
                             pass
-                        self.cap = self._open_capture(self.src)
-                        fail_count = 0
+                    else:
+                        # Try to reconnect for network streams
+                        if fail_count >= 30:
+                            try:
+                                self.cap.release()
+                            except:
+                                pass
+                            try:
+                                self.cap = self._open_capture(self.src)
+                                fail_count = 0
+                            except Exception as e:
+                                if fail_count % 10 == 0:
+                                    print(f"Reconnection attempt failed for {self.src}: {e}")
+                                time.sleep(0.5)  # Wait before retry
                     time.sleep(0.05)
-                continue
-            
-            with self.lock:
-                self.latest_frame = frame
-                self.frame_times.append(time.time())
-            
-            fail_count = 0
-            
-            # Sync FPS
-            elapsed = time.time() - last_time
-            delay = self.frame_delay - elapsed
-            if delay > 0:
-                time.sleep(min(delay, 0.01))
-            last_time = time.time()
+                    continue
+                
+                with self.lock:
+                    self.latest_frame = frame
+                    self.frame_times.append(time.time())
+                
+                fail_count = 0
+                
+                # Sync FPS
+                elapsed = time.time() - last_time
+                delay = self.frame_delay - elapsed
+                if delay > 0:
+                    time.sleep(min(delay, 0.01))
+                last_time = time.time()
+                
+            except Exception as e:
+                fail_count += 1
+                print(f"Error in video stream update loop for {self.src}: {e}")
+                if fail_count >= max_failures:
+                    print(f"Too many errors for {self.src}, stopping stream")
+                    self.running = False
+                    break
+                time.sleep(0.1)
     
     def read(self) -> Optional[np.ndarray]:
         """Get latest frame"""
@@ -183,28 +219,26 @@ class VideoStream:
         """Stop the video stream"""
         self.running = False
         if self.cap:
-            self.cap.release()
+            try:
+                self.cap.release()
+            except Exception as e:
+                print(f"Error releasing VideoCapture: {e}")
+            finally:
+                self.cap = None
 
 class CameraWorker:
     """Camera worker that manages video stream and AI processing"""
     
     def __init__(self, camera_id: str, store_id: str, source: str, 
                  name: str, ai_services: List[str] = None,
-                 model_name: str = "yolov8n.pt", device: str = "auto",
-                 conf_thresh: float = 0.5, iou_thresh: float = 0.45,
-                 max_det: int = 300, skip_frame: int = 3):
+                 skip_frame: int = 3):
         self.camera_id = camera_id
         self.store_id = store_id
         self.source = source  # RTSP URL, file path, or webcam ID
         self.name = name
         self.ai_services = ai_services or []
         
-        # Advanced configuration
-        self.model_name = model_name
-        self.device = device
-        self.conf_thresh = conf_thresh
-        self.iou_thresh = iou_thresh
-        self.max_det = max_det
+        # Model configuration removed - AI services will handle all model settings
         self.skip_frame = max(1, skip_frame)
         
         self.stream = None
@@ -248,29 +282,57 @@ class CameraWorker:
         """Stop the camera worker"""
         self.running = False
         if self.stream:
-            self.stream.stop()
+            try:
+                self.stream.stop()
+            except Exception as e:
+                print(f"Error stopping stream for camera {self.camera_id}: {e}")
         if self.thread:
-            self.thread.join(timeout=2)
+            try:
+                self.thread.join(timeout=2)
+            except Exception as e:
+                print(f"Error joining thread for camera {self.camera_id}: {e}")
     
     def _run(self):
         """Main processing loop"""
+        error_count = 0
+        max_errors = 100
+        
         while self.running:
             try:
+                if not self.stream:
+                    time.sleep(0.1)
+                    continue
+                    
                 frame = self.stream.read()
                 if frame is None:
                     time.sleep(0.01)
                     continue
                 
                 self.frame_count += 1
+                error_count = 0  # Reset error count on success
                 
-                # Frame processing can be extended here for future AI services
-                # AI engineers can integrate their services by extending this method
+                # Frame processing hook for AI services
+                # AI services can access frames via:
+                # 1. GET /api/ai/cameras/{camera_id}/frame (pull-based)
+                # 2. Extend this method for push-based integration
+                # Frame is available via self.stream.read() or camera_manager.get_camera_frame()
+                
+                # Update frame times for FPS calculation
+                self.frame_times.append(time.time())
                 
                 time.sleep(0.01)  # Small delay to prevent excessive CPU usage
                 
             except Exception as e:
-                print(f"Error in camera {self.camera_id} processing: {e}")
+                error_count += 1
                 self.stats["errors"] += 1
+                if error_count % 10 == 0:
+                    print(f"Error in camera {self.camera_id} processing (error #{error_count}): {e}")
+                
+                if error_count >= max_errors:
+                    print(f"Too many errors for camera {self.camera_id}, stopping worker")
+                    self.running = False
+                    break
+                    
                 time.sleep(0.1)
     
     def update_task_config(self, zones: List[Dict[str, Any]], lines: List[Dict[str, Any]]):
@@ -279,16 +341,21 @@ class CameraWorker:
         self.lines = lines
         # Mark whether we currently have any task configured
         self.stats["has_task"] = bool(self.zones or self.lines)
-        print(f"Updated task config for camera {self.camera_id}: {len(zones)} zones, {len(lines)} lines")
-        # AI engineers can extend this method to register with their services
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Updated task config for camera {self.camera_id}: {len(zones)} zones, {len(lines)} lines")
+        # AI services should poll /api/ai/cameras/{camera_id}/config to get updated task config
+        # Or implement webhook/callback registration for real-time updates
     
     def clear_tasks(self):
         """Clear all tasks for this camera"""
         self.zones = []
         self.lines = []
         self.current_count = 0
-        print(f"Cleared tasks for camera {self.camera_id}")
-        # AI engineers can extend this method to unregister from their services
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Cleared tasks for camera {self.camera_id}")
+        # AI services should poll /api/ai/cameras/{camera_id}/config to detect cleared tasks
     
     def get_task_config(self) -> Dict[str, Any]:
         """Get current task configuration"""
@@ -300,18 +367,7 @@ class CameraWorker:
     
     def update_config(self, **kwargs):
         """Update camera configuration"""
-        if 'model_name' in kwargs:
-            self.model_name = kwargs['model_name']
-            self.model = None  # Reset model to reload with new name
-        if 'device' in kwargs:
-            self.device = kwargs['device']
-            self.model = None  # Reset model to reload with new device
-        if 'conf_thresh' in kwargs:
-            self.conf_thresh = kwargs['conf_thresh']
-        if 'iou_thresh' in kwargs:
-            self.iou_thresh = kwargs['iou_thresh']
-        if 'max_det' in kwargs:
-            self.max_det = kwargs['max_det']
+        # Model configuration removed - AI services will handle all model settings
         if 'skip_frame' in kwargs:
             self.skip_frame = max(1, kwargs['skip_frame'])
     
@@ -320,11 +376,7 @@ class CameraWorker:
         cfg = {
             "camera_id": self.camera_id,
             "source": self.source,
-            "model_name": self.model_name,
-            "device": self.device,
-            "conf_thresh": self.conf_thresh,
-            "iou_thresh": self.iou_thresh,
-            "max_det": self.max_det,
+            # Model configuration removed - AI services will handle all model settings
             "skip_frame": self.skip_frame,
             "ai_services": self.ai_services
         }
@@ -356,35 +408,68 @@ class CameraWorker:
 class CameraManager:
     """Main camera manager that handles multiple cameras"""
     
-    def __init__(self):
+    def __init__(self, max_cameras: int = 20):
         self.cameras: Dict[str, CameraWorker] = {}
         self.lock = threading.Lock()
+        self.max_cameras = max_cameras  # Limit concurrent cameras to prevent resource exhaustion
+        self.source_to_camera: Dict[str, str] = {}  # Map source URL to camera_id for reuse
     
     def add_camera(self, camera_id: str, store_id: str, source: str, 
                    name: str, ai_services: List[str] = None,
-                   model_name: str = "yolov8n.pt", device: str = "auto",
-                   conf_thresh: float = 0.5, iou_thresh: float = 0.45,
-                   max_det: int = 300, skip_frame: int = 3) -> bool:
+                   skip_frame: int = 3) -> bool:
         """Add a new camera with advanced configuration"""
         with self.lock:
+            # Check if camera already exists
             if camera_id in self.cameras:
                 return False
             
-            worker = CameraWorker(
-                camera_id, store_id, source, name, ai_services,
-                model_name, device, conf_thresh, iou_thresh, max_det, skip_frame
-            )
-            if worker.start():
-                self.cameras[camera_id] = worker
-                return True
-            return False
+            # Check resource limits
+            if len(self.cameras) >= self.max_cameras:
+                print(f"Warning: Maximum camera limit ({self.max_cameras}) reached. Cannot add camera {camera_id}")
+                return False
+            
+            # Check if source is already in use by another camera
+            # (Many RTSP servers don't allow multiple concurrent connections)
+            if source in self.source_to_camera:
+                existing_id = self.source_to_camera[source]
+                if existing_id != camera_id and existing_id in self.cameras:
+                    print(f"Warning: Source {source} is already in use by camera {existing_id}")
+                    # Don't fail, but log the warning - some cameras support multiple connections
+            
+            try:
+                worker = CameraWorker(
+                    camera_id, store_id, source, name, ai_services,
+                    skip_frame
+                )
+                if worker.start():
+                    self.cameras[camera_id] = worker
+                    self.source_to_camera[source] = camera_id
+                    return True
+                else:
+                    # Cleanup failed worker
+                    try:
+                        worker.stop()
+                    except:
+                        pass
+                    return False
+            except Exception as e:
+                print(f"Error adding camera {camera_id}: {e}")
+                return False
     
     def remove_camera(self, camera_id: str) -> bool:
         """Remove a camera"""
         with self.lock:
             if camera_id in self.cameras:
-                self.cameras[camera_id].stop()
+                worker = self.cameras[camera_id]
+                source = worker.source
+                try:
+                    worker.stop()
+                except Exception as e:
+                    print(f"Error stopping camera {camera_id}: {e}")
                 del self.cameras[camera_id]
+                # Clean up source mapping
+                if source in self.source_to_camera and self.source_to_camera[source] == camera_id:
+                    del self.source_to_camera[source]
                 return True
             return False
     
@@ -396,6 +481,15 @@ class CameraManager:
         """List all cameras with their stats"""
         with self.lock:
             return [camera.get_stats() for camera in self.cameras.values()]
+    
+    def get_camera_count(self) -> int:
+        """Get current number of active cameras"""
+        with self.lock:
+            return len(self.cameras)
+    
+    def get_max_cameras(self) -> int:
+        """Get maximum allowed cameras"""
+        return self.max_cameras
     
     def update_camera_ai_services(self, camera_id: str, ai_services: List[str]) -> bool:
         """Update AI services for a camera"""
@@ -417,7 +511,19 @@ class CameraManager:
         """Get latest frame from a camera"""
         camera = self.get_camera(camera_id)
         if camera and camera.stream:
-            return camera.stream.read()
+            try:
+                return camera.stream.read()
+            except Exception as e:
+                print(f"Error reading frame from camera {camera_id}: {e}")
+                return None
+        return None
+    
+    def get_camera_by_source(self, source: str) -> Optional[CameraWorker]:
+        """Get camera worker by source URL (for preview reuse)"""
+        with self.lock:
+            camera_id = self.source_to_camera.get(source)
+            if camera_id:
+                return self.cameras.get(camera_id)
         return None
     
     def get_camera_jpeg(self, camera_id: str) -> Optional[bytes]:

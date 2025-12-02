@@ -109,9 +109,54 @@ class StreamingService:
                 self.active_streams[camera_id] = False
     
     def generate_preview_stream(self, source: str):
-        """Generate preview stream for testing sources"""
+        """Generate preview stream for testing sources. Reuses existing camera stream if available."""
+        stream = None
+        reuse_existing = False
+        
         try:
-            # Create temporary video stream
+            # First, check if a camera with this source is already running
+            # Many RTSP servers don't allow multiple concurrent connections
+            existing_camera = camera_manager.get_camera_by_source(source)
+            
+            if existing_camera and existing_camera.stream:
+                # Reuse existing camera stream instead of opening new connection
+                reuse_existing = True
+                print(f"Preview: Reusing existing camera stream for {source}")
+                
+                try:
+                    while True:
+                        frame = existing_camera.stream.read()
+                        if frame is None:
+                            time.sleep(0.01)
+                            continue
+                        
+                        # Encode frame to JPEG
+                        ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        if not ret:
+                            time.sleep(0.01)
+                            continue
+                        
+                        # Yield MJPEG frame
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                        
+                        time.sleep(0.033)  # ~30 FPS
+                except GeneratorExit:
+                    # Client disconnected, exit gracefully
+                    pass
+                except Exception as e:
+                    print(f"Preview stream error (reusing existing): {e}")
+                    # Yield error frame
+                    error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(error_frame, f"Error: {str(e)}", (50, 240),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if ret:
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                return
+            
+            # If no existing camera, create temporary video stream
             from app.services.camera_manager import VideoStream
             stream = VideoStream(source)
             
@@ -135,14 +180,21 @@ class StreamingService:
                     time.sleep(0.033)  # ~30 FPS
                     
             finally:
-                stream.stop()
+                if stream and not reuse_existing:
+                    try:
+                        stream.stop()
+                    except Exception as e:
+                        print(f"Error stopping preview stream: {e}")
                 
         except Exception as e:
             print(f"Preview stream error for source {source}: {e}")
             # Return error frame
             error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(error_frame, f"Error: {str(e)}", (50, 240),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            error_msg = str(e)
+            if len(error_msg) > 50:
+                error_msg = error_msg[:47] + "..."
+            cv2.putText(error_frame, f"Error: {error_msg}", (50, 240),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ret:
                 yield (b'--frame\r\n'

@@ -6,6 +6,7 @@ from app.api.events import router as events_router
 from app.api.preview import router as preview_router
 from app.api.system import router as system_router
 from app.api.upload import router as upload_router
+from app.api.ai_integration import router as ai_integration_router
 
 router = APIRouter()
 
@@ -21,5 +22,6 @@ router.include_router(events_router)
 router.include_router(preview_router)
 router.include_router(system_router)
 router.include_router(upload_router)
+router.include_router(ai_integration_router)
 
 

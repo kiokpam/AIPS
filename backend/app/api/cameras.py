@@ -28,6 +28,8 @@ from app.services.streaming_service import streaming_service
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 
+logger = logging.getLogger(__name__)
+
 class CameraStats(BaseModel):
     camera_id: str
     store_id: str
@@ -83,11 +85,7 @@ def list_cameras(
             name=row.name,
             source=row.source,
             ai_services=row.ai_services,
-            model_name=row.model_name,
-            device=row.device,
-            conf_thresh=row.conf_thresh,
-            iou_thresh=row.iou_thresh,
-            max_det=row.max_det,
+            # Model configuration removed - AI services will handle all model settings
             skip_frame=row.skip_frame,
             is_active=row.is_active,
             org_id=row.org_id,
@@ -117,36 +115,59 @@ def create_camera(
         name=payload.name,
         source=payload.source,
         ai_services=default_ai,
-        model_name=payload.model_name,
-        device=payload.device,
-        conf_thresh=payload.conf_thresh if payload.conf_thresh is not None else 0.5,
-        iou_thresh=payload.iou_thresh if payload.iou_thresh is not None else 0.45,
-        max_det=payload.max_det if payload.max_det is not None else 300,
+        # Model configuration removed - AI services will handle all model settings
+        model_name=None,
+        device=None,
+        conf_thresh=None,
+        iou_thresh=None,
+        max_det=None,
         skip_frame=payload.skip_frame,
         org_id=current.organization.id,
     )
-    db.add(item)
-    db.commit()
-    db.refresh(item)
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        db.add(item)
+        db.flush()  # Get ID without committing yet
+        
+        # Try to start camera before committing to database
+        success = camera_manager.add_camera(
+            camera_id=item.id,
+            store_id=item.store_id,
+            source=item.source,
+            name=item.name,
+            ai_services=item.ai_services,
+            # Model configuration removed - AI services will handle all model settings
+            skip_frame=item.skip_frame,
+        )
 
-    success = camera_manager.add_camera(
-        camera_id=item.id,
-        store_id=item.store_id,
-        source=item.source,
-        name=item.name,
-        ai_services=item.ai_services,
-        model_name=item.model_name,
-        device=item.device,
-        conf_thresh=item.conf_thresh,
-        iou_thresh=item.iou_thresh,
-        max_det=item.max_det,
-        skip_frame=item.skip_frame,
-    )
+        if not success:
+            db.rollback()
+            # Check if it's a resource limit issue
+            current_count = camera_manager.get_camera_count()
+            max_cameras = camera_manager.get_max_cameras()
+            if current_count >= max_cameras:
+                logger.warning(f"Camera creation failed: max limit reached ({max_cameras} cameras)")
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Maximum camera limit reached ({max_cameras} cameras). Please stop some cameras before adding new ones."
+                )
+            logger.error(f"Camera creation failed: unable to start stream for {item.id}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera stream. Check RTSP URL accessibility and network connectivity.")
 
-    if not success:
-        db.delete(item)
+        # Camera started successfully - commit to database
+        item.is_active = True
         db.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera stream")
+        db.refresh(item)
+        logger.info(f"Camera {item.id} created and started successfully")
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to create camera: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error while creating camera")
 
     return CameraSchema(
         id=item.id,
@@ -154,11 +175,7 @@ def create_camera(
         name=item.name,
         source=item.source,
         ai_services=item.ai_services,
-        model_name=item.model_name,
-        device=item.device,
-        conf_thresh=item.conf_thresh,
-        iou_thresh=item.iou_thresh,
-        max_det=item.max_det,
+        # Model configuration removed - AI services will handle all model settings
         skip_frame=item.skip_frame,
         is_active=item.is_active,
         org_id=item.org_id,
@@ -185,11 +202,7 @@ def get_camera(
         name=camera.name,
         source=camera.source,
         ai_services=camera.ai_services,
-        model_name=camera.model_name,
-        device=camera.device,
-        conf_thresh=camera.conf_thresh,
-        iou_thresh=camera.iou_thresh,
-        max_det=camera.max_det,
+        # Model configuration removed - AI services will handle all model settings
         skip_frame=camera.skip_frame,
         is_active=camera.is_active,
         org_id=camera.org_id,
@@ -205,47 +218,49 @@ def update_camera(
     """Update a camera"""
     camera = _get_camera_or_404(db, camera_id, current.organization.id)
 
-    if payload.name is not None:
-        camera.name = payload.name
-    if payload.source is not None:
-        camera.source = payload.source
-    if payload.ai_services is not None:
-        camera.ai_services = payload.ai_services
-    if payload.model_name is not None:
-        camera.model_name = payload.model_name
-    if payload.device is not None:
-        camera.device = payload.device
-    if payload.conf_thresh is not None:
-        camera.conf_thresh = payload.conf_thresh
-    if payload.iou_thresh is not None:
-        camera.iou_thresh = payload.iou_thresh
-    if payload.max_det is not None:
-        camera.max_det = payload.max_det
-    if payload.skip_frame is not None:
-        camera.skip_frame = payload.skip_frame
-    if payload.is_active is not None:
-        camera.is_active = payload.is_active
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Update fields but don't commit yet
+        if payload.name is not None:
+            camera.name = payload.name
+        if payload.source is not None:
+            camera.source = payload.source
+        if payload.ai_services is not None:
+            camera.ai_services = payload.ai_services
+        # Model configuration removed - AI services will handle all model settings
+        if payload.skip_frame is not None:
+            camera.skip_frame = payload.skip_frame
+        if payload.is_active is not None:
+            camera.is_active = payload.is_active
 
-    db.commit()
-    db.refresh(camera)
+        # If source or AI services changed, restart camera BEFORE committing
+        if payload.source is not None or payload.ai_services is not None:
+            camera_manager.remove_camera(camera_id)
+            success = camera_manager.add_camera(
+                camera_id=camera.id,
+                store_id=camera.store_id,
+                source=camera.source,
+                name=camera.name,
+                ai_services=camera.ai_services,
+                # Model configuration removed - AI services will handle all model settings
+                skip_frame=camera.skip_frame,
+            )
+            if not success:
+                db.rollback()
+                logger.error(f"Failed to restart camera {camera_id} with new configuration")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to restart camera with new configuration")
+            logger.info(f"Camera {camera_id} restarted with new configuration")
 
-    if payload.source is not None or payload.ai_services is not None:
-        camera_manager.remove_camera(camera_id)
-        success = camera_manager.add_camera(
-            camera_id=camera.id,
-            store_id=camera.store_id,
-            source=camera.source,
-            name=camera.name,
-            ai_services=camera.ai_services,
-            model_name=camera.model_name,
-            device=camera.device,
-            conf_thresh=camera.conf_thresh,
-            iou_thresh=camera.iou_thresh,
-            max_det=camera.max_det,
-            skip_frame=camera.skip_frame,
-        )
-        if not success:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to restart camera with new configuration")
+        # Only commit if restart succeeded (or no restart needed)
+        db.commit()
+        db.refresh(camera)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update camera {camera_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error while updating camera")
 
     return CameraSchema(
         id=camera.id,
@@ -253,11 +268,7 @@ def update_camera(
         name=camera.name,
         source=camera.source,
         ai_services=camera.ai_services,
-        model_name=camera.model_name,
-        device=camera.device,
-        conf_thresh=camera.conf_thresh,
-        iou_thresh=camera.iou_thresh,
-        max_det=camera.max_det,
+        # Model configuration removed - AI services will handle all model settings
         skip_frame=camera.skip_frame,
         is_active=camera.is_active,
         org_id=camera.org_id,
@@ -278,8 +289,6 @@ def delete_camera(
         try:
             camera_manager.remove_camera(camera_id)
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to remove camera {camera_id} from manager (may not be running): {e}")
         
         # 2. Also unregister from streaming service
@@ -287,19 +296,18 @@ def delete_camera(
             from app.services.streaming_service import streaming_service
             streaming_service.stop_stream(camera_id)
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to stop stream for camera {camera_id}: {e}")
         
         # 3. Delete from database (CASCADE will handle related records)
         db.delete(camera)
         db.commit()
+        logger.info(f"Camera {camera_id} deleted successfully")
         
         return {"message": "Camera deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Failed to delete camera {camera_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -401,11 +409,7 @@ def start_camera(
         source=camera.source,
         name=camera.name,
         ai_services=camera.ai_services or ["people_counting", "behavior_detection"],
-        model_name=camera.model_name,
-        device=camera.device,
-        conf_thresh=camera.conf_thresh,
-        iou_thresh=camera.iou_thresh,
-        max_det=camera.max_det,
+        # Model configuration removed - AI services will handle all model settings
         skip_frame=camera.skip_frame,
     )
     
@@ -413,7 +417,15 @@ def start_camera(
         # Update database state even if start failed
         camera.is_active = False
         db.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera. Check RTSP stream accessibility.")
+        # Check if it's a resource limit issue
+        current_count = camera_manager.get_camera_count()
+        max_cameras = camera_manager.get_max_cameras()
+        if current_count >= max_cameras:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Maximum camera limit reached ({max_cameras} cameras). Please stop some cameras before starting new ones."
+            )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera. Check RTSP stream accessibility and network connectivity.")
     
     # Update database state to active
     camera.is_active = True
@@ -555,16 +567,7 @@ def update_camera_config(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found or not running")
 
     updates: Dict[str, any] = {}
-    if config_update.model_name is not None:
-        updates["model_name"] = config_update.model_name
-    if config_update.device is not None:
-        updates["device"] = config_update.device
-    if config_update.conf_thresh is not None:
-        updates["conf_thresh"] = config_update.conf_thresh
-    if config_update.iou_thresh is not None:
-        updates["iou_thresh"] = config_update.iou_thresh
-    if config_update.max_det is not None:
-        updates["max_det"] = config_update.max_det
+    # Model configuration removed - AI services will handle all model settings
     if config_update.skip_frame is not None:
         updates["skip_frame"] = config_update.skip_frame
 

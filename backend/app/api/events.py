@@ -13,9 +13,13 @@ router = APIRouter(prefix="/events", tags=["events"])
 @router.post("/counter-update")
 def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_db)):
     """Receive counter update events from People Counting AI"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
         store = db.query(StoreModel).filter(StoreModel.id == event.store_id).first()
         if not store:
+            logger.warning(f"Counter update received for non-existent store: {event.store_id}")
             raise HTTPException(status_code=404, detail="Store not found")
 
         db.execute(text("""
@@ -29,9 +33,13 @@ def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_
             "org_id": store.org_id,
         })
         db.commit()
+        logger.debug(f"Counter update stored: store={event.store_id}, zone={event.zone_id}, value={event.value}")
         return {"status": "success", "message": "Counter update stored"}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
+        logger.error(f"Failed to store counter update: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/anomaly-detected")
@@ -79,10 +87,17 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
         db.commit()
         db.refresh(alert)
         
-        print(f"Anomaly detected: {event.type} at {event.store_id}/{event.camera_id} - severity: {event.severity} (Alert ID: {alert.id})")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Anomaly detected: {event.type} at {event.store_id}/{event.camera_id} - severity: {event.severity} (Alert ID: {alert.id})")
         return {"status": "success", "message": "Anomaly event received and stored", "alert_id": alert.id}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to store anomaly event: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/people-counts")

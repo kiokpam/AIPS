@@ -50,11 +50,7 @@ export interface Camera {
   name: string;
   source: string;
   ai_services: string[];
-  model_name: string;
-  device: string;
-  conf_thresh: number;
-  iou_thresh: number;
-  max_det: number;
+  // Model configuration removed - AI services will handle all model settings
   skip_frame: number;
   is_active: boolean;
 }
@@ -64,11 +60,7 @@ export interface CameraCreate {
   name: string;
   source: string;
   ai_services?: string[];
-  model_name?: string;
-  device?: string;
-  conf_thresh?: number;
-  iou_thresh?: number;
-  max_det?: number;
+  // Model configuration removed - AI services will handle all model settings
   skip_frame?: number;
 }
 

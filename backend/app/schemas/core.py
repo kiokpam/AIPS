@@ -58,11 +58,7 @@ class Camera(BaseModel):
     name: str
     source: str  # RTSP URL, file path, or webcam ID
     ai_services: List[str] = ["people_counting", "behavior_detection"]
-    model_name: str = "yolov8n.pt"
-    device: str = "auto"
-    conf_thresh: float = 0.5
-    iou_thresh: float = 0.45
-    max_det: int = 300
+    # Model configuration removed - AI services will handle all model settings
     skip_frame: int = 3
     is_active: bool = True
     org_id: str
@@ -73,11 +69,7 @@ class CameraCreate(BaseModel):
     name: str
     source: str  # RTSP URL only
     ai_services: List[str] = ["people_counting", "behavior_detection"]
-    model_name: str = "yolov8n.pt"
-    device: str = "auto"  # "auto", "cuda", "cpu"
-    conf_thresh: Optional[float] = 0.5  # Optional, defaults to 0.5
-    iou_thresh: Optional[float] = 0.45  # Optional, defaults to 0.45
-    max_det: Optional[int] = 300  # Optional, defaults to 300
+    # Model configuration removed - AI services will handle all model settings
     skip_frame: int = 3
 
 
@@ -85,11 +77,7 @@ class CameraUpdate(BaseModel):
     name: Optional[str] = None
     source: Optional[str] = None  # RTSP URL only
     ai_services: Optional[List[str]] = None
-    model_name: Optional[str] = None
-    device: Optional[str] = None
-    conf_thresh: Optional[float] = None
-    iou_thresh: Optional[float] = None
-    max_det: Optional[int] = None
+    # Model configuration removed - AI services will handle all model settings
     skip_frame: Optional[int] = None
     is_active: Optional[bool] = None
 
