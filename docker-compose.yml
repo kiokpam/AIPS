@@ -22,7 +22,7 @@ services:
       - DATABASE_URL=postgresql+psycopg://aips:aips@db:5432/aips
       - CORS_ORIGINS=http://localhost:3000
       - JWT_SECRET=dev-secret-change-me
-      - JWT_EXPIRES_SECONDS=3600
+      - JWT_EXPIRES_SECONDS=2592000  # 30 days = 1 month
       - FRONTEND_URL=http://localhost:3000
       # Email configuration - Gmail SMTP
       - EMAIL_PROVIDER=${EMAIL_PROVIDER:-console}

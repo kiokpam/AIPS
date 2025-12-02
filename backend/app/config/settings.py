@@ -10,7 +10,7 @@ class Settings(BaseModel):
     cors_origins: str = os.getenv("CORS_ORIGINS", "*")
     jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
     jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
-    jwt_expires_seconds: int = int(os.getenv("JWT_EXPIRES_SECONDS", "3600"))
+    jwt_expires_seconds: int = int(os.getenv("JWT_EXPIRES_SECONDS", "2592000"))  # 30 days = 1 month
     
     # Frontend URL for email links
     frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
