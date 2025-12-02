@@ -9,7 +9,14 @@ import psutil
 import asyncio
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
-import torch
+
+# Make torch import optional to save ~500MB RAM when AI is not used
+torch = None
+try:
+    import torch as _torch
+    torch = _torch
+except ImportError:
+    pass
 
 class SystemMonitor:
     """System monitoring service for health and performance tracking"""
@@ -23,6 +30,16 @@ class SystemMonitor:
     
     def get_device_info(self) -> Dict[str, Any]:
         """Get GPU/CPU device information (from codedash_ai/models.py)"""
+        # If torch is not installed, return CPU-only info
+        if torch is None:
+            return {
+                'cuda_available': False,
+                'device_count': 0,
+                'current_device': None,
+                'device_name': "CPU (torch not installed)",
+                'note': 'Install torch for GPU monitoring'
+            }
+        
         try:
             info = {
                 'cuda_available': torch.cuda.is_available(),
@@ -61,7 +78,7 @@ class SystemMonitor:
             return utilization.gpu / 100.0
         except ImportError:
             # Fallback: estimate based on memory usage
-            if torch.cuda.is_available():
+            if torch is not None and torch.cuda.is_available():
                 allocated = torch.cuda.memory_allocated(0)
                 total = torch.cuda.get_device_properties(0).total_memory
                 return min(allocated / total, 1.0)
