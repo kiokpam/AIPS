@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera,
@@ -53,6 +53,14 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   ...rest
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawZoneRef = useRef(drawZone);
+  const drawLineRef = useRef(drawLine);
+
+  // Update refs when functions change (but don't trigger re-render)
+  useEffect(() => {
+    drawZoneRef.current = drawZone;
+    drawLineRef.current = drawLine;
+  }, [drawZone, drawLine]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -61,34 +69,39 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Clear previous drawings
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Use requestAnimationFrame to batch redraws and prevent excessive renders
+    const rafId = requestAnimationFrame(() => {
+      // Clear previous drawings
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Helper to normalize width/height from CSS to canvas pixels
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width && rect.height) {
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-    }
+      // Helper to normalize width/height from CSS to canvas pixels
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width && rect.height) {
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+      }
 
-    // Redraw saved areas
-    drawnAreas.forEach((area) => {
-      if (area.type === 'zone' && area.isComplete) {
-        drawZone(ctx, area.points, '#10b981', 2);
-      } else if (area.type === 'line' && area.isComplete) {
-        drawLine(ctx, area.p1, area.p2, '#3b82f6', 3);
+      // Redraw saved areas
+      drawnAreas.forEach((area) => {
+        if (area.type === 'zone' && area.isComplete) {
+          drawZoneRef.current(ctx, area.points, '#10b981', 2);
+        } else if (area.type === 'line' && area.isComplete) {
+          drawLineRef.current(ctx, area.p1, area.p2, '#3b82f6', 3);
+        }
+      });
+
+      // Draw current draft
+      if (currentDrawing) {
+        if (currentDrawing.type === 'zone') {
+          drawZoneRef.current(ctx, currentDrawing.points || [], '#3b82f6', 2, true);
+        } else if (currentDrawing.type === 'line') {
+          drawLineRef.current(ctx, currentDrawing.p1, currentDrawing.p2, '#3b82f6', 3, true);
+        }
       }
     });
 
-    // Draw current draft
-    if (currentDrawing) {
-      if (currentDrawing.type === 'zone') {
-        drawZone(ctx, currentDrawing.points || [], '#3b82f6', 2, true);
-      } else if (currentDrawing.type === 'line') {
-        drawLine(ctx, currentDrawing.p1, currentDrawing.p2, '#3b82f6', 3, true);
-      }
-    }
-  }, [drawnAreas, currentDrawing, drawingMode, drawZone, drawLine]);
+    return () => cancelAnimationFrame(rafId);
+  }, [drawnAreas, currentDrawing, drawingMode]); // Removed drawZone and drawLine from dependencies
 
   return <canvas ref={canvasRef} {...rest} />;
 };
@@ -250,7 +263,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
       const naturalW = img.naturalWidth;
       const naturalH = img.naturalHeight;
       if (naturalW > 0 && naturalH > 0) {
-        console.log('Camera page frame size from image element:', naturalW, 'x', naturalH);
+        // Frame size detected from image element
         return { w: naturalW, h: naturalH };
       }
       return null;
@@ -270,7 +283,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         const w = (stats as any)?.config?.width;
         const h = (stats as any)?.config?.height;
         if (mounted && typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
-          console.log('Camera page frame size from stats API:', w, 'x', h);
+          // Frame size detected from stats API
           setFrameSize({ w, h });
         }
       } catch {}
@@ -397,16 +410,27 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
       });
     };
 
+    // Throttle resize events to prevent excessive redraws
+    let rafId: number | null = null;
+    const throttledResize = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        resizeAndDraw();
+        rafId = null;
+      });
+    };
+
     resizeAndDraw();
-    const onResize = () => resizeAndDraw();
-    window.addEventListener('resize', onResize);
-    const ro = new ResizeObserver(() => resizeAndDraw());
+    window.addEventListener('resize', throttledResize);
+    const ro = new ResizeObserver(throttledResize);
     ro.observe(container);
+    
     return () => {
-      window.removeEventListener('resize', onResize);
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', throttledResize);
       ro.disconnect();
     };
-  }, [taskInfo, frameSize]);
+  }, [taskInfo, frameSize, isStreaming]);
 
   const handleStreamToggle = () => {
     setIsStreaming(!isStreaming);
@@ -416,22 +440,30 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   // Poll camera stats to get current people count
   useEffect(() => {
     let isMounted = true;
-    let timer: any;
+    let timer: NodeJS.Timeout | null = null;
 
     const fetchStats = async () => {
+      if (!isMounted) return; // Don't run if unmounted
+      
       try {
         const stats = await cameraApi.getCameraStats(camera.id);
         const count = stats?.stats?.current_count ?? stats?.current_count ?? null;
         if (isMounted) setCurrentCount(typeof count === 'number' ? count : null);
       } catch (_) {
         if (isMounted) setCurrentCount(null);
-      } finally {
+      }
+      
+      // Schedule next fetch only if still mounted
+      if (isMounted) {
         timer = setTimeout(fetchStats, 5000);
       }
     };
 
     fetchStats();
-    return () => { isMounted = false; if (timer) clearTimeout(timer); };
+    return () => {
+      isMounted = false;
+      if (timer) clearTimeout(timer);
+    };
   }, [camera.id]);
 
   // Poll in/out counts if camera has in_out_counting enabled
@@ -463,6 +495,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     };
 
     const fetchCounts = async () => {
+      if (!isMounted) return; // Don't run if unmounted
+      
       try {
         const counts = await inOutApi.getCounts(camera.id);
         if (isMounted) {
@@ -474,20 +508,26 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         }
       } catch (_) {
         // Ignore errors, will retry
-      } finally {
+      }
+      
+      // Schedule next fetch only if still mounted
+      if (isMounted) {
         timer = setTimeout(fetchCounts, 5000);
       }
     };
 
     // First check if registered
     checkRegistration().then(() => {
-      if (isInOutRegistered) {
+      if (isMounted && isInOutRegistered) {
         fetchCounts();
       }
     });
 
-    return () => { isMounted = false; if (timer) clearTimeout(timer); };
-  }, [camera.id, hasInOutCounting, isInOutRegistered]);
+    return () => {
+      isMounted = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [camera.id, hasInOutCounting]); // Removed isInOutRegistered from dependencies to prevent loop
 
   // Fetch today's stats and recent behaviors
   useEffect(() => {
@@ -548,7 +588,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         const tasks = await tasksApi.getCameraTaskConfig(camera.id);
         if (mounted) {
           const newTaskInfo = { zones: tasks?.zones || [], lines: tasks?.lines || [] };
-          console.log('Loaded taskInfo for camera', camera.id, ':', newTaskInfo);
+          // Task info loaded
           setTaskInfo(newTaskInfo);
         }
       } catch (e) {
@@ -1035,8 +1075,8 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     };
   };
 
-  // Drawing functions - defined at component level for accessibility
-  const drawZone = (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft = false) => {
+  // Drawing functions - memoized to prevent re-renders
+  const drawZone = useCallback((ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft = false) => {
     if (points.length < 2) return;
 
     ctx.strokeStyle = color;
@@ -1065,9 +1105,9 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       ctx.closePath();
       ctx.stroke();
     }
-  };
+  }, []);
 
-  const drawLine = (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false) => {
+  const drawLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false) => {
     if (!p1 || !p2) return;
 
     // Convert coordinates if needed
@@ -1095,7 +1135,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     ctx.beginPath();
     ctx.arc(point2.x, point2.y, 6, 0, 2 * Math.PI);
     ctx.fill();
-  };
+  }, []);
 
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1149,7 +1189,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         contentBox: contentBox ? { ...contentBox } : null
       };
 
-      console.log('Submitting camera data:', cameraData);
+      // Submitting camera data
       
       await onAdd(cameraData);
       onClose();
@@ -1314,7 +1354,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     
     // Validate coordinates are within canvas bounds
     if (x < 0 || y < 0 || x > canvas.width || y > canvas.height) {
-      console.warn('Click outside canvas bounds:', x, y, 'Canvas:', canvas.width, 'x', canvas.height);
+      // Click outside canvas bounds - ignored
       return;
     }
 
@@ -1334,77 +1374,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     fx = Math.max(0, Math.min(1, fx));
     fy = Math.max(0, Math.min(1, fy));
     
-    console.log('=== CLICK COORDINATES DEBUG ===');
-    console.log('Mouse position:', e.clientX, e.clientY);
-    console.log('Canvas rect:', rect);
-    console.log('Click coordinates:', x, y);
-    console.log('Normalized coordinates:', fx, fy);
-    console.log('Canvas dimensions:', canvas.width, 'x', canvas.height);
-    console.log('Content box:', contentBox);
-    console.log('================================');
-    
-    // Add visual feedback for debugging
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      // Clear previous debug markers
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Redraw all existing content manually
-      drawnAreas.forEach(area => {
-        if (area.type === 'zone' && area.isComplete) {
-          // Convert normalized coords to pixel coords for display if needed
-          const displayPoints = area.points.map((p: any) => {
-            if (p.x !== undefined && p.y !== undefined) {
-              return { x: p.x, y: p.y, fx: p.fx, fy: p.fy };
-            } else if (p.fx !== undefined && p.fy !== undefined) {
-              const pixel = normalizedToCanvas(p.fx, p.fy, canvas);
-              return { x: pixel.x, y: pixel.y, fx: p.fx, fy: p.fy };
-            }
-            return p;
-          });
-          drawZone(ctx, displayPoints, '#10b981', 2);
-        }
-      });
-      
-      // Draw current drawing
-      if (currentDrawing) {
-        if (currentDrawing.type === 'zone') {
-          // Convert normalized coords to pixel coords for display if needed
-          const displayPoints = currentDrawing.points.map((p: any) => {
-            if (p.x !== undefined && p.y !== undefined) {
-              return { x: p.x, y: p.y, fx: p.fx, fy: p.fy };
-            } else if (p.fx !== undefined && p.fy !== undefined) {
-              const pixel = normalizedToCanvas(p.fx, p.fy, canvas);
-              return { x: pixel.x, y: pixel.y, fx: p.fx, fy: p.fy };
-            }
-            return p;
-          });
-          drawZone(ctx, displayPoints, '#3b82f6', 2, true);
-        }
-      }
-      
-      // Add new debug marker
-      ctx.fillStyle = '#ff0000';
-      ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
-      ctx.fill();
-      
-      // Add coordinate text
-      ctx.fillStyle = '#ff0000';
-      ctx.font = 'bold 14px Arial';
-      ctx.fillText(`(${Math.round(x)}, ${Math.round(y)})`, x + 8, y - 8);
-      ctx.fillText(`f(${fx.toFixed(3)}, ${fy.toFixed(3)})`, x + 8, y + 20);
-      
-      // Add crosshair
-      ctx.strokeStyle = '#ff0000';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x - 10, y);
-      ctx.lineTo(x + 10, y);
-      ctx.moveTo(x, y - 10);
-      ctx.lineTo(x, y + 10);
-      ctx.stroke();
-    }
+    // Removed debug console.log and manual canvas redraw - DrawingCanvas will handle redraw via useEffect
     
     if (drawingMode === 'zone') {
       handleZoneClick(x, y, fx, fy);
@@ -1917,7 +1887,7 @@ export default function CamerasPage() {
         skip_frame: cameraConfig.skip_frame || 3
       };
 
-      console.log('Creating camera via API:', payload);
+      // Creating camera via API
       const created = await cameraApi.createCamera(payload);
 
       // Optimistically add as active while backend starts the worker
@@ -1928,7 +1898,7 @@ export default function CamerasPage() {
       try {
         await cameraApi.startCamera(created.id);
       } catch (e) {
-        console.warn('Start camera after create failed (will retry on refresh):', e);
+        // Start camera after create failed (will retry on refresh)
       }
 
       // Briefly wait and poll stats to reduce "offline" flicker
@@ -1966,12 +1936,12 @@ export default function CamerasPage() {
         const frameSize = (() => {
           // Use contentBox natural dimensions if available (from preview media element)
           if (cameraData.contentBox && cameraData.contentBox.naturalW > 0 && cameraData.contentBox.naturalH > 0) {
-            console.log('Using preview contentBox dimensions:', cameraData.contentBox.naturalW, 'x', cameraData.contentBox.naturalH);
+            // Using preview contentBox dimensions
             return { w: cameraData.contentBox.naturalW, h: cameraData.contentBox.naturalH };
           }
           
           // Fallback to backend fetch
-          console.log('ContentBox not available, will fetch from backend');
+          // ContentBox not available, will fetch from backend
           return null;
         })();
         
@@ -1995,7 +1965,7 @@ export default function CamerasPage() {
           }
           
           if (!cameraReady) {
-            console.debug('Camera not ready for frame fetch, using fallback dimensions');
+            // Camera not ready for frame fetch, using fallback dimensions
             return { w: 1920, h: 1080 }; // Fallback to common resolution
           }
           

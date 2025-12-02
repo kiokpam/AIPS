@@ -39,6 +39,8 @@ class StreamingService:
             # Stream generation loop
             send_times = []  # For FPS calculation
             frame_count = 0
+            no_frame_count = 0  # Track consecutive None frames
+            max_no_frame_wait = 300  # Wait up to 3 seconds (300 * 0.01s) for first frame
             
             while self.active_streams.get(camera_id, False):
                 try:
@@ -52,8 +54,26 @@ class StreamingService:
                         frame = camera_manager.get_camera_frame(camera_id)
                     
                     if frame is None:
-                        time.sleep(0.01)
+                        no_frame_count += 1
+                        # If we've been waiting too long, yield a "waiting" frame
+                        if no_frame_count > max_no_frame_wait:
+                            # Yield a "waiting for stream" frame
+                            waiting_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv2.putText(waiting_frame, "Waiting for stream...", (120, 220),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                            cv2.putText(waiting_frame, f"Camera: {camera_id}", (120, 260),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+                            ret, jpeg = cv2.imencode('.jpg', waiting_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            if ret:
+                                yield (b'--frame\r\n'
+                                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                            time.sleep(0.1)  # Slower when waiting
+                        else:
+                            time.sleep(0.01)
                         continue
+                    
+                    # Reset no_frame_count when we get a frame
+                    no_frame_count = 0
                     
                     # Encode frame to JPEG
                     ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])

@@ -6,6 +6,7 @@ Handles camera registration, stream management, and frame processing
 import os
 import time
 import threading
+import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import cv2
@@ -42,6 +43,7 @@ class VideoStream:
         self.lock = threading.Lock()
         self.running = True
         self.frame_times = deque(maxlen=30)
+        self.start_time = time.time()  # Track when stream started
 
         threading.Thread(target=self._update, daemon=True).start()
     
@@ -231,7 +233,7 @@ class CameraWorker:
     
     def __init__(self, camera_id: str, store_id: str, source: str, 
                  name: str, ai_services: List[str] = None,
-                 skip_frame: int = 3):
+                 skip_frame: int = 3, shared_stream: Optional[VideoStream] = None):
         self.camera_id = camera_id
         self.store_id = store_id
         self.source = source  # RTSP URL, file path, or webcam ID
@@ -241,10 +243,11 @@ class CameraWorker:
         # Model configuration removed - AI services will handle all model settings
         self.skip_frame = max(1, skip_frame)
         
-        self.stream = None
+        self.stream = shared_stream  # Use shared stream if provided, otherwise create new one
         self.running = False
         self.thread = None
         self.frame_count = 0
+        self.is_shared_stream = shared_stream is not None
         
         # Task configuration
         self.zones = []  # List of zone configurations
@@ -269,28 +272,36 @@ class CameraWorker:
     def start(self):
         """Start the camera worker"""
         try:
-            self.stream = VideoStream(self.source)
+            # Only create new stream if not using shared stream
+            if self.stream is None:
+                self.stream = VideoStream(self.source)
+                # Give stream a moment to initialize and start reading
+                time.sleep(0.2)
             self.running = True
             self.thread = threading.Thread(target=self._run, daemon=True)
             self.thread.start()
             return True
         except Exception as e:
-            print(f"Failed to start camera {self.camera_id}: {e}")
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to start camera {self.camera_id}: {e}", exc_info=True)
             return False
     
     def stop(self):
         """Stop the camera worker"""
         self.running = False
-        if self.stream:
+        # Only stop stream if it's not shared (shared streams are managed by CameraManager)
+        if self.stream and not self.is_shared_stream:
             try:
                 self.stream.stop()
             except Exception as e:
-                print(f"Error stopping stream for camera {self.camera_id}: {e}")
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Error stopping stream for camera {self.camera_id}: {e}")
         if self.thread:
             try:
                 self.thread.join(timeout=2)
             except Exception as e:
-                print(f"Error joining thread for camera {self.camera_id}: {e}")
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Error joining thread for camera {self.camera_id}: {e}")
     
     def _run(self):
         """Main processing loop"""
@@ -413,6 +424,8 @@ class CameraManager:
         self.lock = threading.Lock()
         self.max_cameras = max_cameras  # Limit concurrent cameras to prevent resource exhaustion
         self.source_to_camera: Dict[str, str] = {}  # Map source URL to camera_id for reuse
+        self.source_to_streams: Dict[str, VideoStream] = {}  # Shared VideoStream instances per source
+        self.source_ref_count: Dict[str, int] = {}  # Reference count for shared streams
     
     def add_camera(self, camera_id: str, store_id: str, source: str, 
                    name: str, ai_services: List[str] = None,
@@ -428,22 +441,28 @@ class CameraManager:
                 print(f"Warning: Maximum camera limit ({self.max_cameras}) reached. Cannot add camera {camera_id}")
                 return False
             
-            # Check if source is already in use by another camera
-            # (Many RTSP servers don't allow multiple concurrent connections)
-            if source in self.source_to_camera:
-                existing_id = self.source_to_camera[source]
-                if existing_id != camera_id and existing_id in self.cameras:
-                    print(f"Warning: Source {source} is already in use by camera {existing_id}")
-                    # Don't fail, but log the warning - some cameras support multiple connections
+            # Check if source is already in use - reuse existing VideoStream to avoid RTSP conflicts
+            shared_stream = None
+            if source in self.source_to_streams:
+                shared_stream = self.source_to_streams[source]
+                self.source_ref_count[source] = self.source_ref_count.get(source, 0) + 1
+                logger = logging.getLogger(__name__)
+                logger.info(f"Reusing existing VideoStream for source {source} (camera {camera_id}, ref_count: {self.source_ref_count[source]})")
             
             try:
                 worker = CameraWorker(
                     camera_id, store_id, source, name, ai_services,
-                    skip_frame
+                    skip_frame, shared_stream=shared_stream  # Pass shared stream if available
                 )
                 if worker.start():
                     self.cameras[camera_id] = worker
-                    self.source_to_camera[source] = camera_id
+                    # Track source mapping (keep first camera as primary for preview)
+                    if source not in self.source_to_camera:
+                        self.source_to_camera[source] = camera_id
+                    # Create shared stream if it doesn't exist
+                    if shared_stream is None:
+                        self.source_to_streams[source] = worker.stream
+                        self.source_ref_count[source] = 1
                     return True
                 else:
                     # Cleanup failed worker
@@ -451,9 +470,16 @@ class CameraManager:
                         worker.stop()
                     except:
                         pass
+                    # Decrement ref count if we were reusing a stream
+                    if shared_stream:
+                        self.source_ref_count[source] = max(0, self.source_ref_count.get(source, 1) - 1)
                     return False
             except Exception as e:
-                print(f"Error adding camera {camera_id}: {e}")
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error adding camera {camera_id}: {e}", exc_info=True)
+                # Decrement ref count if we were reusing a stream
+                if shared_stream:
+                    self.source_ref_count[source] = max(0, self.source_ref_count.get(source, 1) - 1)
                 return False
     
     def remove_camera(self, camera_id: str) -> bool:
@@ -463,13 +489,46 @@ class CameraManager:
                 worker = self.cameras[camera_id]
                 source = worker.source
                 try:
+                    # Check if this camera is using a shared stream
+                    is_shared = source in self.source_to_streams and self.source_to_streams[source] == worker.stream
+                    
                     worker.stop()
+                    
+                    # If using shared stream, decrement ref count
+                    if is_shared:
+                        self.source_ref_count[source] = max(0, self.source_ref_count.get(source, 1) - 1)
+                        logger = logging.getLogger(__name__)
+                        logger.info(f"Camera {camera_id} removed, source {source} ref_count: {self.source_ref_count[source]}")
+                        
+                        # If no more cameras using this stream, clean it up
+                        if self.source_ref_count.get(source, 0) <= 0:
+                            try:
+                                if source in self.source_to_streams:
+                                    self.source_to_streams[source].stop()
+                            except:
+                                pass
+                            del self.source_to_streams[source]
+                            del self.source_ref_count[source]
+                    else:
+                        # Not shared, clean up stream
+                        if source in self.source_to_streams:
+                            del self.source_to_streams[source]
+                        if source in self.source_ref_count:
+                            del self.source_ref_count[source]
                 except Exception as e:
-                    print(f"Error stopping camera {camera_id}: {e}")
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error stopping camera {camera_id}: {e}", exc_info=True)
                 del self.cameras[camera_id]
-                # Clean up source mapping
+                # Clean up source mapping if this was the primary camera
                 if source in self.source_to_camera and self.source_to_camera[source] == camera_id:
-                    del self.source_to_camera[source]
+                    # Find another camera with this source to be the primary
+                    for other_id, other_worker in self.cameras.items():
+                        if other_worker.source == source:
+                            self.source_to_camera[source] = other_id
+                            break
+                    else:
+                        # No other cameras with this source
+                        del self.source_to_camera[source]
                 return True
             return False
     
@@ -512,9 +571,23 @@ class CameraManager:
         camera = self.get_camera(camera_id)
         if camera and camera.stream:
             try:
-                return camera.stream.read()
+                frame = camera.stream.read()
+                # If stream exists but no frame yet, check if stream is still running
+                if frame is None and camera.stream.running:
+                    # Stream is running but no frame yet - might be initializing
+                    # Check if stream has been running for a while (more than 2 seconds)
+                    if hasattr(camera.stream, 'start_time'):
+                        if time.time() - camera.stream.start_time > 2.0:
+                            # Stream has been running for 2+ seconds with no frames - might be stuck
+                            logger = logging.getLogger(__name__)
+                            logger.warning(f"Camera {camera_id} stream running but no frames after 2 seconds")
+                    else:
+                        # Track start time
+                        camera.stream.start_time = time.time()
+                return frame
             except Exception as e:
-                print(f"Error reading frame from camera {camera_id}: {e}")
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error reading frame from camera {camera_id}: {e}", exc_info=True)
                 return None
         return None
     

@@ -28,6 +28,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     checkAuth();
+    
+    // Add error boundary for localStorage corruption
+    const handleStorageError = (e: StorageEvent) => {
+      if (e.key === 'auth_token' && e.newValue === null) {
+        // Token was removed, clear user state
+        setUser(null);
+      }
+    };
+    
+    // Listen for storage changes (e.g., from other tabs)
+    window.addEventListener('storage', handleStorageError);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageError);
+    };
   }, []);
 
   const checkAuth = async () => {
@@ -41,10 +56,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const profile = await authApi.getCurrentUser();
       setUser(profile);
     } catch (error: any) {
-      if (error.response?.status === 401) {
+      // Only clear auth on actual authentication errors (401/403)
+      // Don't clear on network errors, timeouts, or backend crashes
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        // Actual auth failure - clear tokens
         authApi.logout();
+        setUser(null);
+      } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        // Network timeout - keep token, user can retry
+        console.warn('Auth check timeout - keeping token for retry');
+        setUser(null); // Clear user state but keep token
+      } else if (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')) {
+        // Network error - keep token, backend might be down
+        console.warn('Auth check network error - keeping token');
+        setUser(null); // Clear user state but keep token
+      } else {
+        // Other errors - keep token but clear user state
+        console.warn('Auth check failed (non-auth error):', error.message || error);
+        setUser(null);
       }
-      setUser(null);
     } finally {
       setIsLoading(false);
     }

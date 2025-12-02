@@ -34,11 +34,18 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Only clear auth on actual 401 Unauthorized (not on network errors or timeouts)
     if (error.response?.status === 401) {
-      // Handle unauthorized access
+      // Handle unauthorized access - clear all auth data
       localStorage.removeItem('auth_token');
-      window.location.href = '/login';
+      localStorage.removeItem('auth_user');
+      localStorage.removeItem('auth_membership');
+      // Only redirect if not already on login page
+      if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
+        window.location.href = '/login';
+      }
     }
+    // For network errors, timeouts, or 500 errors, don't clear auth - backend might be down
     return Promise.reject(error);
   }
 );
