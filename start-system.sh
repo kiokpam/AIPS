@@ -16,21 +16,45 @@ if ! command -v docker-compose &> /dev/null; then
     exit 1
 fi
 
-# Create models directory if it doesn't exist
+# Create necessary directories
 mkdir -p models
-
-# Create uploads directory for backend
 mkdir -p backend/uploads
+mkdir -p clips
 
+# Check AI model files
+echo ""
+echo "🔍 Checking AI model files..."
+if [ -f "ai/models/yolov8n.onnx" ]; then
+    echo "✅ YOLO model: Found"
+else
+    echo "⚠️  YOLO model: Missing (ai/models/yolov8n.onnx)"
+fi
+
+if [ -f "ai/models/mobilenet_pytorch_best.pth" ]; then
+    echo "✅ MobileNet model: Found"
+else
+    echo "⚠️  MobileNet model: Missing (ai/models/mobilenet_pytorch_best.pth)"
+fi
+
+if [ -f "ai/videomae/videomae.onnx" ]; then
+    echo "✅ VideoMAE model: Found"
+else
+    echo "⚠️  VideoMAE model: Missing (optional - ai/videomae/videomae.onnx)"
+fi
+
+echo ""
 echo "📦 Building and starting all services..."
 echo "This may take a few minutes on first run..."
+
+# Stop any existing containers first
+docker-compose down 2>/dev/null
 
 # Start the system
 docker-compose up --build -d
 
 echo ""
 echo "⏳ Waiting for services to be ready..."
-sleep 15
+sleep 20
 
 # Check service health
 echo ""
@@ -39,7 +63,7 @@ echo "🔍 Checking service health..."
 # Function to check HTTP endpoint with retries
 check_http_endpoint() {
     local url=$1
-    local max_attempts=3
+    local max_attempts=5
     local attempt=1
     
     while [ $attempt -le $max_attempts ]; do
@@ -47,7 +71,7 @@ check_http_endpoint() {
             return 0
         fi
         attempt=$((attempt + 1))
-        sleep 2
+        sleep 3
     done
     return 1
 }
@@ -60,44 +84,50 @@ else
 fi
 
 # Check backend
-if check_http_endpoint "http://localhost:8000/api/healthz"; then
+if check_http_endpoint "http://localhost:8000/health"; then
     echo "✅ Backend API: Ready"
 else
-    echo "❌ Backend API: Not ready"
+    echo "⚠️  Backend API: Starting... (check logs with: docker-compose logs backend)"
 fi
 
 # Check frontend
 if check_http_endpoint "http://localhost:3000"; then
     echo "✅ Frontend: Ready"
 else
-    echo "❌ Frontend: Not ready"
+    echo "⚠️  Frontend: Starting... (check logs with: docker-compose logs frontend)"
 fi
 
-# Note: AI services can be added later by AI engineers
-# See ai/README.md for integration guide
+# Check AI service
+if docker-compose ps ai 2>/dev/null | grep -q "Up"; then
+    echo "✅ AI Service: Running"
+else
+    echo "⚠️  AI Service: Starting... (check logs with: docker-compose logs ai)"
+fi
 
 echo ""
 echo "🎉 AIPS System is starting up!"
 echo "=================================================="
-echo "📱 Frontend:     http://localhost:3000"
-echo "🔧 Backend API:  http://localhost:8000"
-echo "📊 API Docs:     http://localhost:8000/docs"
 echo ""
-echo "ℹ️  AI Services: Not configured (see ai/README.md for integration)"
+echo "🌐 Access Points:"
+echo "   📱 Frontend:     http://localhost:3000"
+echo "   🔧 Backend API:  http://localhost:8000"
+echo "   📊 API Docs:     http://localhost:8000/docs"
 echo ""
-echo "🔐 Authentication:"
-echo "   Use POST /api/auth/signup to create your first manager account."
-echo "   Tokens are org-scoped; switch organizations via POST /api/auth/switch-org."
+echo "🤖 AI Services:"
+echo "   • In/Out Counting (requires 2 lines drawn on camera)"
+echo "   • Behavior Detection (requires zone polygon on camera)"
 echo ""
-echo "📋 Useful Commands:"
-echo "   View logs:     docker-compose logs -f [service-name]"
-echo "   Stop system:   docker-compose down"
-echo "   Restart:       docker-compose restart [service-name]"
-echo "   Full rebuild:  docker-compose down && docker-compose up --build"
+echo "📋 Docker Commands:"
+echo "   View all logs:    docker-compose logs -f"
+echo "   View AI logs:     docker-compose logs -f ai"
+echo "   Stop system:      docker-compose down"
+echo "   Restart service:  docker-compose restart [service-name]"
 echo ""
-echo "🎯 Next Steps:"
-echo "   1. Open http://localhost:3000 in your browser"
-echo "   2. Click 'Sign In' and use demo credentials"
-echo "   3. Explore the dashboard and camera management"
+echo "🎯 Quick Start:"
+echo "   1. Open http://localhost:3000"
+echo "   2. Register a new account (first user becomes manager)"
+echo "   3. Create a store and add cameras"
+echo "   4. Draw lines (In/Out) or zones (Behavior) on cameras"
+echo "   5. Check dashboards for real-time AI analytics!"
 echo ""
 echo "Happy testing! 🚀"

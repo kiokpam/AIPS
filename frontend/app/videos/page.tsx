@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/src/contexts/AuthContext';
+import { clipsApi, VideoClip } from '@/lib/api';
+import toast from 'react-hot-toast';
 import {
   Video,
   Download,
@@ -16,31 +18,19 @@ import {
   Clock,
   FileVideo,
   Trash2,
-  Eye
+  Eye,
+  RefreshCw
 } from 'lucide-react';
-
-interface SavedVideo {
-  id: string;
-  filename: string;
-  cameraName: string;
-  storeName: string;
-  timestamp: Date;
-  duration: number; // in seconds
-  behavior: string;
-  accuracy: number;
-  size: number; // in MB
-  thumbnail?: string;
-}
 
 export default function VideosPage() {
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
-  const [videos, setVideos] = useState<SavedVideo[]>([]);
-  const [filteredVideos, setFilteredVideos] = useState<SavedVideo[]>([]);
+  const [videos, setVideos] = useState<VideoClip[]>([]);
+  const [filteredVideos, setFilteredVideos] = useState<VideoClip[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [behaviorFilter, setBehaviorFilter] = useState<string>('all');
-  const [selectedVideo, setSelectedVideo] = useState<SavedVideo | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<VideoClip | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -58,9 +48,9 @@ export default function VideosPage() {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(v =>
         v.filename.toLowerCase().includes(query) ||
-        v.cameraName.toLowerCase().includes(query) ||
-        v.storeName.toLowerCase().includes(query) ||
-        v.behavior.toLowerCase().includes(query)
+        (v.camera_name?.toLowerCase().includes(query)) ||
+        (v.store_name?.toLowerCase().includes(query)) ||
+        (v.behavior?.toLowerCase().includes(query))
       );
     }
 
@@ -74,84 +64,46 @@ export default function VideosPage() {
   const loadVideos = async () => {
     try {
       setIsLoading(true);
-      // TODO: Replace with real API call
-      // const response = await videosApi.getVideoClips();
-      
-      // Mock data - simulating saved videos with format: 9h30_80_shoplifting.mp4
-      const mockVideos: SavedVideo[] = [
-        {
-          id: '1',
-          filename: '9h30_80_shoplifting.mp4',
-          cameraName: 'Entrance Camera',
-          storeName: 'Main Store',
-          timestamp: new Date(Date.now() - 2 * 3600000), // 2 hours ago
-          duration: 45,
-          behavior: 'shoplifting',
-          accuracy: 80,
-          size: 12.5
-        },
-        {
-          id: '2',
-          filename: '10h15_72_loitering.mp4',
-          cameraName: 'Aisle 3 Camera',
-          storeName: 'Main Store',
-          timestamp: new Date(Date.now() - 1 * 3600000), // 1 hour ago
-          duration: 120,
-          behavior: 'loitering',
-          accuracy: 72,
-          size: 28.3
-        },
-        {
-          id: '3',
-          filename: '11h00_90_crowd.mp4',
-          cameraName: 'Checkout Camera',
-          storeName: 'Branch Store',
-          timestamp: new Date(Date.now() - 30 * 60000), // 30 minutes ago
-          duration: 60,
-          behavior: 'crowd',
-          accuracy: 90,
-          size: 15.8
-        },
-        {
-          id: '4',
-          filename: '8h45_85_fighting.mp4',
-          cameraName: 'Security Camera 2',
-          storeName: 'Main Store',
-          timestamp: new Date(Date.now() - 3 * 3600000), // 3 hours ago
-          duration: 30,
-          behavior: 'fighting',
-          accuracy: 85,
-          size: 8.2
-        },
-        {
-          id: '5',
-          filename: '12h30_78_shoplifting.mp4',
-          cameraName: 'Aisle 1 Camera',
-          storeName: 'Branch Store',
-          timestamp: new Date(Date.now() - 15 * 60000), // 15 minutes ago
-          duration: 90,
-          behavior: 'shoplifting',
-          accuracy: 78,
-          size: 22.1
-        }
-      ];
-
-      setVideos(mockVideos);
+      const response = await clipsApi.getClips({ limit: 100 });
+      setVideos(response.clips);
     } catch (error: any) {
       console.error('Failed to load videos:', error);
+      // Don't show error toast if clips directory just doesn't exist yet
+      if (error?.response?.status !== 404) {
+        toast.error('Failed to load videos');
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const handleDelete = async (video: VideoClip) => {
+    if (!confirm(`Are you sure you want to delete "${video.filename}"?`)) {
+      return;
+    }
+
+    try {
+      await clipsApi.deleteClip(video.filename);
+      setVideos(prev => prev.filter(v => v.id !== video.id));
+      toast.success('Video deleted');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || 'Failed to delete video');
+    }
   };
 
-  const formatDate = (date: Date) => {
-    return date.toLocaleString('en-US', {
+  const handleDownload = (video: VideoClip) => {
+    const url = clipsApi.getClipUrl(video.filename);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = video.filename;
+    link.target = '_blank';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const formatDate = (timestamp: string) => {
+    return new Date(timestamp).toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -160,8 +112,9 @@ export default function VideosPage() {
     });
   };
 
-  const formatTimeAgo = (date: Date) => {
+  const formatTimeAgo = (timestamp: string) => {
     const now = new Date();
+    const date = new Date(timestamp);
     const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
     if (diff < 60) return `${diff}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -169,24 +122,25 @@ export default function VideosPage() {
     return `${Math.floor(diff / 86400)}d ago`;
   };
 
-  const getBehaviorColor = (behavior: string) => {
+  const getBehaviorColor = (behavior?: string) => {
+    if (!behavior) return 'bg-slate-100 text-slate-800 border-slate-200';
     const colors: Record<string, string> = {
       shoplifting: 'bg-red-100 text-red-800 border-red-200',
-      loitering: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-      crowd: 'bg-orange-100 text-orange-800 border-orange-200',
-      fighting: 'bg-red-100 text-red-800 border-red-200',
-      default: 'bg-blue-100 text-blue-800 border-blue-200'
+      violence: 'bg-red-100 text-red-800 border-red-200',
+      normal: 'bg-green-100 text-green-800 border-green-200',
+      unknown: 'bg-slate-100 text-slate-800 border-slate-200',
     };
-    return colors[behavior] || colors.default;
+    return colors[behavior.toLowerCase()] || colors.unknown;
   };
 
-  const getAccuracyColor = (accuracy: number) => {
-    if (accuracy >= 80) return 'text-green-600';
-    if (accuracy >= 60) return 'text-yellow-600';
+  const getConfidenceColor = (confidence?: number) => {
+    if (!confidence) return 'text-slate-500';
+    if (confidence >= 0.8) return 'text-green-600';
+    if (confidence >= 0.6) return 'text-yellow-600';
     return 'text-red-600';
   };
 
-  const uniqueBehaviors = Array.from(new Set(videos.map(v => v.behavior)));
+  const uniqueBehaviors = Array.from(new Set(videos.map(v => v.behavior).filter(Boolean)));
 
   if (!isAuthenticated) {
     return null;
@@ -202,9 +156,17 @@ export default function VideosPage() {
             Saved Videos
           </h1>
           <p className="text-slate-400 mt-2">
-            View and manage behavior detection video recordings
+            Video clips saved by AI when anomalies (shoplifting, violence) are detected
           </p>
         </div>
+        <button
+          onClick={loadVideos}
+          className="btn-outline btn-md flex items-center gap-2"
+          disabled={isLoading}
+        >
+          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
       </div>
 
       {/* Search and Filters */}
@@ -241,6 +203,7 @@ export default function VideosPage() {
         {isLoading ? (
           <div className="p-12 text-center">
             <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <p className="text-slate-400 mt-4">Loading videos...</p>
           </div>
         ) : filteredVideos.length === 0 ? (
           <div className="p-12 text-center">
@@ -249,7 +212,7 @@ export default function VideosPage() {
               {searchQuery || behaviorFilter !== 'all' ? 'No videos match your filters' : 'No videos saved yet'}
             </p>
             <p className="text-slate-500 text-sm">
-              Videos will appear here when behavior is detected and saved
+              Videos will appear here when AI detects shoplifting or violence behavior
             </p>
           </div>
         ) : (
@@ -263,14 +226,10 @@ export default function VideosPage() {
               >
                 {/* Video Thumbnail */}
                 <div className="relative bg-slate-800 aspect-video flex items-center justify-center">
-                  {video.thumbnail ? (
-                    <img src={video.thumbnail} alt={video.filename} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="text-center">
-                      <Video className="w-16 h-16 text-slate-600 mx-auto mb-2" />
-                      <p className="text-xs text-slate-500">{video.filename}</p>
-                    </div>
-                  )}
+                  <div className="text-center">
+                    <Video className="w-16 h-16 text-slate-600 mx-auto mb-2" />
+                    <p className="text-xs text-slate-500 px-2 truncate">{video.filename}</p>
+                  </div>
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                     <button
                       onClick={() => setSelectedVideo(video)}
@@ -280,22 +239,27 @@ export default function VideosPage() {
                       <Play className="w-5 h-5 text-white fill-white" />
                     </button>
                     <button
+                      onClick={() => handleDownload(video)}
                       className="p-3 bg-slate-700 hover:bg-slate-600 rounded-full transition-colors"
                       title="Download video"
                     >
                       <Download className="w-5 h-5 text-white" />
                     </button>
                   </div>
-                  <div className="absolute top-2 right-2">
-                    <span className={`px-2 py-1 rounded text-xs font-medium border ${getBehaviorColor(video.behavior)}`}>
-                      {video.behavior}
-                    </span>
-                  </div>
-                  <div className="absolute bottom-2 left-2">
-                    <span className="px-2 py-1 bg-black/70 rounded text-xs text-white">
-                      {formatDuration(video.duration)}
-                    </span>
-                  </div>
+                  {video.behavior && (
+                    <div className="absolute top-2 right-2">
+                      <span className={`px-2 py-1 rounded text-xs font-medium border ${getBehaviorColor(video.behavior)}`}>
+                        {video.behavior}
+                      </span>
+                    </div>
+                  )}
+                  {video.duration_seconds && (
+                    <div className="absolute bottom-2 left-2">
+                      <span className="px-2 py-1 bg-black/70 rounded text-xs text-white">
+                        {Math.floor(video.duration_seconds / 60)}:{(video.duration_seconds % 60).toString().padStart(2, '0')}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Video Info */}
@@ -306,9 +270,13 @@ export default function VideosPage() {
                     </h3>
                     <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
                       <Camera className="w-3 h-3" />
-                      <span>{video.cameraName}</span>
-                      <span className="mx-1">•</span>
-                      <span>{video.storeName}</span>
+                      <span>{video.camera_name || 'Unknown Camera'}</span>
+                      {video.store_name && (
+                        <>
+                          <span className="mx-1">•</span>
+                          <span>{video.store_name}</span>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -317,17 +285,19 @@ export default function VideosPage() {
                       <Clock className="w-3 h-3" />
                       <span>{formatTimeAgo(video.timestamp)}</span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`font-semibold ${getAccuracyColor(video.accuracy)}`}>
-                        {video.accuracy}%
-                      </span>
-                      <span className="text-slate-500">accuracy</span>
-                    </div>
+                    {video.confidence && (
+                      <div className="flex items-center gap-2">
+                        <span className={`font-semibold ${getConfidenceColor(video.confidence)}`}>
+                          {Math.round(video.confidence * 100)}%
+                        </span>
+                        <span className="text-slate-500">confidence</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between pt-2 border-t border-slate-700">
                     <div className="text-xs text-slate-400">
-                      {video.size.toFixed(1)} MB
+                      {video.size_mb.toFixed(1)} MB
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -338,6 +308,7 @@ export default function VideosPage() {
                         <Eye className="w-4 h-4" />
                       </button>
                       <button
+                        onClick={() => handleDelete(video)}
                         className="p-2 text-red-400 hover:bg-slate-800 rounded-lg transition-colors"
                         title="Delete video"
                       >
@@ -378,43 +349,57 @@ export default function VideosPage() {
 
             <div className="p-6 space-y-6">
               {/* Video Player Area */}
-              <div className="bg-slate-900 rounded-lg aspect-video flex items-center justify-center border border-slate-700">
-                <div className="text-center">
-                  <Video className="w-20 h-20 text-slate-600 mx-auto mb-4" />
-                  <p className="text-slate-400">Video player will be implemented here</p>
-                  <p className="text-slate-500 text-sm mt-2">{selectedVideo.filename}</p>
-                </div>
+              <div className="bg-slate-900 rounded-lg overflow-hidden border border-slate-700">
+                <video
+                  src={clipsApi.getClipUrl(selectedVideo.filename)}
+                  controls
+                  className="w-full aspect-video"
+                >
+                  Your browser does not support the video tag.
+                </video>
               </div>
 
               {/* Video Information */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
                   <p className="text-xs text-slate-400 mb-1">Camera</p>
-                  <p className="text-slate-200 font-medium">{selectedVideo.cameraName}</p>
+                  <p className="text-slate-200 font-medium">{selectedVideo.camera_name || 'Unknown'}</p>
                 </div>
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
                   <p className="text-xs text-slate-400 mb-1">Store</p>
-                  <p className="text-slate-200 font-medium">{selectedVideo.storeName}</p>
+                  <p className="text-slate-200 font-medium">{selectedVideo.store_name || 'Unknown'}</p>
                 </div>
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
                   <p className="text-xs text-slate-400 mb-1">Behavior Detected</p>
-                  <span className={`inline-block px-2 py-1 rounded text-xs font-medium border ${getBehaviorColor(selectedVideo.behavior)}`}>
-                    {selectedVideo.behavior}
-                  </span>
+                  {selectedVideo.behavior ? (
+                    <span className={`inline-block px-2 py-1 rounded text-xs font-medium border ${getBehaviorColor(selectedVideo.behavior)}`}>
+                      {selectedVideo.behavior}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">Unknown</span>
+                  )}
                 </div>
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-                  <p className="text-xs text-slate-400 mb-1">Accuracy</p>
-                  <p className={`text-slate-200 font-semibold ${getAccuracyColor(selectedVideo.accuracy)}`}>
-                    {selectedVideo.accuracy}%
-                  </p>
-                </div>
-                <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-                  <p className="text-xs text-slate-400 mb-1">Duration</p>
-                  <p className="text-slate-200 font-medium">{formatDuration(selectedVideo.duration)}</p>
+                  <p className="text-xs text-slate-400 mb-1">Confidence</p>
+                  {selectedVideo.confidence ? (
+                    <p className={`text-slate-200 font-semibold ${getConfidenceColor(selectedVideo.confidence)}`}>
+                      {Math.round(selectedVideo.confidence * 100)}%
+                    </p>
+                  ) : (
+                    <span className="text-slate-500">N/A</span>
+                  )}
                 </div>
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
                   <p className="text-xs text-slate-400 mb-1">File Size</p>
-                  <p className="text-slate-200 font-medium">{selectedVideo.size.toFixed(1)} MB</p>
+                  <p className="text-slate-200 font-medium">{selectedVideo.size_mb.toFixed(1)} MB</p>
+                </div>
+                <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                  <p className="text-xs text-slate-400 mb-1">Duration</p>
+                  <p className="text-slate-200 font-medium">
+                    {selectedVideo.duration_seconds 
+                      ? `${Math.floor(selectedVideo.duration_seconds / 60)}:${(selectedVideo.duration_seconds % 60).toString().padStart(2, '0')}`
+                      : 'Unknown'}
+                  </p>
                 </div>
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 col-span-2">
                   <p className="text-xs text-slate-400 mb-1">Recorded At</p>
@@ -431,6 +416,7 @@ export default function VideosPage() {
                   Close
                 </button>
                 <button
+                  onClick={() => handleDownload(selectedVideo)}
                   className="btn-primary btn-md flex items-center gap-2"
                 >
                   <Download className="w-4 h-4" />
@@ -444,4 +430,3 @@ export default function VideosPage() {
     </div>
   );
 }
-
