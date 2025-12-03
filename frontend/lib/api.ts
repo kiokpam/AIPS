@@ -540,6 +540,28 @@ export interface AlertsResponse {
   total_count: number;
 }
 
+// In/Out Count Types
+export interface InOutCount {
+  time: string;
+  camera_id: string;
+  store_id: string;
+  count_in: number;
+  count_out: number;
+}
+
+export interface InOutSummary {
+  total_in: number;
+  total_out: number;
+  net: number;
+  cameras: Array<{
+    camera_id: string;
+    store_id: string;
+    count_in: number;
+    count_out: number;
+    last_updated: string;
+  }>;
+}
+
 export const eventsApi = {
   getAlerts: async (params?: { limit?: number; unread_only?: boolean; store_id?: string }): Promise<AlertsResponse> => {
     const response = await api.get('/events/alerts', { params });
@@ -565,6 +587,28 @@ export const eventsApi = {
     confidence?: number;
   }>> => {
     const response = await api.get(`/events/camera/${cameraId}/recent-behaviors`, { params: { limit } });
+    return response.data;
+  },
+
+  // In/Out Counting API
+  getInOutCounts: async (params?: { camera_id?: string; store_id?: string; limit?: number }): Promise<InOutCount[]> => {
+    const response = await api.get('/events/inout-counts', { params });
+    return response.data;
+  },
+
+  getInOutSummary: async (storeId?: string): Promise<InOutSummary> => {
+    const response = await api.get('/events/inout-summary', { params: storeId ? { store_id: storeId } : {} });
+    return response.data;
+  },
+
+  // People counts (zone-based)
+  getPeopleCounts: async (params?: { store_id?: string; limit?: number }): Promise<Array<{
+    time: string;
+    store_id: string;
+    zone_id: string;
+    value: number;
+  }>> => {
+    const response = await api.get('/events/people-counts', { params });
     return response.data;
   },
 };

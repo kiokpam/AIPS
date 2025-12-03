@@ -86,7 +86,8 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         if (area.type === 'zone' && area.isComplete) {
           drawZoneRef.current(ctx, area.points, '#10b981', 2);
         } else if (area.type === 'line' && area.isComplete) {
-          drawLineRef.current(ctx, area.p1, area.p2, '#3b82f6', 3);
+          // Pass the full area to draw both lines (Line A and Line B)
+          drawLineRef.current(ctx, area.p1, area.p2, '#3b82f6', 3, false, area);
         }
       });
 
@@ -95,7 +96,8 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         if (currentDrawing.type === 'zone') {
           drawZoneRef.current(ctx, currentDrawing.points || [], '#3b82f6', 2, true);
         } else if (currentDrawing.type === 'line') {
-          drawLineRef.current(ctx, currentDrawing.p1, currentDrawing.p2, '#3b82f6', 3, true);
+          // Pass the full currentDrawing to draw both lines as they're being drawn
+          drawLineRef.current(ctx, currentDrawing.p1, currentDrawing.p2, '#3b82f6', 3, true, currentDrawing);
         }
       }
     });
@@ -1122,7 +1124,8 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
   }, []);
 
-  const drawLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false) => {
+  // Helper to draw a single line segment with endpoints
+  const drawSingleLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false, label?: string) => {
     if (!p1 || !p2) return;
 
     // Convert coordinates if needed
@@ -1150,7 +1153,38 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     ctx.beginPath();
     ctx.arc(point2.x, point2.y, 6, 0, 2 * Math.PI);
     ctx.fill();
+
+    // Draw label if provided
+    if (label) {
+      const midX = (point1.x + point2.x) / 2;
+      const midY = (point1.y + point2.y) / 2;
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillStyle = color;
+      ctx.fillText(label, midX + 5, midY - 5);
+    }
   }, []);
+
+  // Draw line pair for In/Out counting (Line A and Line B)
+  const drawLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false, area?: any) => {
+    // Draw Line A (first line) - always in red/green
+    if (p1 && p2) {
+      drawSingleLine(ctx, p1, p2, '#ef4444', lineWidth, isDraft, 'Line A');
+    }
+    
+    // Draw Line B (second line for In/Out detection) - in blue
+    if (area && area.p1_b && area.p2_b) {
+      drawSingleLine(ctx, area.p1_b, area.p2_b, '#3b82f6', lineWidth, isDraft, 'Line B');
+    } else if (area && area.p1_b && !area.p2_b) {
+      // Draw just the first point of Line B while drawing
+      const point = (area.p1_b.x !== undefined && area.p1_b.y !== undefined)
+        ? { x: area.p1_b.x, y: area.p1_b.y }
+        : normalizedToCanvas(area.p1_b.fx || 0, area.p1_b.fy || 0, ctx.canvas);
+      ctx.fillStyle = '#3b82f6';
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 6, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }, [drawSingleLine]);
 
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1178,17 +1212,21 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           points: area.points.map((p: any) => ({ x: p.x, y: p.y, fx: p.fx, fy: p.fy }))
         }));
 
-      // Convert drawn lines to backend format - preserve normalized coordinates
+      // Convert drawn lines to backend format - now with Line A and Line B for In/Out detection
+      // AI expects: line_a = [p1, p2], line_b = [p1_b, p2_b]
+      // Crossing A→B = OUT, B→A = IN
       const lines = drawnAreas
         .filter(area => area.type === 'line' && area.isComplete)
         .map((area, index) => {
-          // Determine if it's IN or OUT line based on name or order
-          const isIn = area.name?.toLowerCase().includes('in') || index === 0;
           return {
             id: `line_${index + 1}`,
-            name: isIn ? 'IN' : 'OUT',
-            p1: { fx: area.p1.fx, fy: area.p1.fy }, // Store normalized coordinates
-            p2: { fx: area.p2.fx, fy: area.p2.fy }  // Store normalized coordinates
+            name: area.name || `InOut Line ${index + 1}`,
+            // Line A (first line) - normalized coordinates
+            p1: { fx: area.p1.fx, fy: area.p1.fy },
+            p2: { fx: area.p2.fx, fy: area.p2.fy },
+            // Line B (second line for In/Out detection) - normalized coordinates
+            p1_b: area.p1_b ? { fx: area.p1_b.fx, fy: area.p1_b.fy } : null,
+            p2_b: area.p2_b ? { fx: area.p2_b.fx, fy: area.p2_b.fy } : null,
           };
         });
 
@@ -1405,24 +1443,48 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
   const handleLineClick = (x: number, y: number, fx: number, fy: number) => {
     if (!currentDrawing) {
-      // Start new line - first point
+      // Start new line pair - first point of Line A
       setCurrentDrawing({
         id: Date.now(),
         type: 'line',
+        // Line A (first line)
         p1: { x, y, fx, fy },
         p2: null,
+        // Line B (second line for In/Out detection)
+        p1_b: null,
+        p2_b: null,
+        lineStep: 1, // Track which point we're on (1-4)
         isComplete: false
       });
-    } else if (currentDrawing.type === 'line' && !currentDrawing.p2) {
-      // Complete the line - second point
-      const completedLine = {
-        ...currentDrawing,
-        p2: { x, y, fx, fy },
-        isComplete: true,
-        name: `Line ${drawnAreas.filter(a => a.type === 'line').length + 1}`
-      };
-      setDrawnAreas(prev => [...prev, completedLine]);
-      setCurrentDrawing(null);
+    } else if (currentDrawing.type === 'line') {
+      const step = currentDrawing.lineStep || 1;
+      
+      if (step === 1 && !currentDrawing.p2) {
+        // Second point of Line A
+        setCurrentDrawing({
+          ...currentDrawing,
+          p2: { x, y, fx, fy },
+          lineStep: 2
+        });
+      } else if (step === 2 && !currentDrawing.p1_b) {
+        // First point of Line B
+        setCurrentDrawing({
+          ...currentDrawing,
+          p1_b: { x, y, fx, fy },
+          lineStep: 3
+        });
+      } else if (step === 3 && !currentDrawing.p2_b) {
+        // Fourth point - complete Line B and finish
+        const completedLinePair = {
+          ...currentDrawing,
+          p2_b: { x, y, fx, fy },
+          lineStep: 4,
+          isComplete: true,
+          name: `InOut Line ${drawnAreas.filter(a => a.type === 'line').length + 1}`
+        };
+        setDrawnAreas(prev => [...prev, completedLinePair]);
+        setCurrentDrawing(null);
+      }
     }
   };
 
@@ -1614,18 +1676,24 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                              </button>
             </div>
 
-                           {/* Current Drawing Status */}
-                           {currentDrawing && (
-                           <div className="p-3 bg-blue-50 rounded-lg">
-                               <p className="text-sm text-blue-800">
-                               <strong>{t('drawing_mode')} {currentDrawing.type}:</strong> 
-                                 {currentDrawing.type === 'zone' 
-                                   ? ` ${currentDrawing.points.length} points (minimum 3)`
-                                   : currentDrawing.type === 'line'
-                                   ? ` Click ${currentDrawing.p2 ? 'to finish' : 'second point'}`
-                                   : ''
-                                 }
-                               </p>
+                          {/* Current Drawing Status */}
+                          {currentDrawing && (
+                          <div className="p-3 bg-blue-50 rounded-lg">
+                              <p className="text-sm text-blue-800">
+                              <strong>{t('drawing_mode')} {currentDrawing.type}:</strong> 
+                                {currentDrawing.type === 'zone' 
+                                  ? ` ${currentDrawing.points.length} points (minimum 3)`
+                                  : currentDrawing.type === 'line'
+                                  ? (() => {
+                                      const step = currentDrawing.lineStep || 1;
+                                      if (step === 1) return ' Click Line A - Point 2';
+                                      if (step === 2) return ' Click Line B - Point 1';
+                                      if (step === 3) return ' Click Line B - Point 2 (last point)';
+                                      return ' Complete';
+                                    })()
+                                  : ''
+                                }
+                              </p>
                                <div className="flex space-x-2 mt-2">
                                  {currentDrawing.type === 'zone' && currentDrawing.points.length >= 3 && (
                                    <button
@@ -1788,8 +1856,13 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                 </p>
                 <ul className="text-sm text-blue-700 mt-1 space-y-1">
                   <li>• <strong>Zone:</strong> Click multiple points to create a polygon (minimum 3 points), then click "Finish Zone"</li>
-                  <li>• Use "Draw Zone" button to start drawing</li>
-                  <li>• Click "Stop Drawing" to exit drawing mode</li>
+                  <li>• <strong>In/Out Line:</strong> Click 4 points to create two parallel lines:
+                    <ul className="ml-4 text-xs text-blue-600 mt-0.5">
+                      <li>- Points 1-2: <span className="text-red-600 font-medium">Line A</span> (red)</li>
+                      <li>- Points 3-4: <span className="text-blue-600 font-medium">Line B</span> (blue)</li>
+                      <li>- Crossing A→B = OUT, B→A = IN</li>
+                    </ul>
+                  </li>
                   <li>• Use Undo/Clear buttons to manage drawn areas</li>
                 </ul>
               </div>
@@ -1836,7 +1909,7 @@ export default function CamerasPage() {
     try {
       // Only show loading spinner on initial load, not on refresh
       if (isInitialLoadRef.current || showSpinner) {
-        setIsLoading(true);
+      setIsLoading(true);
       }
       const list = await cameraApi.getCameras();
       setCameras(list);

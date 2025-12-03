@@ -92,13 +92,30 @@ class CountingZone(Base):
 
 
 class CountingLine(Base):
+    """
+    Stores IN/OUT counting line pair for AI detection.
+    
+    AI In/Out Detection requires TWO parallel lines:
+    - Line A (p1 → p2): First reference line
+    - Line B (p1_b → p2_b): Second reference line
+    
+    Crossing direction: A→B = OUT, B→A = IN
+    
+    Example layout:
+        p1 ●─────────● p2       (Line A)
+        p1_b ●─────────● p2_b   (Line B)
+    """
     __tablename__ = "counting_lines"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     camera_id: Mapped[str] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    p1: Mapped[list] = mapped_column(JSON, nullable=False)  # [x, y]
-    p2: Mapped[list] = mapped_column(JSON, nullable=False)  # [x, y]
+    # Line A endpoints (first line)
+    p1: Mapped[list] = mapped_column(JSON, nullable=False)  # [x, y] - Line A start
+    p2: Mapped[list] = mapped_column(JSON, nullable=False)  # [x, y] - Line A end
+    # Line B endpoints (second line) - required for AI In/Out detection
+    p1_b: Mapped[list] = mapped_column(JSON, nullable=True)  # [x, y] - Line B start
+    p2_b: Mapped[list] = mapped_column(JSON, nullable=True)  # [x, y] - Line B end
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
 

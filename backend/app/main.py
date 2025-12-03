@@ -58,7 +58,7 @@ def on_startup() -> None:
                 print(f"❌ Failed to connect to database after {max_retries} attempts: {e}")
                 # Don't raise - let the app start and retry on first request
                 print("⚠️ Application will start but database operations may fail until connection is established")
-    
+
     # Initialize email service
     try:
         from app.services.email_service import email_service

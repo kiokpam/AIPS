@@ -1,18 +1,25 @@
 """
 AI Service Integration API
-Provides endpoints and utilities for AI services to interact with cameras
+Provides endpoints and utilities for AI services to interact with cameras.
+
+This API is designed for AI services to:
+1. Pull frames from cameras
+2. Get zone/line configurations for In/Out counting and behavior detection
+3. Report health status
+
+AI services should poll this API and push results to /api/events/*.
 """
 
 import base64
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 import cv2
 import numpy as np
 
 from app.api.deps import get_db, get_current_membership_optional
-from app.models.core import Camera as CameraModel
+from app.models.core import Camera as CameraModel, CountingZone, CountingLine
 from app.services.camera_manager import camera_manager
 
 router = APIRouter(prefix="/ai", tags=["ai-integration"])
@@ -90,7 +97,17 @@ def get_camera_config_for_ai(
 ):
     """
     Get camera configuration for AI services.
-    Includes source, AI services enabled, zones, lines, etc.
+    
+    Returns:
+    - zones: List of polygon zones for behavior detection
+      Format: [{"id": "...", "name": "...", "polygon": [[x,y], [x,y], ...]}]
+    
+    - lines: List of line pairs for In/Out counting
+      Format: [{"id": "...", "name": "...", "line_a": [[x,y], [x,y]], "line_b": [[x,y], [x,y]]}]
+      
+    AI In/Out Detection:
+      - Crossing A→B = OUT (exiting)
+      - Crossing B→A = IN (entering)
     """
     camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
     if not camera:
@@ -99,11 +116,52 @@ def get_camera_config_for_ai(
             detail="Camera not found"
         )
     
-    # Get task configuration from camera worker
+    # Query zones from database
+    db_zones = db.query(CountingZone).filter(
+        CountingZone.camera_id == camera_id,
+        CountingZone.is_active == True
+    ).all()
+    
+    # Format zones for AI (polygon as [[x,y], ...])
+    zones = [
+        {
+            "id": zone.id,
+            "name": zone.name,
+            "polygon": zone.polygon,  # Already stored as [[x,y], ...]
+        }
+        for zone in db_zones
+    ]
+    
+    # Query lines from database
+    db_lines = db.query(CountingLine).filter(
+        CountingLine.camera_id == camera_id,
+        CountingLine.is_active == True
+    ).all()
+    
+    # Format lines for AI In/Out detection
+    # AI expects: line_a = ((x1,y1), (x2,y2)), line_b = ((x1,y1), (x2,y2))
+    lines = []
+    for line in db_lines:
+        line_data = {
+            "id": line.id,
+            "name": line.name,
+            "line_a": [line.p1, line.p2],  # Line A: [p1, p2]
+        }
+        # Line B is required for In/Out detection
+        if line.p1_b and line.p2_b:
+            line_data["line_b"] = [line.p1_b, line.p2_b]
+        else:
+            # If no Line B defined, AI can't do In/Out counting for this line
+            # Still include it but mark as incomplete
+            line_data["line_b"] = None
+            line_data["incomplete"] = True
+        lines.append(line_data)
+    
+    # Also get task config from camera worker for any runtime-added zones/lines
     camera_worker = camera_manager.get_camera(camera_id)
-    task_config = {}
+    runtime_config = {}
     if camera_worker:
-        task_config = camera_worker.get_task_config()
+        runtime_config = camera_worker.get_task_config()
     
     return {
         "camera_id": camera_id,
@@ -113,8 +171,13 @@ def get_camera_config_for_ai(
         "ai_services": camera.ai_services,
         "skip_frame": camera.skip_frame,
         "is_active": camera.is_active,
-        "zones": task_config.get("zones", []),
-        "lines": task_config.get("lines", []),
+        # Zones from database (persisted)
+        "zones": zones,
+        # Lines from database (persisted) - for In/Out counting
+        "lines": lines,
+        # Runtime config (from camera worker, not persisted)
+        "runtime_zones": runtime_config.get("zones", []),
+        "runtime_lines": runtime_config.get("lines", []),
     }
 
 

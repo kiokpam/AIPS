@@ -1,7 +1,17 @@
+# Core dependencies
 numpy
 opencv-python
+
+# PyTorch with CUDA support (GPU)
 torch
 torchvision
+
+# ONNX Runtime with GPU support
 onnxruntime-gpu
+
+# Tracking & Detection
 deep-sort-realtime
 ultralytics
+
+# API communication
+requests

@@ -303,7 +303,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
 
     # If remember_me is true, use 7 days expiration, otherwise use default (1 hour)
     expires_delta = timedelta(days=7) if payload.remember_me else None
-    
+
     token = create_access_token(
         subject=user.id,
         org_id=active_org.id,

@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import { useAuth } from '@/src/contexts/AuthContext';
-import { authApi } from '@/lib/api';
+import { authApi, eventsApi, storeApi, cameraApi, type Store, type Camera } from '@/lib/api';
 import { 
   Shield, 
   Users, 
@@ -19,7 +19,9 @@ import {
   Calendar,
   Activity,
   ChevronRight,
-  Store
+  Store as StoreIcon,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 
 interface StoreStats {
@@ -28,17 +30,14 @@ interface StoreStats {
   countIn: number;
   countOut: number;
   netInside: number;
-  peakHour: string;
-  peakCount: number;
-  hourlyData: { hour: string; in: number; out: number }[];
+  cameras: {
+    cameraId: string;
+    cameraName: string;
+    countIn: number;
+    countOut: number;
+    lastUpdated: Date;
+  }[];
   lastUpdate: Date;
-}
-
-interface DailyTrend {
-  date: string;
-  dayName: string;
-  totalIn: number;
-  totalOut: number;
 }
 
 export default function InOutDashboardPage() {
@@ -48,23 +47,22 @@ export default function InOutDashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState<boolean | null>(null);
   const [stores, setStores] = useState<StoreStats[]>([]);
-  const [dailyTrends, setDailyTrends] = useState<DailyTrend[]>([]);
+  const [storeList, setStoreList] = useState<Store[]>([]);
+  const [cameraList, setCameraList] = useState<Camera[]>([]);
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month'>('today');
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Calculate totals based on time range
-  const getMultiplier = () => {
-    switch (timeRange) {
-      case 'week': return 7;
-      case 'month': return 30;
-      default: return 1;
-    }
-  };
+  // Calculate totals
+  const filteredStores = selectedStore === 'all' 
+    ? stores 
+    : stores.filter(s => s.storeId === selectedStore);
   
-  const multiplier = getMultiplier();
-  const totalIn = stores.reduce((sum, s) => sum + s.countIn, 0) * multiplier;
-  const totalOut = stores.reduce((sum, s) => sum + s.countOut, 0) * multiplier;
-  const totalNet = stores.reduce((sum, s) => sum + s.netInside, 0);
+  const totalIn = filteredStores.reduce((sum, s) => sum + s.countIn, 0);
+  const totalOut = filteredStores.reduce((sum, s) => sum + s.countOut, 0);
+  const totalNet = filteredStores.reduce((sum, s) => sum + s.netInside, 0);
   
   // Get time range label
   const getTimeRangeLabel = () => {
@@ -75,8 +73,75 @@ export default function InOutDashboardPage() {
     }
   };
 
+  // Fetch In/Out data from API
+  const fetchInOutData = useCallback(async () => {
+    try {
+      setError(null);
+      
+      // Fetch stores and cameras
+      const [storesData, camerasData, inoutSummary] = await Promise.all([
+        storeApi.getStores(),
+        cameraApi.getCameras(),
+        eventsApi.getInOutSummary(selectedStore !== 'all' ? selectedStore : undefined),
+      ]);
+      
+      setStoreList(storesData);
+      setCameraList(camerasData);
+      
+      // Build store stats from API data
+      const storeStatsMap: { [key: string]: StoreStats } = {};
+      
+      // Initialize stores
+      storesData.forEach(store => {
+        storeStatsMap[store.id] = {
+          storeId: store.id,
+          storeName: store.name,
+          countIn: 0,
+          countOut: 0,
+          netInside: 0,
+          cameras: [],
+          lastUpdate: new Date(),
+        };
+      });
+      
+      // Add camera data from inout summary
+      inoutSummary.cameras.forEach(cam => {
+        const camera = camerasData.find(c => c.id === cam.camera_id);
+        const store = storesData.find(s => s.id === cam.store_id);
+        
+        if (store && storeStatsMap[cam.store_id]) {
+          storeStatsMap[cam.store_id].countIn += cam.count_in;
+          storeStatsMap[cam.store_id].countOut += cam.count_out;
+          storeStatsMap[cam.store_id].netInside = storeStatsMap[cam.store_id].countIn - storeStatsMap[cam.store_id].countOut;
+          storeStatsMap[cam.store_id].cameras.push({
+            cameraId: cam.camera_id,
+            cameraName: camera?.name || 'Unknown Camera',
+            countIn: cam.count_in,
+            countOut: cam.count_out,
+            lastUpdated: new Date(cam.last_updated),
+          });
+          storeStatsMap[cam.store_id].lastUpdate = new Date(cam.last_updated);
+        }
+      });
+      
+      setStores(Object.values(storeStatsMap));
+      setLastRefresh(new Date());
+    } catch (err: any) {
+      console.error('Failed to fetch in/out data:', err);
+      setError(err.message || 'Failed to load data');
+    }
+  }, [selectedStore]);
+
+  // Manual refresh
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchInOutData();
+    setIsRefreshing(false);
+  };
+
   useEffect(() => {
     let cleanup: (() => void) | undefined;
+    let interval: NodeJS.Timeout | undefined;
 
     const checkAccess = async () => {
       if (!isAuthenticated || !user) {
@@ -87,7 +152,9 @@ export default function InOutDashboardPage() {
       // Managers always have access
       if (user.active_membership.role === 'manager') {
         setHasAccess(true);
-        cleanup = startRealTimeUpdates();
+        await fetchInOutData();
+        // Poll for updates every 10 seconds
+        interval = setInterval(fetchInOutData, 10000);
         setIsLoading(false);
         return;
       }
@@ -100,7 +167,8 @@ export default function InOutDashboardPage() {
         );
         setHasAccess(permissions.can_access_dashboard);
         if (permissions.can_access_dashboard) {
-          cleanup = startRealTimeUpdates();
+          await fetchInOutData();
+          interval = setInterval(fetchInOutData, 10000);
         }
       } catch (error: any) {
         setHasAccess(false);
@@ -112,88 +180,18 @@ export default function InOutDashboardPage() {
     checkAccess();
 
     return () => {
-      if (cleanup) {
-        cleanup();
+      if (interval) {
+        clearInterval(interval);
       }
     };
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, user, fetchInOutData]);
 
-  const startRealTimeUpdates = () => {
-    // Generate hourly data for today (mock)
-    const generateHourlyData = () => {
-      const hours = [];
-      const now = new Date();
-      for (let i = 8; i <= Math.min(now.getHours(), 21); i++) {
-        const baseIn = Math.floor(Math.random() * 30) + 10;
-        const baseOut = Math.floor(Math.random() * 25) + 8;
-        hours.push({
-          hour: `${i}:00`,
-          in: baseIn,
-          out: baseOut
-        });
-      }
-      return hours;
-    };
-
-    // Mock store data - will be replaced with real API calls
-    const mockStores: StoreStats[] = [
-      {
-        storeId: '1',
-        storeName: 'Main Store',
-        countIn: 234,
-        countOut: 198,
-        netInside: 36,
-        peakHour: '14:00',
-        peakCount: 45,
-        hourlyData: generateHourlyData(),
-        lastUpdate: new Date()
-      },
-      {
-        storeId: '2',
-        storeName: 'Branch Store',
-        countIn: 156,
-        countOut: 142,
-        netInside: 14,
-        peakHour: '11:00',
-        peakCount: 32,
-        hourlyData: generateHourlyData(),
-        lastUpdate: new Date()
-      }
-    ];
-
-    // Mock daily trends (last 7 days)
-    const dayNames = lang === 'vi' 
-      ? ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
-      : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
-    const mockTrends: DailyTrend[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      mockTrends.push({
-        date: date.toLocaleDateString(),
-        dayName: dayNames[date.getDay()],
-        totalIn: Math.floor(Math.random() * 200) + 150,
-        totalOut: Math.floor(Math.random() * 180) + 140
-      });
+  // Re-fetch when selected store changes
+  useEffect(() => {
+    if (hasAccess) {
+      fetchInOutData();
     }
-
-    setStores(mockStores);
-    setDailyTrends(mockTrends);
-
-    // Simulate real-time updates every 10 seconds
-    const interval = setInterval(() => {
-      setStores(prev => prev.map(store => ({
-        ...store,
-        countIn: store.countIn + Math.floor(Math.random() * 3),
-        countOut: store.countOut + Math.floor(Math.random() * 2),
-        netInside: Math.max(0, store.netInside + Math.floor(Math.random() * 3) - 1),
-        lastUpdate: new Date()
-      })));
-    }, 10000);
-
-    return () => clearInterval(interval);
-  };
+  }, [selectedStore, hasAccess, fetchInOutData]);
 
   if (isLoading || hasAccess === null) {
     return (
@@ -233,64 +231,8 @@ export default function InOutDashboardPage() {
     return lang === 'vi' ? `${Math.floor(diff / 3600)} giờ trước` : `${Math.floor(diff / 3600)}h ago`;
   };
 
-  // Generate chart data based on time range
-  const getChartData = (): { label: string; in: number; out: number }[] => {
-    const dayNames = lang === 'vi' 
-      ? ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
-      : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
-    const weekNames = lang === 'vi'
-      ? ['Tuần 1', 'Tuần 2', 'Tuần 3', 'Tuần 4']
-      : ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-
-    if (timeRange === 'today') {
-      // Hourly data for today
-      const selectedStoreData = selectedStore === 'all' 
-        ? stores 
-        : stores.filter(s => s.storeId === selectedStore);
-      
-      const aggregated: { [hour: string]: { in: number; out: number } } = {};
-      selectedStoreData.forEach(store => {
-        store.hourlyData.forEach(h => {
-          if (!aggregated[h.hour]) {
-            aggregated[h.hour] = { in: 0, out: 0 };
-          }
-          aggregated[h.hour].in += h.in;
-          aggregated[h.hour].out += h.out;
-        });
-      });
-      return Object.entries(aggregated).map(([hour, data]) => ({ 
-        label: hour.split(':')[0], 
-        in: data.in, 
-        out: data.out 
-      }));
-    } else if (timeRange === 'week') {
-      // Daily data for the week
-      return dailyTrends.map(day => ({
-        label: day.dayName,
-        in: day.totalIn,
-        out: day.totalOut
-      }));
-    } else {
-      // Weekly data for the month
-      return weekNames.map((name, i) => ({
-        label: name,
-        in: Math.floor(Math.random() * 800) + 600,
-        out: Math.floor(Math.random() * 750) + 550
-      }));
-    }
-  };
-
-  // Get max value for chart scaling
-  const getChartMax = () => {
-    const data = getChartData();
-    let max = 0;
-    data.forEach(d => {
-      if (d.in > max) max = d.in;
-      if (d.out > max) max = d.out;
-    });
-    return max || 50;
-  };
+  // Check if we have real data
+  const hasRealData = stores.some(s => s.countIn > 0 || s.countOut > 0);
 
   return (
     <div className="space-y-6 text-slate-100">
@@ -347,10 +289,19 @@ export default function InOutDashboardPage() {
             className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value="all">{lang === 'vi' ? 'Tất cả cửa hàng' : 'All Stores'}</option>
-            {stores.map(store => (
-              <option key={store.storeId} value={store.storeId}>{store.storeName}</option>
+            {storeList.map(store => (
+              <option key={store.id} value={store.id}>{store.name}</option>
             ))}
           </select>
+
+          {/* Refresh Button */}
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:bg-slate-700 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          </button>
           
           {/* Live Indicator */}
           <div className="flex items-center gap-2 px-4 py-2 bg-green-900/20 border border-green-700/50 rounded-lg">
@@ -359,6 +310,31 @@ export default function InOutDashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400" />
+          <span className="text-red-300">{error}</span>
+        </div>
+      )}
+
+      {/* No Data Banner */}
+      {!hasRealData && stores.length > 0 && (
+        <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-yellow-400" />
+          <div>
+            <span className="text-yellow-300 font-medium">
+              {lang === 'vi' ? 'Chưa có dữ liệu từ AI' : 'No AI data yet'}
+            </span>
+            <p className="text-yellow-400/80 text-sm">
+              {lang === 'vi' 
+                ? 'Dữ liệu đếm sẽ xuất hiện khi AI service bắt đầu xử lý. Hãy đảm bảo camera đã được cấu hình đường đếm.'
+                : 'Counting data will appear when AI service starts processing. Make sure cameras have counting lines configured.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -412,7 +388,7 @@ export default function InOutDashboardPage() {
               <p className="text-purple-100 text-xs font-medium uppercase tracking-wide">
                 {lang === 'vi' ? 'Đang ở trong' : 'Currently Inside'}
               </p>
-              <p className="text-3xl font-bold mt-1">{totalNet}</p>
+              <p className="text-3xl font-bold mt-1">{Math.max(0, totalNet)}</p>
             </div>
             <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
               <Users className="w-6 h-6" />
@@ -431,73 +407,70 @@ export default function InOutDashboardPage() {
               <p className="text-orange-100 text-xs font-medium uppercase tracking-wide">
                 {lang === 'vi' ? 'Số cửa hàng' : 'Active Stores'}
               </p>
-              <p className="text-3xl font-bold mt-1">{stores.length}</p>
+              <p className="text-3xl font-bold mt-1">{storeList.length}</p>
             </div>
             <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-              <Store className="w-6 h-6" />
+              <StoreIcon className="w-6 h-6" />
             </div>
           </div>
         </motion.div>
       </div>
 
-      {/* Charts Row */}
+      {/* Summary Stats */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Traffic Chart - changes based on time range */}
         <motion.div
-          key={`chart-${timeRange}`}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="lg:col-span-2 bg-slate-800 rounded-xl border border-slate-700 p-6"
         >
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
-              <Activity className="w-5 h-5 text-blue-400" />
-              {timeRange === 'today' 
-                ? (lang === 'vi' ? 'Lưu lượng theo giờ' : 'Hourly Traffic')
-                : timeRange === 'week'
-                ? (lang === 'vi' ? 'Lưu lượng theo ngày' : 'Daily Traffic')
-                : (lang === 'vi' ? 'Lưu lượng theo tuần' : 'Weekly Traffic')
-              }
-            </h2>
-            <div className="flex items-center gap-4 text-xs">
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 bg-green-500 rounded"></div>
-                <span className="text-slate-400">{lang === 'vi' ? 'Vào' : 'In'}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 bg-blue-500 rounded"></div>
-                <span className="text-slate-400">{lang === 'vi' ? 'Ra' : 'Out'}</span>
-              </div>
-            </div>
-          </div>
+          <h2 className="text-lg font-semibold text-slate-100 flex items-center gap-2 mb-6">
+            <Activity className="w-5 h-5 text-blue-400" />
+            {lang === 'vi' ? 'Thống kê theo Camera' : 'Camera Statistics'}
+          </h2>
           
-          {/* Bar Chart */}
-          <div className="h-64 flex items-end gap-1 sm:gap-2">
-            {getChartData().map((data, index) => (
-              <div key={index} className="flex-1 flex flex-col items-center gap-1">
-                <div className="w-full flex gap-0.5 items-end h-48">
-                  {/* In Bar */}
-                  <div 
-                    className="flex-1 bg-green-500/80 rounded-t transition-all duration-500 hover:bg-green-500"
-                    style={{ height: `${(data.in / getChartMax()) * 100}%` }}
-                    title={`${lang === 'vi' ? 'Vào' : 'In'}: ${data.in}`}
-                  />
-                  {/* Out Bar */}
-                  <div 
-                    className="flex-1 bg-blue-500/80 rounded-t transition-all duration-500 hover:bg-blue-500"
-                    style={{ height: `${(data.out / getChartMax()) * 100}%` }}
-                    title={`${lang === 'vi' ? 'Ra' : 'Out'}: ${data.out}`}
-                  />
-                </div>
-                <span className="text-[10px] sm:text-xs text-slate-500">{data.label}</span>
-              </div>
-            ))}
-          </div>
+          {filteredStores.length > 0 && filteredStores.some(s => s.cameras.length > 0) ? (
+            <div className="space-y-4">
+              {filteredStores.map(store => (
+                store.cameras.map(camera => (
+                  <div key={camera.cameraId} className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-slate-200 font-medium">{camera.cameraName}</p>
+                        <p className="text-xs text-slate-400">{store.storeName}</p>
+                      </div>
+                      <div className="flex items-center gap-6">
+                        <div className="text-center">
+                          <p className="text-xl font-bold text-green-400">{camera.countIn}</p>
+                          <p className="text-xs text-slate-500">{lang === 'vi' ? 'Vào' : 'In'}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-xl font-bold text-blue-400">{camera.countOut}</p>
+                          <p className="text-xs text-slate-500">{lang === 'vi' ? 'Ra' : 'Out'}</p>
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {formatTime(camera.lastUpdated)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-slate-400">
+              <Activity className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p>{lang === 'vi' ? 'Chưa có dữ liệu camera' : 'No camera data available'}</p>
+              <p className="text-sm mt-1">
+                {lang === 'vi' 
+                  ? 'Cấu hình đường đếm cho camera để bắt đầu thu thập dữ liệu'
+                  : 'Configure counting lines on cameras to start collecting data'}
+              </p>
+            </div>
+          )}
         </motion.div>
 
-        {/* Summary Stats */}
+        {/* Quick Stats */}
         <motion.div
-          key={`summary-${timeRange}`}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="bg-slate-800 rounded-xl border border-slate-700 p-6"
@@ -508,40 +481,7 @@ export default function InOutDashboardPage() {
           </h2>
           
           <div className="space-y-4">
-            {/* Average per day/hour */}
-            <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-              <p className="text-xs text-slate-400 mb-1">
-                {timeRange === 'today' 
-                  ? (lang === 'vi' ? 'Trung bình/giờ' : 'Avg per Hour')
-                  : timeRange === 'week'
-                  ? (lang === 'vi' ? 'Trung bình/ngày' : 'Avg per Day')
-                  : (lang === 'vi' ? 'Trung bình/tuần' : 'Avg per Week')
-                }
-              </p>
-              <p className="text-2xl font-bold text-slate-100">
-                {timeRange === 'today' 
-                  ? Math.round(totalIn / 12)
-                  : timeRange === 'week'
-                  ? Math.round(totalIn / 7)
-                  : Math.round(totalIn / 4)
-                }
-                <span className="text-sm text-slate-400 font-normal ml-1">
-                  {lang === 'vi' ? 'người' : 'people'}
-                </span>
-              </p>
-            </div>
-
-            {/* Peak time */}
-            <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-              <p className="text-xs text-slate-400 mb-1">
-                {lang === 'vi' ? 'Thời điểm cao điểm' : 'Peak Time'}
-              </p>
-              <p className="text-2xl font-bold text-orange-400">
-                {timeRange === 'today' ? '14:00' : timeRange === 'week' ? (lang === 'vi' ? 'Thứ 7' : 'Saturday') : (lang === 'vi' ? 'Tuần 2' : 'Week 2')}
-              </p>
-            </div>
-
-            {/* Conversion Rate */}
+            {/* Out/In Ratio */}
             <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
               <p className="text-xs text-slate-400 mb-1">
                 {lang === 'vi' ? 'Tỷ lệ ra/vào' : 'Out/In Ratio'}
@@ -551,8 +491,28 @@ export default function InOutDashboardPage() {
               </p>
             </div>
 
+            {/* Active Cameras */}
+            <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+              <p className="text-xs text-slate-400 mb-1">
+                {lang === 'vi' ? 'Camera đang hoạt động' : 'Active Cameras'}
+              </p>
+              <p className="text-2xl font-bold text-orange-400">
+                {cameraList.filter(c => c.is_active).length}
+              </p>
+            </div>
+
+            {/* Last Update */}
+            <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+              <p className="text-xs text-slate-400 mb-1">
+                {lang === 'vi' ? 'Cập nhật lần cuối' : 'Last Updated'}
+              </p>
+              <p className="text-lg font-bold text-green-400">
+                {formatTime(lastRefresh)}
+              </p>
+            </div>
+
             {/* Busiest Store */}
-            {stores.length > 1 && (
+            {stores.length > 1 && stores.some(s => s.countIn > 0) && (
               <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
                 <p className="text-xs text-slate-400 mb-1">
                   {lang === 'vi' ? 'Cửa hàng đông nhất' : 'Busiest Store'}
@@ -562,21 +522,6 @@ export default function InOutDashboardPage() {
                 </p>
               </div>
             )}
-
-            {/* Trend Indicator */}
-            <div className="bg-gradient-to-r from-green-900/30 to-blue-900/30 rounded-lg p-4 border border-green-700/30">
-              <div className="flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-green-400" />
-                <div>
-                  <p className="text-sm font-medium text-slate-200">
-                    {lang === 'vi' ? 'Xu hướng tăng' : 'Trending Up'}
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    +12% {lang === 'vi' ? 'so với kỳ trước' : 'vs previous period'}
-                  </p>
-                </div>
-              </div>
-            </div>
           </div>
         </motion.div>
       </div>
@@ -600,7 +545,7 @@ export default function InOutDashboardPage() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                    <Store className="w-6 h-6 text-white" />
+                    <StoreIcon className="w-6 h-6 text-white" />
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-slate-100">{store.storeName}</h3>
@@ -611,22 +556,18 @@ export default function InOutDashboardPage() {
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-4 gap-4 sm:gap-8">
+                <div className="grid grid-cols-3 gap-4 sm:gap-8">
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-green-400">{(store.countIn * multiplier).toLocaleString()}</p>
+                    <p className="text-2xl font-bold text-green-400">{store.countIn.toLocaleString()}</p>
                     <p className="text-xs text-slate-500">{lang === 'vi' ? 'Vào' : 'In'}</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-blue-400">{(store.countOut * multiplier).toLocaleString()}</p>
+                    <p className="text-2xl font-bold text-blue-400">{store.countOut.toLocaleString()}</p>
                     <p className="text-xs text-slate-500">{lang === 'vi' ? 'Ra' : 'Out'}</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-purple-400">{store.netInside}</p>
+                    <p className="text-2xl font-bold text-purple-400">{Math.max(0, store.netInside)}</p>
                     <p className="text-xs text-slate-500">{lang === 'vi' ? 'Trong' : 'Inside'}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-orange-400">{store.peakHour}</p>
-                    <p className="text-xs text-slate-500">{lang === 'vi' ? 'Cao điểm' : 'Peak'}</p>
                   </div>
                 </div>
               </div>
@@ -639,10 +580,10 @@ export default function InOutDashboardPage() {
         <div className="text-center py-12 bg-slate-800 rounded-xl border border-slate-700">
           <BarChart3 className="w-16 h-16 text-slate-400 mx-auto mb-4 opacity-50" />
           <h3 className="text-xl font-semibold text-slate-200 mb-2">
-            {lang === 'vi' ? 'Chưa có dữ liệu thống kê' : 'No Statistics Data'}
+            {lang === 'vi' ? 'Chưa có cửa hàng' : 'No Stores Found'}
           </h3>
           <p className="text-slate-400 mb-4">
-            {lang === 'vi' ? 'Chưa có camera nào được bật tính năng đếm ra/vào.' : 'No cameras with in/out counting enabled yet.'}
+            {lang === 'vi' ? 'Tạo cửa hàng và thêm camera để bắt đầu đếm.' : 'Create stores and add cameras to start counting.'}
           </p>
           <button
             onClick={() => router.push('/cameras')}

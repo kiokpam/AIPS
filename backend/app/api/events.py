@@ -1,4 +1,5 @@
 import uuid
+import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,16 +7,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from app.api.deps import CurrentMembership, get_current_membership, get_db, MembershipRole
 from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission
-from app.schemas.events import CounterUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse
+from app.schemas.events import CounterUpdateEvent, InOutUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse
 
 router = APIRouter(prefix="/events", tags=["events"])
+logger = logging.getLogger(__name__)
+
 
 @router.post("/counter-update")
 def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_db)):
-    """Receive counter update events from People Counting AI"""
-    import logging
-    logger = logging.getLogger(__name__)
-    
+    """Receive counter update events from People Counting AI (zone-based counts)"""
     try:
         store = db.query(StoreModel).filter(StoreModel.id == event.store_id).first()
         if not store:
@@ -41,6 +41,137 @@ def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_
         db.rollback()
         logger.error(f"Failed to store counter update: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/inout-update")
+def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db)):
+    """
+    Receive In/Out counting updates from AI service.
+    
+    AI detects line crossings and sends cumulative counts:
+    - count_in: Total B→A crossings (entering)
+    - count_out: Total A→B crossings (exiting)
+    """
+    try:
+        # Verify camera exists
+        camera = db.query(CameraModel).filter(CameraModel.id == event.camera_id).first()
+        if not camera:
+            logger.warning(f"InOut update received for non-existent camera: {event.camera_id}")
+            raise HTTPException(status_code=404, detail="Camera not found")
+        
+        # Verify store exists
+        store = db.query(StoreModel).filter(StoreModel.id == event.store_id).first()
+        if not store:
+            logger.warning(f"InOut update received for non-existent store: {event.store_id}")
+            raise HTTPException(status_code=404, detail="Store not found")
+
+        # Insert into inout_counts table
+        db.execute(text("""
+            INSERT INTO inout_counts (time, camera_id, store_id, count_in, count_out, org_id)
+            VALUES (:time, :camera_id, :store_id, :count_in, :count_out, :org_id)
+            ON CONFLICT (time, camera_id) DO UPDATE SET
+                count_in = :count_in,
+                count_out = :count_out
+        """), {
+            "time": event.ts,
+            "camera_id": event.camera_id,
+            "store_id": event.store_id,
+            "count_in": event.count_in,
+            "count_out": event.count_out,
+            "org_id": store.org_id,
+        })
+        db.commit()
+        
+        logger.debug(f"InOut update stored: camera={event.camera_id}, in={event.count_in}, out={event.count_out}")
+        return {"status": "success", "message": "InOut update stored"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to store inout update: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/inout-counts")
+def get_inout_counts(
+    camera_id: Optional[str] = None,
+    store_id: Optional[str] = None,
+    limit: int = Query(100, le=1000),
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """Get recent In/Out count data for dashboard."""
+    base_query = "SELECT time, camera_id, store_id, count_in, count_out FROM inout_counts WHERE org_id = :org_id"
+    params = {"org_id": current.organization.id, "limit": limit}
+
+    if camera_id:
+        base_query += " AND camera_id = :camera_id"
+        params["camera_id"] = camera_id
+    
+    if store_id:
+        base_query += " AND store_id = :store_id"
+        params["store_id"] = store_id
+
+    base_query += " ORDER BY time DESC LIMIT :limit"
+
+    result = db.execute(text(base_query), params)
+    rows = result.fetchall()
+
+    return [
+        {
+            "time": row.time.isoformat() if hasattr(row.time, 'isoformat') else str(row.time),
+            "camera_id": row.camera_id,
+            "store_id": row.store_id,
+            "count_in": row.count_in,
+            "count_out": row.count_out,
+        }
+        for row in rows
+    ]
+
+
+@router.get("/inout-summary")
+def get_inout_summary(
+    store_id: Optional[str] = None,
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """Get summary of In/Out counts (latest totals per camera)."""
+    # Get the latest counts for each camera
+    base_query = """
+        SELECT DISTINCT ON (camera_id) 
+            camera_id, store_id, count_in, count_out, time
+        FROM inout_counts 
+        WHERE org_id = :org_id
+    """
+    params = {"org_id": current.organization.id}
+    
+    if store_id:
+        base_query += " AND store_id = :store_id"
+        params["store_id"] = store_id
+    
+    base_query += " ORDER BY camera_id, time DESC"
+    
+    result = db.execute(text(base_query), params)
+    rows = result.fetchall()
+    
+    total_in = sum(row.count_in for row in rows)
+    total_out = sum(row.count_out for row in rows)
+    
+    return {
+        "total_in": total_in,
+        "total_out": total_out,
+        "net": total_in - total_out,
+        "cameras": [
+            {
+                "camera_id": row.camera_id,
+                "store_id": row.store_id,
+                "count_in": row.count_in,
+                "count_out": row.count_out,
+                "last_updated": row.time.isoformat() if hasattr(row.time, 'isoformat') else str(row.time),
+            }
+            for row in rows
+        ]
+    }
 
 @router.post("/anomaly-detected")
 def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(get_db)):
@@ -87,16 +218,12 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
         db.commit()
         db.refresh(alert)
         
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Anomaly detected: {event.type} at {event.store_id}/{event.camera_id} - severity: {event.severity} (Alert ID: {alert.id})")
         return {"status": "success", "message": "Anomaly event received and stored", "alert_id": alert.id}
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Failed to store anomaly event: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 

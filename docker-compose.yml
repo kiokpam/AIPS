@@ -1,6 +1,8 @@
 services:
   db:
     image: timescale/timescaledb-ha:pg15-latest
+    container_name: aips-db
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=aips
       - POSTGRES_PASSWORD=aips
@@ -17,6 +19,8 @@ services:
 
   backend:
     build: ./backend
+    container_name: aips-backend
+    restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
     environment:
       - DATABASE_URL=postgresql+psycopg://aips:aips@db:5432/aips
@@ -41,6 +45,8 @@ services:
 
   frontend:
     build: ./frontend
+    container_name: aips-frontend
+    restart: unless-stopped
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     ports:
@@ -52,8 +58,30 @@ services:
       - /app/node_modules
       - /app/.next
 
+  # AI Service - GPU Accelerated
+  # Requires: NVIDIA GPU + nvidia-docker runtime
+  ai:
+    build: ./ai
+    container_name: aips-ai
+    restart: unless-stopped
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - AI_DEVICE=cuda  # GPU acceleration enabled
+      - PYTHONUNBUFFERED=1
+      - NVIDIA_VISIBLE_DEVICES=all
+    depends_on:
+      - backend
+    volumes:
+      - ./ai:/app
+      - ./clips:/app/clips  # Saved video clips for anomalies
+    # GPU Support - requires nvidia-docker
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 volumes:
   db_data:
-
-
