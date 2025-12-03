@@ -78,5 +78,60 @@ def on_startup() -> None:
     except Exception as e:
         print(f"⚠️ Email service initialization failed: {e}")
         print("⚠️ Password reset emails will not be sent")
+    
+    # Auto-restore active cameras from database
+    try:
+        from app.db.session import SessionLocal
+        from app.models.core import Camera as CameraModel
+        from app.services.camera_manager import camera_manager
+        
+        db = SessionLocal()
+        try:
+            # Get all cameras that were marked as active
+            active_cameras = db.query(CameraModel).filter(CameraModel.is_active == True).all()
+            
+            if active_cameras:
+                print(f"🎥 Restoring {len(active_cameras)} active camera(s)...")
+                
+                restored = 0
+                failed = 0
+                for camera in active_cameras:
+                    try:
+                        # Add small delay between restores to avoid resource conflicts
+                        if restored > 0:
+                            time.sleep(0.5)
+                        
+                        success = camera_manager.add_camera(
+                            camera_id=camera.id,
+                            store_id=camera.store_id,
+                            source=camera.source,
+                            name=camera.name,
+                            ai_services=camera.ai_services or ["people_counting", "behavior_detection"],
+                            skip_frame=camera.skip_frame or 3,
+                        )
+                        
+                        if success:
+                            restored += 1
+                            print(f"   ✅ Camera '{camera.name}' restored")
+                        else:
+                            # Mark as inactive if can't restore
+                            camera.is_active = False
+                            db.commit()
+                            failed += 1
+                            print(f"   ⚠️ Camera '{camera.name}' failed to restore (marked inactive)")
+                    except Exception as cam_err:
+                        camera.is_active = False
+                        db.commit()
+                        failed += 1
+                        print(f"   ⚠️ Camera '{camera.name}' error: {cam_err}")
+                
+                print(f"🎥 Camera restore complete: {restored} restored, {failed} failed")
+            else:
+                print("🎥 No active cameras to restore")
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"⚠️ Camera auto-restore failed: {e}")
+        print("⚠️ Cameras can be started manually from the UI")
 
 
