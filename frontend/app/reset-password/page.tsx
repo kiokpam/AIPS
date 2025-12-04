@@ -40,7 +40,8 @@ function ResetPasswordForm() {
         const response = await authApi.validateResetToken(token);
         if (response.valid) {
           setIsValid(true);
-          setMaskedEmail(response.email);
+          // email may be undefined; coerce to null-safe value for state
+          setMaskedEmail(response.email ?? null);
         }
       } catch (err: any) {
         const message = err.response?.data?.detail || 'Invalid or expired reset token';

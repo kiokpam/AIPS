@@ -133,7 +133,13 @@ export default function InOutDashboardPage() {
       });
       
       // Add camera data from inout summary
-      inoutSummary.cameras.forEach(cam => {
+      inoutSummary.cameras.forEach((cam: {
+        camera_id: string;
+        store_id: string;
+        count_in: number;
+        count_out: number;
+        last_updated: string;
+      }) => {
         const camera = camerasData.find(c => c.id === cam.camera_id);
         const store = storesData.find(s => s.id === cam.store_id);
         
