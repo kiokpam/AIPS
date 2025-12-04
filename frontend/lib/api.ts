@@ -6,7 +6,8 @@ import axios, { AxiosError } from 'axios';
 
 function resolveBaseUrl(): string {
   const raw = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  return raw.replace(/\/+$/, '');
+  const trimmed = raw.replace(/\/+$/, '');
+  return trimmed.endsWith('/api') ? trimmed.slice(0, -4) : trimmed;
 }
 
 const baseUrl = resolveBaseUrl();
@@ -80,6 +81,12 @@ export interface ProfileResponse {
   active_membership: MembershipInfo;
   memberships: MembershipInfo[];
 }
+
+export const buildWsUrl = (path: string): string => {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const wsBase = baseUrl.replace(/^http/, 'ws');
+  return `${wsBase}/api${normalizedPath}`;
+};
 
 export interface InviteResponse {
   id: string;

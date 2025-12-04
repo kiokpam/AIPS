@@ -40,13 +40,15 @@ class CurrentMembership:
         return self.membership.role
 
 
-def get_current_membership(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
-) -> CurrentMembership:
-    token = credentials.credentials
+def authenticate_token(token: Optional[str], db: Session) -> CurrentMembership:
+    """Resolve CurrentMembership from a raw JWT token string."""
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    
     settings = get_settings()
-
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except JWTError as exc:
@@ -54,25 +56,25 @@ def get_current_membership(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         ) from exc
-
+    
     user_id = payload.get("sub")
     org_id = payload.get("org_id")
     role_value = payload.get("role")
-
+    
     if not user_id or not org_id or not role_value:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         )
-
+    
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-
+    
     organization = db.query(Organization).filter(Organization.id == org_id).first()
     if not organization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Organization not found")
-
+    
     membership = (
         db.query(Membership)
         .filter(Membership.user_id == user_id, Membership.org_id == org_id)
@@ -80,15 +82,23 @@ def get_current_membership(
     )
     if not membership:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Membership not found")
-
+    
     memberships = db.query(Membership).filter(Membership.user_id == user_id).all()
-
+    
     return CurrentMembership(
         user=user,
         organization=organization,
         membership=membership,
         memberships=memberships,
     )
+
+
+def get_current_membership(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> CurrentMembership:
+    token = credentials.credentials
+    return authenticate_token(token, db)
 
 
 def require_manager(
@@ -117,61 +127,5 @@ def get_current_membership_optional(
         # Try token query parameter (for img tags that can't send headers)
         token = request.query_params.get("token")
     
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-        )
-    
-    settings = get_settings()
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    
-    user_id = payload.get("sub")
-    org_id = payload.get("org_id")
-    role_value = payload.get("role")
-    
-    if not user_id or not org_id or not role_value:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-    
-    organization = db.query(Organization).filter(Organization.id == org_id).first()
-    if not organization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Organization not found",
-        )
-    
-    membership = db.query(Membership).filter(
-        Membership.user_id == user_id,
-        Membership.org_id == org_id
-    ).first()
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Membership not found",
-        )
-    
-    memberships = db.query(Membership).filter(Membership.user_id == user_id).all()
-    
-    return CurrentMembership(
-        user=user,
-        organization=organization,
-        membership=membership,
-        memberships=memberships,
-    )
+    return authenticate_token(token, db)
 

@@ -30,7 +30,7 @@ import {
   Users,
   MapPin
 } from 'lucide-react';
-import { cameraApi, storeApi, eventsApi, type Camera as CameraType } from '@/lib/api';
+import { cameraApi, storeApi, eventsApi, buildWsUrl, type Camera as CameraType } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import toast from 'react-hot-toast';
@@ -273,11 +273,12 @@ const tasksApi = {
 };
 
 
-const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
+const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
   camera: CameraType;
   onEdit: (camera: CameraType) => void;
   onDelete: (id: string) => void;
   onToggle: (id: string, isActive: boolean) => void;
+  realtimeCount?: { count_in: number; count_out: number; ts: string };
 }) => {
   const { t } = useI18n();
   const [isStreaming, setIsStreaming] = useState(!!camera.is_active);
@@ -297,6 +298,17 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   const [inOutCounts, setInOutCounts] = useState<{ count_in: number; count_out: number; cumulative: number } | null>(null);
   const [isInOutRegistered, setIsInOutRegistered] = useState(false);
   const [isRegisteringInOut, setIsRegisteringInOut] = useState(false);
+  
+  useEffect(() => {
+    if (realtimeCount) {
+      setInOutCounts({
+        count_in: realtimeCount.count_in,
+        count_out: realtimeCount.count_out,
+        cumulative: realtimeCount.count_in - realtimeCount.count_out,
+      });
+      setIsInOutRegistered(true);
+    }
+  }, [realtimeCount]);
   
   // Behavior detection state
   const hasBehaviorDetection = camera.ai_services?.includes('behavior_detection') || false;
@@ -532,7 +544,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
           ctx.arc(p2[0], p2[1], 6, 0, 2 * Math.PI);
           ctx.fill();
           // Draw label for Line A
-          ctx.font = '14px sans-serif';
+            ctx.font = '14px sans-serif';
           ctx.fillText('Line A', (p1[0] + p2[0]) / 2 + 4, (p1[1] + p2[1]) / 2 - 8);
           
           // Draw Line B if present (blue color) - required for In/Out counting
@@ -576,7 +588,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
     const throttledResize = () => {
       if (rafId) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
-        resizeAndDraw();
+    resizeAndDraw();
         rafId = null;
       });
     };
@@ -1031,8 +1043,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                 ) : (
                   <div className="text-xs text-green-600/70 text-center py-2 bg-white/40 rounded">
                     Waiting for counting data...
-                  </div>
-                )}
+              </div>
+            )}
               </div>
             ) : hasInOutCounting ? (
               <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
@@ -1079,8 +1091,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                 ) : (
                   <div className="text-xs text-purple-600/70 text-center py-2 bg-white/40 rounded">
                     No behaviors detected yet
-                  </div>
-                )}
+              </div>
+            )}
               </div>
             ) : hasBehaviorDetection ? (
               <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
@@ -1099,14 +1111,14 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
             {/* Quick Actions - Contextual buttons */}
             <div className="flex flex-col gap-2">
               {hasInOutLines && (
-                <button
-                  onClick={() => router.push('/dashboard/in-out')}
+              <button
+                onClick={() => router.push('/dashboard/in-out')}
                   className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm"
-                >
+              >
                   <BarChart3 className="w-3.5 h-3.5" />
                   View In/Out Dashboard
-                </button>
-              )}
+              </button>
+            )}
               {hasZones && (
                 <button
                   onClick={() => router.push('/dashboard/behavior')}
@@ -1192,14 +1204,14 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                 {currentCount !== null && (
                   <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200">
                     <div className="flex items-center justify-between">
-                      <div>
+                <div>
                         <div className="text-sm text-blue-600 mb-1 font-medium">Current People Count</div>
                         <div className="text-3xl font-bold text-blue-900">{currentCount}</div>
                         <div className="text-xs text-blue-600/70 mt-1">Real-time from AI</div>
-                      </div>
+                </div>
                       <Users className="w-10 h-10 text-blue-400/50" />
-                    </div>
-                  </div>
+                </div>
+              </div>
                 )}
 
                 {/* In/Out Counting Stats - Only if lines configured */}
@@ -1213,22 +1225,22 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                       <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
                         {taskInfo?.lines?.length || 0} line(s)
                       </span>
-                    </div>
+                </div>
                     <div className="grid grid-cols-3 gap-3">
                       <div className="bg-white/60 rounded-lg p-3 text-center">
                         <div className="text-xl font-bold text-green-700">{inOutCounts.count_in}</div>
                         <div className="text-xs text-green-600 mt-1">IN</div>
-                      </div>
+                </div>
                       <div className="bg-white/60 rounded-lg p-3 text-center">
                         <div className="text-xl font-bold text-blue-700">{inOutCounts.count_out}</div>
                         <div className="text-xs text-blue-600 mt-1">OUT</div>
-                      </div>
+              </div>
                       <div className="bg-white/60 rounded-lg p-3 text-center">
                         <div className="text-xl font-bold text-purple-700">{inOutCounts.cumulative}</div>
                         <div className="text-xs text-purple-600 mt-1">NET</div>
-                      </div>
                     </div>
                   </div>
+                    </div>
                 ) : hasInOutCounting ? (
                   <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
                     <div className="flex items-start gap-2">
@@ -1238,8 +1250,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                         <p className="text-xs text-amber-600 mt-1">
                           Draw counting lines (Line A + Line B) on the camera to enable in/out counting.
                         </p>
-                      </div>
-                    </div>
+                  </div>
+                  </div>
                   </div>
                 ) : null}
 
@@ -1275,14 +1287,14 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                     ) : (
                       <div className="text-xs text-purple-600/70 text-center py-2 bg-white/40 rounded">
                         No behaviors detected yet
-                      </div>
-                    )}
+                </div>
+              )}
                   </div>
                 ) : hasBehaviorDetection ? (
                   <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
                     <div className="flex items-start gap-2">
                       <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
-                      <div>
+                <div>
                         <p className="text-sm font-medium text-amber-800">Behavior Detection Not Configured</p>
                         <p className="text-xs text-amber-600 mt-1">
                           Draw zones on the camera to enable behavior detection (shoplifting, violence).
@@ -1307,8 +1319,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                             <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                             <span className="truncate">{z.name || z.id}</span>
                           </li>
-                        ))}
-                      </ul>
+                    ))}
+                  </ul>
                     ) : (
                       <p className="text-xs text-slate-400 italic">No zones configured</p>
                     )}
@@ -1830,8 +1842,8 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       if (step === 1 && !currentDrawing.p2) {
         // Second point of Line A
         setCurrentDrawing({
-          ...currentDrawing,
-          p2: { x, y, fx, fy },
+        ...currentDrawing,
+        p2: { x, y, fx, fy },
           lineStep: 2
         });
       } else if (step === 2 && !currentDrawing.p1_b) {
@@ -1847,11 +1859,11 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           ...currentDrawing,
           p2_b: { x, y, fx, fy },
           lineStep: 4,
-          isComplete: true,
+        isComplete: true,
           name: `InOut Line ${drawnAreas.filter(a => a.type === 'line').length + 1}`
-        };
+      };
         setDrawnAreas(prev => [...prev, completedLinePair]);
-        setCurrentDrawing(null);
+      setCurrentDrawing(null);
       }
     }
   };
@@ -2044,14 +2056,14 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                              </button>
             </div>
 
-                          {/* Current Drawing Status */}
-                          {currentDrawing && (
-                          <div className="p-3 bg-blue-50 rounded-lg">
-                              <p className="text-sm text-blue-800">
-                              <strong>{t('drawing_mode')} {currentDrawing.type}:</strong> 
-                                {currentDrawing.type === 'zone' 
-                                  ? ` ${currentDrawing.points.length} points (minimum 3)`
-                                  : currentDrawing.type === 'line'
+                           {/* Current Drawing Status */}
+                           {currentDrawing && (
+                           <div className="p-3 bg-blue-50 rounded-lg">
+                               <p className="text-sm text-blue-800">
+                               <strong>{t('drawing_mode')} {currentDrawing.type}:</strong> 
+                                 {currentDrawing.type === 'zone' 
+                                   ? ` ${currentDrawing.points.length} points (minimum 3)`
+                                   : currentDrawing.type === 'line'
                                   ? (() => {
                                       const step = currentDrawing.lineStep || 1;
                                       if (step === 1) return ' Click Line A - Point 2';
@@ -2059,9 +2071,9 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                                       if (step === 3) return ' Click Line B - Point 2 (last point)';
                                       return ' Complete';
                                     })()
-                                  : ''
-                                }
-                              </p>
+                                   : ''
+                                 }
+                               </p>
                                <div className="flex space-x-2 mt-2">
                                  {currentDrawing.type === 'zone' && currentDrawing.points.length >= 3 && (
                                    <button
@@ -2104,7 +2116,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                         {drawnAreas.filter(a => a.type === 'line').length} Line Pair(s) - In/Out Counting
                       </p>
                     )}
-                  </div>
+            </div>
                 </div>
               )}
             </form>
@@ -2285,6 +2297,7 @@ export default function CamerasPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingCamera, setEditingCamera] = useState<CameraType | null>(null);
   const isInitialLoadRef = useRef(true);
+  const [realtimeCounts, setRealtimeCounts] = useState<Record<string, { count_in: number; count_out: number; ts: string }>>({});
 
   useEffect(() => {
     loadCameras();
@@ -2616,6 +2629,39 @@ export default function CamerasPage() {
     }
   };
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+
+    const ws = new WebSocket(buildWsUrl(`/ws/inout?token=${encodeURIComponent(token)}`));
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type !== 'inout_update') return;
+        setRealtimeCounts((prev) => ({
+          ...prev,
+          [data.camera_id]: {
+            count_in: data.count_in,
+            count_out: data.count_out,
+            ts: data.ts,
+          },
+        }));
+      } catch (err) {
+        console.error('Failed to parse in/out websocket message:', err);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('In/Out websocket error:', err);
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, []);
+
   const handleToggleCamera = async (id: string, isActive: boolean) => {
     try {
       // Find the camera to get its current state
@@ -2764,6 +2810,7 @@ export default function CamerasPage() {
             onEdit={handleEditCamera}
             onDelete={handleDeleteCamera}
             onToggle={handleToggleCamera}
+            realtimeCount={realtimeCounts[camera.id]}
           />
         ))}
       </div>

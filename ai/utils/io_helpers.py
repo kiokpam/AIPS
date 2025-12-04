@@ -8,7 +8,12 @@ def save_frames_as_video(frames: List, fps: float, out_path: str) -> None:
     if not frames:
         return
     h, w = frames[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    # Use H.264-compatible codec for better HTML5 video support.
+    # Many browsers cannot play MP4 files encoded with 'mp4v', but they
+    # do support H.264/AVC ('avc1') when available in the underlying ffmpeg build.
+    # Fallback to 'mp4v' if H.264 is not available would require a runtime check,
+    # but in our Docker image we install ffmpeg codecs so 'avc1' should work.
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
     writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
     for f in frames:
         if f.shape[0] != h or f.shape[1] != w:

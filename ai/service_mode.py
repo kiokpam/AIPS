@@ -148,8 +148,6 @@ class CameraProcessor:
         
         # Initialize In/Out counter if lines configured
         self.inout_api: Optional[InOutAPI] = None
-        self.inout_line_a_norm = None
-        self.inout_line_b_norm = None
         self._setup_inout()
         
         # Initialize zone for behavior detection
@@ -170,7 +168,7 @@ class CameraProcessor:
         LOGGER.info(f"  - VideoMAE: {'enabled' if self.models.videomae else 'disabled'}")
     
     def _setup_inout(self):
-        """Setup In/Out counter from config lines."""
+        """Setup In/Out counter from config lines (pixel coordinates)."""
         lines = self.config.get('lines', [])
         if not lines:
             return
@@ -181,18 +179,19 @@ class CameraProcessor:
                 try:
                     line_a = line['line_a']
                     line_b = line['line_b']
-                    
-                    # Convert normalized coordinates to pixel coordinates
-                    # Backend sends: [{"fx": 0.5, "fy": 0.3}, {"fx": 0.6, "fy": 0.4}]
-                    # We'll convert to pixels when we get the first frame (frame dimensions unknown at setup)
-                    # Store normalized coordinates for later conversion
-                    self.inout_line_a_norm = line_a
-                    self.inout_line_b_norm = line_b
-                    self.inout_api = None  # Will be initialized on first frame
-                    
-                    LOGGER.info(f"Camera {self.camera_id}: In/Out lines configured (normalized)")
-                    LOGGER.info(f"  Line A (norm): {line_a}")
-                    LOGGER.info(f"  Line B (norm): {line_b}")
+
+                    # Backend (ai_integration) sends pixel coordinates:
+                    # line_a = [[x1, y1], [x2, y2]], line_b = [[x1, y1], [x2, y2]]
+                    # We can initialize InOutAPI directly with these pixel points.
+                    a_p1 = (int(line_a[0][0]), int(line_a[0][1]))
+                    a_p2 = (int(line_a[1][0]), int(line_a[1][1]))
+                    b_p1 = (int(line_b[0][0]), int(line_b[0][1]))
+                    b_p2 = (int(line_b[1][0]), int(line_b[1][1]))
+
+                    self.inout_api = InOutAPI((a_p1, a_p2), (b_p1, b_p2))
+                    LOGGER.info(f"Camera {self.camera_id}: In/Out lines configured (pixels)")
+                    LOGGER.info(f"  Line A: {a_p1} → {a_p2}")
+                    LOGGER.info(f"  Line B: {b_p1} → {b_p2}")
                     break
                 except (IndexError, TypeError) as e:
                     LOGGER.warning(f"Invalid line format: {e}")
@@ -261,50 +260,7 @@ class CameraProcessor:
             'clips': [],  # Saved anomaly clips
         }
         
-        # Initialize InOutAPI on first frame (now we know frame dimensions)
-        if self.inout_line_a_norm and self.inout_line_b_norm and not self.inout_api:
-            try:
-                frame_h, frame_w = frame.shape[:2]
-                
-                # Convert normalized coordinates to pixel coordinates
-                def norm_to_pixel(norm_point, width, height):
-                    """Convert normalized {fx, fy} or [fx, fy] to pixel (x, y) tuple."""
-                    if isinstance(norm_point, dict):
-                        # Format: {"fx": 0.5, "fy": 0.3}
-                        fx = float(norm_point.get('fx', 0))
-                        fy = float(norm_point.get('fy', 0))
-                    elif isinstance(norm_point, (list, tuple)):
-                        if len(norm_point) >= 2:
-                            # Could be [fx, fy] or [{"fx": 0.5, "fy": 0.3}]
-                            if isinstance(norm_point[0], dict):
-                                fx = float(norm_point[0].get('fx', 0))
-                                fy = float(norm_point[0].get('fy', 0))
-                            else:
-                                fx = float(norm_point[0])
-                                fy = float(norm_point[1])
-                        else:
-                            fx, fy = 0, 0
-                    else:
-                        fx, fy = 0, 0
-                    # Clamp to valid pixel range
-                    x = max(0, min(int(fx * width), width - 1))
-                    y = max(0, min(int(fy * height), height - 1))
-                    return (x, y)
-                
-                a_p1 = norm_to_pixel(self.inout_line_a_norm[0], frame_w, frame_h)
-                a_p2 = norm_to_pixel(self.inout_line_a_norm[1], frame_w, frame_h)
-                b_p1 = norm_to_pixel(self.inout_line_b_norm[0], frame_w, frame_h)
-                b_p2 = norm_to_pixel(self.inout_line_b_norm[1], frame_w, frame_h)
-                
-                self.inout_api = InOutAPI((a_p1, a_p2), (b_p1, b_p2))
-                LOGGER.info(f"Camera {self.camera_id}: InOutAPI initialized with pixel coordinates")
-                LOGGER.info(f"  Line A: {a_p1} → {a_p2} (frame: {frame_w}x{frame_h})")
-                LOGGER.info(f"  Line B: {b_p1} → {b_p2}")
-            except Exception as e:
-                LOGGER.error(f"Failed to initialize InOutAPI: {e}", exc_info=True)
-                self.inout_line_a_norm = None
-                self.inout_line_b_norm = None
-        
+        # InOutAPI is now initialized in _setup_inout using pixel coordinates from config.
         # 1. YOLO detection
         dets = self.models.yolo.detect(frame)
         

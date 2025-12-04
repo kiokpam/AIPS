@@ -112,6 +112,13 @@ export default function VideosPage() {
     });
   };
 
+  const formatDisplayName = (video: VideoClip) => {
+    // Prefer camera name + behavior for readability
+    const cam = video.camera_name || 'Unknown Camera';
+    const behavior = video.behavior ? video.behavior.toUpperCase() : 'ANOMALY';
+    return `${cam} – ${behavior}`;
+  };
+
   const formatTimeAgo = (timestamp: string) => {
     const now = new Date();
     const date = new Date(timestamp);
@@ -228,7 +235,9 @@ export default function VideosPage() {
                 <div className="relative bg-slate-800 aspect-video flex items-center justify-center">
                   <div className="text-center">
                     <Video className="w-16 h-16 text-slate-600 mx-auto mb-2" />
-                    <p className="text-xs text-slate-500 px-2 truncate">{video.filename}</p>
+                    <p className="text-xs text-slate-300 px-2 truncate">
+                      {formatDisplayName(video)}
+                    </p>
                   </div>
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                     <button
@@ -266,7 +275,7 @@ export default function VideosPage() {
                 <div className="p-4 space-y-3">
                   <div>
                     <h3 className="text-sm font-semibold text-slate-200 truncate" title={video.filename}>
-                      {video.filename}
+                      {formatDisplayName(video)}
                     </h3>
                     <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
                       <Camera className="w-3 h-3" />

@@ -1,17 +1,21 @@
 import uuid
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
+
 from app.api.deps import CurrentMembership, get_current_membership, get_db, MembershipRole
 from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission
 from app.schemas.events import CounterUpdateEvent, InOutUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse, DetectionUpdateEvent
 from app.services.camera_manager import camera_manager
+from app.services.websocket_manager import inout_ws_manager
 
 # Clips directory (shared with AI service)
 CLIPS_DIR = Path(os.environ.get('CLIPS_DIR', '/app/clips'))
@@ -77,7 +81,6 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
             raise HTTPException(status_code=404, detail="Store not found")
 
         # Parse ISO timestamp string to datetime
-        from datetime import datetime
         try:
             # Remove 'Z' suffix if present and parse
             ts_str = event.ts.rstrip('Z')
@@ -110,6 +113,21 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
         db.commit()
         
         logger.debug(f"InOut update stored: camera={event.camera_id}, in={event.count_in}, out={event.count_out}")
+
+        payload = {
+            "type": "inout_update",
+            "camera_id": event.camera_id,
+            "store_id": event.store_id,
+            "count_in": event.count_in,
+            "count_out": event.count_out,
+            "ts": ts_dt.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+        }
+        try:
+            anyio.from_thread.run(inout_ws_manager.broadcast, store.org_id, payload)
+        except RuntimeError:
+            import asyncio
+            asyncio.create_task(inout_ws_manager.broadcast(store.org_id, payload))
+
         return {"status": "success", "message": "InOut update stored"}
     except HTTPException:
         raise

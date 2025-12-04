@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import { useAuth } from '@/src/contexts/AuthContext';
-import { authApi, eventsApi, storeApi, cameraApi, type Store, type Camera } from '@/lib/api';
+import { authApi, eventsApi, storeApi, cameraApi, buildWsUrl, type Store, type Camera } from '@/lib/api';
 import DashboardFilters from '@/components/DashboardFilters';
 import StoreAnalyticsCard from '@/components/StoreAnalyticsCard';
 import { 
@@ -59,6 +59,16 @@ export default function InOutDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('cards');
+  const storeListRef = useRef<Store[]>([]);
+  const cameraListRef = useRef<Camera[]>([]);
+
+  useEffect(() => {
+    storeListRef.current = storeList;
+  }, [storeList]);
+
+  useEffect(() => {
+    cameraListRef.current = cameraList;
+  }, [cameraList]);
 
   // Filter stores based on selection
   const filteredStores = useMemo(() => {
@@ -185,7 +195,7 @@ export default function InOutDashboardPage() {
       if (user.active_membership.role === 'manager') {
         setHasAccess(true);
         await fetchInOutData();
-        interval = setInterval(fetchInOutData, 10000);
+        interval = setInterval(fetchInOutData, 15000);
         setIsLoading(false);
         return;
       }
@@ -198,7 +208,7 @@ export default function InOutDashboardPage() {
         setHasAccess(permissions.can_access_dashboard);
         if (permissions.can_access_dashboard) {
           await fetchInOutData();
-          interval = setInterval(fetchInOutData, 10000);
+          interval = setInterval(fetchInOutData, 15000);
         }
       } catch (error: any) {
         setHasAccess(false);
@@ -219,6 +229,106 @@ export default function InOutDashboardPage() {
       fetchInOutData();
     }
   }, [selectedStore, hasAccess, fetchInOutData]);
+
+  useEffect(() => {
+    if (!hasAccess || !isAuthenticated) return;
+    if (typeof window === 'undefined') return;
+
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+
+    const ws = new WebSocket(buildWsUrl(`/ws/inout?token=${encodeURIComponent(token)}`));
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type !== 'inout_update') return;
+
+        setStores((prev: StoreStats[]) => {
+          let storeFound = false;
+          const next: StoreStats[] = prev.map((store) => {
+            if (store.storeId !== data.store_id) {
+              return store;
+            }
+            storeFound = true;
+
+            const updatedStore: StoreStats = {
+              ...store,
+              countIn: data.count_in,
+              countOut: data.count_out,
+              netInside: Math.max(0, data.count_in - data.count_out),
+              lastUpdate: new Date(data.ts),
+              cameras: store.cameras.map((cam) =>
+                cam.cameraId === data.camera_id
+                  ? {
+                      ...cam,
+                      countIn: data.count_in,
+                      countOut: data.count_out,
+                      lastUpdated: new Date(data.ts),
+                    }
+                  : cam
+              ),
+            };
+
+            const cameraExists = updatedStore.cameras.some((cam) => cam.cameraId === data.camera_id);
+            if (!cameraExists) {
+              const cameraMeta = cameraListRef.current.find((cam) => cam.id === data.camera_id);
+              updatedStore.cameras = [
+                ...updatedStore.cameras,
+                {
+                  cameraId: data.camera_id,
+                  cameraName: cameraMeta?.name || (t('unknown_camera') as string) || 'Unknown Camera',
+                  countIn: data.count_in,
+                  countOut: data.count_out,
+                  lastUpdated: new Date(data.ts),
+                },
+              ];
+            }
+
+            return updatedStore;
+          });
+
+          if (!storeFound) {
+            const storeInfo = storeListRef.current.find((s) => s.id === data.store_id);
+            next.push({
+              storeId: data.store_id,
+              storeName: storeInfo?.name || (t('unknown_store') as string) || 'Unknown Store',
+              countIn: data.count_in,
+              countOut: data.count_out,
+              netInside: Math.max(0, data.count_in - data.count_out),
+              lastUpdate: new Date(data.ts),
+              cameras: [
+                {
+                  cameraId: data.camera_id,
+                  cameraName:
+                    cameraListRef.current.find((cam) => cam.id === data.camera_id)?.name ||
+                    (t('unknown_camera') as string) ||
+                    'Unknown Camera',
+                  countIn: data.count_in,
+                  countOut: data.count_out,
+                  lastUpdated: new Date(data.ts),
+                },
+              ],
+            });
+          }
+
+          return next;
+        });
+
+        setLastRefresh(new Date(data.ts));
+      } catch (err) {
+        console.error('Failed to process in/out websocket message:', err);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('In/Out websocket error:', err);
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [hasAccess, isAuthenticated, t]);
 
   if (isLoading || hasAccess === null) {
     return (

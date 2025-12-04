@@ -26,25 +26,25 @@ CLIPS_DIR = Path("/app/clips")
 
 
 class VideoClip(BaseModel):
-  id: string;
-  filename: string;
-  camera_id: Optional[str] = None
-  camera_name: Optional[str] = None
-  store_id: Optional[str] = None
-  store_name: Optional[str] = None
-  behavior: Optional[str] = None
-  confidence: Optional[float] = None
-  timestamp: datetime
-  size_mb: float
-  duration_seconds: Optional[int] = None
-  alert_id: Optional[str] = None
-    
-  @field_serializer('timestamp')
-  def serialize_timestamp(self, value: datetime) -> str:
-      """Serialize timestamp as ISO format with Z suffix to indicate UTC."""
-      if value.tzinfo is None:
-          value = value.replace(tzinfo=timezone.utc)
-      return value.isoformat().replace('+00:00', 'Z')
+    id: str
+    filename: str
+    camera_id: Optional[str] = None
+    camera_name: Optional[str] = None
+    store_id: Optional[str] = None
+    store_name: Optional[str] = None
+    behavior: Optional[str] = None
+    confidence: Optional[float] = None
+    timestamp: datetime
+    size_mb: float
+    duration_seconds: Optional[int] = None
+    alert_id: Optional[str] = None
+
+    @field_serializer('timestamp')
+    def serialize_timestamp(self, value: datetime) -> str:
+        """Serialize timestamp as ISO format with Z suffix to indicate UTC."""
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat().replace('+00:00', 'Z')
 
 
 class VideoClipsResponse(BaseModel):
