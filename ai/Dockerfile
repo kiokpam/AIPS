@@ -1,7 +1,8 @@
 # AI Service Dockerfile - GPU Accelerated
 # Requires: NVIDIA GPU + nvidia-docker runtime
 
-FROM nvidia/cuda:11.8-cudnn8-runtime-ubuntu22.04
+# Use CUDA 12.1 with cuDNN 8 for compatibility with latest onnxruntime-gpu
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -25,11 +26,13 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Install Python dependencies with GPU support
+# Using CUDA 12.1 compatible versions
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir \
-    numpy \
-    opencv-python \
-    torch torchvision --index-url https://download.pytorch.org/whl/cu118 && \
+    "numpy<2" \
+    opencv-python && \
+    pip3 install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
     pip3 install --no-cache-dir \
     onnxruntime-gpu \
     deep-sort-realtime \

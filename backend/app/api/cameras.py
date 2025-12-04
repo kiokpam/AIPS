@@ -21,8 +21,19 @@ from app.models.core import (
     MemberPermission,
     MembershipRole,
     Store as StoreModel,
+    CountingZone as CountingZoneModel,
+    CountingLine as CountingLineModel,
 )
-from app.schemas.core import Camera as CameraSchema, CameraCreate, CameraUpdate
+from app.schemas.core import (
+    Camera as CameraSchema, 
+    CameraCreate, 
+    CameraUpdate,
+    CountingZone as CountingZoneSchema,
+    CountingZoneCreate,
+    CountingLine as CountingLineSchema,
+    CountingLineCreate,
+    TaskSetRequest,
+)
 from app.services.camera_manager import camera_manager
 from app.services.streaming_service import streaming_service
 
@@ -501,18 +512,166 @@ def get_camera_tasks(
         "current_count": task_config["current_count"],
     }
 
+@router.post("/{camera_id}/tasks")
+def set_camera_tasks(
+    camera_id: str,
+    request: TaskSetRequest,
+    current: CurrentMembership = Depends(require_manager),
+    db: Session = Depends(get_db),
+):
+    """
+    Set zones and/or lines for a camera.
+    This saves them to the database so AI services can read them.
+    """
+    camera = _get_camera_or_404(db, camera_id, current.organization.id)
+    org_id = current.organization.id
+    
+    zones_created = 0
+    lines_created = 0
+    
+    try:
+        # Clear existing zones/lines for this camera if we're setting new ones
+        if request.zones is not None:
+            db.query(CountingZoneModel).filter(
+                CountingZoneModel.camera_id == camera_id,
+                CountingZoneModel.org_id == org_id
+            ).delete()
+        
+        if request.lines is not None:
+            db.query(CountingLineModel).filter(
+                CountingLineModel.camera_id == camera_id,
+                CountingLineModel.org_id == org_id
+            ).delete()
+        
+        # Create new zones
+        if request.zones:
+            for zone_data in request.zones:
+                zone = CountingZoneModel(
+                    id=str(uuid.uuid4()),
+                    camera_id=camera_id,
+                    name=zone_data.name,
+                    polygon=zone_data.polygon,
+                    is_active=zone_data.is_active,
+                    org_id=org_id,
+                )
+                db.add(zone)
+                zones_created += 1
+        
+        # Create new lines
+        if request.lines:
+            for line_data in request.lines:
+                line = CountingLineModel(
+                    id=str(uuid.uuid4()),
+                    camera_id=camera_id,
+                    name=line_data.name,
+                    p1=line_data.p1,
+                    p2=line_data.p2,
+                    # For In/Out counting, we need p1_b and p2_b
+                    p1_b=line_data.p1_b,
+                    p2_b=line_data.p2_b,
+                    is_active=line_data.is_active,
+                    org_id=org_id,
+                )
+                db.add(line)
+                lines_created += 1
+                logger.info(f"Created line {line_data.name}: A={line_data.p1}->{line_data.p2}, B={line_data.p1_b}->{line_data.p2_b}")
+        
+        db.commit()
+        logger.info(f"Camera {camera_id}: Saved {zones_created} zones and {lines_created} lines to database")
+        
+        return {
+            "message": "Tasks saved successfully",
+            "zones_created": zones_created,
+            "lines_created": lines_created,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to save tasks for camera {camera_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save tasks: {str(e)}"
+        )
+
+
+@router.get("/{camera_id}/tasks/db")
+def get_camera_tasks_from_db(
+    camera_id: str,
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """
+    Get zones and lines from database (persisted config).
+    This is what AI services will use.
+    """
+    _get_camera_or_404(db, camera_id, current.organization.id)
+    org_id = current.organization.id
+    
+    # Query zones
+    zones = db.query(CountingZoneModel).filter(
+        CountingZoneModel.camera_id == camera_id,
+        CountingZoneModel.org_id == org_id,
+        CountingZoneModel.is_active == True
+    ).all()
+    
+    # Query lines
+    lines = db.query(CountingLineModel).filter(
+        CountingLineModel.camera_id == camera_id,
+        CountingLineModel.org_id == org_id,
+        CountingLineModel.is_active == True
+    ).all()
+    
+    return {
+        "camera_id": camera_id,
+        "zones": [
+            {
+                "id": z.id,
+                "name": z.name,
+                "polygon": z.polygon,
+                "is_active": z.is_active,
+            }
+            for z in zones
+        ],
+        "lines": [
+            {
+                "id": l.id,
+                "name": l.name,
+                "p1": l.p1,
+                "p2": l.p2,
+                "p1_b": l.p1_b,
+                "p2_b": l.p2_b,
+                "is_active": l.is_active,
+            }
+            for l in lines
+        ],
+    }
+
+
 @router.post("/{camera_id}/tasks/clear")
 def clear_camera_tasks(
     camera_id: str,
     current: CurrentMembership = Depends(require_manager),
     db: Session = Depends(get_db),
 ):
-    """Clear all tasks for a camera"""
+    """Clear all tasks for a camera (both runtime and database)"""
     _get_camera_or_404(db, camera_id, current.organization.id)
+    org_id = current.organization.id
+    
+    # Clear from database
+    db.query(CountingZoneModel).filter(
+        CountingZoneModel.camera_id == camera_id,
+        CountingZoneModel.org_id == org_id
+    ).delete()
+    db.query(CountingLineModel).filter(
+        CountingLineModel.camera_id == camera_id,
+        CountingLineModel.org_id == org_id
+    ).delete()
+    db.commit()
+    
+    # Clear runtime tasks if camera is running
     camera_worker = camera_manager.get_camera(camera_id)
-    if not camera_worker:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found or not running")
-    camera_worker.clear_tasks()
+    if camera_worker:
+        camera_worker.clear_tasks()
+    
     return {"message": "Tasks cleared successfully"}
 
 @router.post("/{camera_id}/stream/stop")

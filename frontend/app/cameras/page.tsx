@@ -26,7 +26,9 @@ import {
   TrendingUp,
   TrendingDown,
   BarChart3,
-  Activity
+  Activity,
+  Users,
+  MapPin
 } from 'lucide-react';
 import { cameraApi, storeApi, eventsApi, type Camera as CameraType } from '@/lib/api';
 import { useRouter } from 'next/navigation';
@@ -41,7 +43,7 @@ type DrawingCanvasProps = React.CanvasHTMLAttributes<HTMLCanvasElement> & {
   currentDrawing: any;
   drawingMode: 'zone' | 'line' | null;
   drawZone: (ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft?: boolean) => void;
-  drawLine: (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft?: boolean) => void;
+  drawLine: (ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft?: boolean, area?: any) => void;
 };
 
 const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
@@ -108,45 +110,165 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   return <canvas ref={canvasRef} {...rest} />;
 };
 
-// Temporary placeholder APIs for AI-related services.
-// These do NOT call any real backend AI services and are meant only
-// to keep the UI compiling and working until AI microservices are integrated.
-const inOutApi: any = {
-  // Return zeroed counts for now
-  getCounts: async (_cameraId: string) => ({
-    count_in: 0,
-    count_out: 0,
-    cumulative: 0,
-  }),
-  // Return empty "today" stats
-  getTodayStats: async (_cameraId: string) => ({
-    count_in_today: 0,
-    count_out_today: 0,
-  }),
-  // Registration / reset / unregister are no-ops for now
+// Real In/Out counting API - calls backend endpoints
+const inOutApi = {
+  // Get latest counts for a camera from backend
+  getCounts: async (cameraId: string) => {
+    try {
+      const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const baseUrl = base.endsWith('/api') ? base : `${base.replace(/\/+$/, '')}/api`;
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+      
+      const response = await fetch(`${baseUrl}/events/inout-counts?camera_id=${encodeURIComponent(cameraId)}&limit=1`, {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          const latest = data[0];
+          return {
+            count_in: latest.count_in || 0,
+            count_out: latest.count_out || 0,
+            cumulative: (latest.count_in || 0) - (latest.count_out || 0),
+          };
+        }
+      }
+      // No data yet
+      return { count_in: 0, count_out: 0, cumulative: 0 };
+    } catch (error) {
+      console.warn('Failed to fetch inout counts:', error);
+      return { count_in: 0, count_out: 0, cumulative: 0 };
+    }
+  },
+  
+  // Get today's stats for a camera
+  getTodayStats: async (cameraId: string) => {
+    try {
+      const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const baseUrl = base.endsWith('/api') ? base : `${base.replace(/\/+$/, '')}/api`;
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+      
+      // Get summary which has latest counts
+      const response = await fetch(`${baseUrl}/events/inout-summary`, {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        // Find the camera in the summary
+        const cameraData = data.cameras?.find((c: any) => c.camera_id === cameraId);
+        if (cameraData) {
+          return {
+            count_in_today: cameraData.count_in || 0,
+            count_out_today: cameraData.count_out || 0,
+          };
+        }
+      }
+      return { count_in_today: 0, count_out_today: 0 };
+    } catch (error) {
+      console.warn('Failed to fetch today stats:', error);
+      return { count_in_today: 0, count_out_today: 0 };
+    }
+  },
+  
+  // These are no longer needed as AI service handles registration automatically
   registerCamera: async (_cameraId: string) => {
-    return;
+    return; // AI service auto-registers when camera is active
   },
   resetCounts: async (_cameraId: string) => {
-    return;
+    return; // Counts are managed by AI service
   },
   unregisterCamera: async (_cameraId: string) => {
-    return;
+    return; // AI service auto-unregisters when camera stops
   },
 };
 
-const tasksApi: any = {
-  // Return empty task config so the overlay logic can run without errors
-  getCameraTaskConfig: async (_cameraId: string) => ({
-    zones: [],
-    lines: [],
-  }),
-  // No-op setters so camera creation flow can complete
-  setCameraTasks: async (_cameraId: string, _payload: any) => {
-    return;
+// Real tasks API that saves zones/lines to backend database
+const tasksApi = {
+  // Get zones and lines from database
+  getCameraTaskConfig: async (cameraId: string) => {
+    try {
+      const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const baseUrl = base.endsWith('/api') ? base : `${base.replace(/\/+$/, '')}/api`;
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+      
+      const response = await fetch(`${baseUrl}/cameras/${cameraId}/tasks/db`, {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          zones: data.zones || [],
+          lines: data.lines || [],
+        };
+      }
+      console.warn('Failed to get task config:', response.status);
+      return { zones: [], lines: [] };
+    } catch (error) {
+      console.warn('Error fetching task config:', error);
+      return { zones: [], lines: [] };
+    }
   },
-  clearCameraTasks: async (_cameraId: string) => {
-    return;
+  
+  // Save zones and lines to database
+  setCameraTasks: async (cameraId: string, payload: { task_type: string; zones?: any[]; lines?: any[] }) => {
+    try {
+      const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const baseUrl = base.endsWith('/api') ? base : `${base.replace(/\/+$/, '')}/api`;
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+      
+      const response = await fetch(`${baseUrl}/cameras/${cameraId}/tasks`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Failed to save tasks:', response.status, errorText);
+        throw new Error(`Failed to save tasks: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('Tasks saved to database:', result);
+      return result;
+    } catch (error) {
+      console.error('Error saving tasks:', error);
+      throw error;
+    }
+  },
+  
+  // Clear all zones and lines for a camera
+  clearCameraTasks: async (cameraId: string) => {
+    try {
+      const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const baseUrl = base.endsWith('/api') ? base : `${base.replace(/\/+$/, '')}/api`;
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+      
+      const response = await fetch(`${baseUrl}/cameras/${cameraId}/tasks/clear`, {
+        method: 'POST',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+      
+      if (!response.ok) {
+        console.error('Failed to clear tasks:', response.status);
+      }
+    } catch (error) {
+      console.error('Error clearing tasks:', error);
+    }
   },
 };
 
@@ -170,9 +292,15 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
   
   // In/Out counting state
   const hasInOutCounting = camera.ai_services?.includes('in_out_counting') || false;
+  const hasInOutLines = taskInfo?.lines && taskInfo.lines.length > 0 && 
+    taskInfo.lines.some((l: any) => l.p1 && l.p2 && l.p1_b && l.p2_b);
   const [inOutCounts, setInOutCounts] = useState<{ count_in: number; count_out: number; cumulative: number } | null>(null);
   const [isInOutRegistered, setIsInOutRegistered] = useState(false);
   const [isRegisteringInOut, setIsRegisteringInOut] = useState(false);
+  
+  // Behavior detection state
+  const hasBehaviorDetection = camera.ai_services?.includes('behavior_detection') || false;
+  const hasZones = taskInfo?.zones && taskInfo.zones.length > 0;
   
   // Today's stats and behaviors
   const [todayStats, setTodayStats] = useState<{ count_in_today: number; count_out_today: number } | null>(null);
@@ -380,33 +508,64 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
         }
       });
 
-      // Draw lines
+      // Draw lines (Line A and Line B for In/Out counting)
       (taskInfo.lines || []).forEach((line: any) => {
         if (line.p1 && line.p2 && Array.isArray(line.p1) && Array.isArray(line.p2)) {
           // Backend stores lines as pixel coordinates [x, y]
           const p1 = mapPoint(line.p1);
           const p2 = mapPoint(line.p2);
-          const isIn = line.name?.toLowerCase().includes('in');
-          ctx.strokeStyle = isIn ? '#22c55e' : '#3b82f6';
+          
+          // Draw Line A (red color)
+          ctx.strokeStyle = '#ef4444';
           ctx.lineWidth = 3;
           ctx.setLineDash([]);
           ctx.beginPath();
           ctx.moveTo(p1[0], p1[1]);
           ctx.lineTo(p2[0], p2[1]);
           ctx.stroke();
-          // Draw endpoints
-          ctx.fillStyle = isIn ? '#22c55e' : '#3b82f6';
+          // Draw endpoints for Line A
+          ctx.fillStyle = '#ef4444';
           ctx.beginPath();
           ctx.arc(p1[0], p1[1], 6, 0, 2 * Math.PI);
           ctx.fill();
           ctx.beginPath();
           ctx.arc(p2[0], p2[1], 6, 0, 2 * Math.PI);
           ctx.fill();
-          // Draw label
+          // Draw label for Line A
+          ctx.font = '14px sans-serif';
+          ctx.fillText('Line A', (p1[0] + p2[0]) / 2 + 4, (p1[1] + p2[1]) / 2 - 8);
+          
+          // Draw Line B if present (blue color) - required for In/Out counting
+          if (line.p1_b && line.p2_b && Array.isArray(line.p1_b) && Array.isArray(line.p2_b)) {
+            const p1b = mapPoint(line.p1_b);
+            const p2b = mapPoint(line.p2_b);
+            
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(p1b[0], p1b[1]);
+            ctx.lineTo(p2b[0], p2b[1]);
+            ctx.stroke();
+            // Draw endpoints for Line B
+            ctx.fillStyle = '#3b82f6';
+            ctx.beginPath();
+            ctx.arc(p1b[0], p1b[1], 6, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(p2b[0], p2b[1], 6, 0, 2 * Math.PI);
+            ctx.fill();
+            // Draw label for Line B
+            ctx.fillText('Line B', (p1b[0] + p2b[0]) / 2 + 4, (p1b[1] + p2b[1]) / 2 - 8);
+          }
+          
+          // Draw name label if present
           if (line.name) {
-            ctx.fillStyle = isIn ? '#22c55e' : '#3b82f6';
-            ctx.font = '14px sans-serif';
-            ctx.fillText(String(line.name), (p1[0] + p2[0]) / 2 + 4, (p1[1] + p2[1]) / 2 + 16);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 12px sans-serif';
+            const midX = (p1[0] + p2[0]) / 2;
+            const midY = (p1[1] + p2[1]) / 2;
+            ctx.fillText(String(line.name), midX + 4, midY + 24);
           }
         }
       });
@@ -543,10 +702,12 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
           if (isMounted) setTodayStats(stats);
         }
         
-        // Fetch recent behaviors if camera has behavior_detection
-        if (camera.ai_services?.includes('behavior_detection')) {
+        // Fetch recent behaviors only if camera has behavior_detection AND zones configured
+        if (camera.ai_services?.includes('behavior_detection') && taskInfo?.zones && taskInfo.zones.length > 0) {
           const behaviors = await eventsApi.getCameraRecentBehaviors(camera.id, 3);
           if (isMounted) setRecentBehaviors(behaviors);
+        } else {
+          if (isMounted) setRecentBehaviors([]);
         }
       } catch (error) {
         // Silently fail - stats are optional
@@ -562,7 +723,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
       isMounted = false;
       clearInterval(timer);
     };
-  }, [camera.id, hasInOutCounting, camera.ai_services]);
+  }, [camera.id, hasInOutCounting, camera.ai_services, taskInfo]);
 
   // Load AI details when modal opens
   useEffect(() => {
@@ -672,7 +833,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
           <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
             {t('people_count')}: {currentCount !== null ? currentCount : '—'}
           </span>
-          {hasInOutCounting && inOutCounts && (
+          {hasInOutLines && inOutCounts && (
             <div className="flex gap-2 mt-1">
               <span className="text-xs text-white bg-green-600/70 px-2 py-1 rounded">
                 IN: {inOutCounts.count_in}
@@ -843,72 +1004,126 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
           </div>
         </div>
 
-        {/* Today's Stats Summary */}
+        {/* Contextual Stats - Only show what's configured */}
         <div className="mt-4 pt-4 border-t border-slate-200">
           <div className="space-y-3">
-            {/* Today's In/Out Counts */}
-            {hasInOutCounting && (
-              <div className="bg-slate-50 rounded-lg p-3">
+            {/* Today's In/Out Counts - Only show if lines are configured */}
+            {hasInOutLines ? (
+              <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-lg p-3 border border-green-200">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-slate-700">Today's Counts</span>
-                  <Clock className="w-3 h-3 text-slate-400" />
+                  <span className="text-xs font-semibold text-green-700 flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    In/Out Counting
+                  </span>
+                  <Clock className="w-3 h-3 text-green-500" />
                 </div>
                 {todayStats ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="text-center">
-                      <div className="text-lg font-bold text-green-600">{todayStats.count_in_today}</div>
-                      <div className="text-xs text-slate-500">IN</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="text-center bg-white/60 rounded-lg p-2">
+                      <div className="text-xl font-bold text-green-600">{todayStats.count_in_today}</div>
+                      <div className="text-xs text-green-700 font-medium">IN</div>
                     </div>
-                    <div className="text-center">
-                      <div className="text-lg font-bold text-blue-600">{todayStats.count_out_today}</div>
-                      <div className="text-xs text-slate-500">OUT</div>
+                    <div className="text-center bg-white/60 rounded-lg p-2">
+                      <div className="text-xl font-bold text-blue-600">{todayStats.count_out_today}</div>
+                      <div className="text-xs text-blue-700 font-medium">OUT</div>
                     </div>
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-400 text-center py-1">No data today</div>
+                  <div className="text-xs text-green-600/70 text-center py-2 bg-white/40 rounded">
+                    Waiting for counting data...
+                  </div>
                 )}
               </div>
-            )}
+            ) : hasInOutCounting ? (
+              <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-xs font-medium text-amber-800">In/Out Counting Not Configured</p>
+                    <p className="text-xs text-amber-600 mt-0.5">
+                      Draw counting lines (Line A + Line B) to enable in/out counting
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
-            {/* Recent Behaviors */}
-            {camera.ai_services?.includes('behavior_detection') && (
-              <div className="bg-slate-50 rounded-lg p-3">
+            {/* Recent Behaviors - Only show if zones are configured */}
+            {hasZones ? (
+              <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg p-3 border border-purple-200">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-slate-700">Recent Behaviors</span>
-                  <Activity className="w-3 h-3 text-slate-400" />
+                  <span className="text-xs font-semibold text-purple-700 flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5" />
+                    Recent Behaviors
+                  </span>
+                  <Eye className="w-3 h-3 text-purple-500" />
                 </div>
                 {recentBehaviors.length > 0 ? (
-                  <div className="space-y-1">
+                  <div className="space-y-1.5">
                     {recentBehaviors.slice(0, 3).map((behavior, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-xs">
-                        <span className="text-slate-600 capitalize truncate flex-1">{behavior.type}</span>
-                        <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${
-                          behavior.type === 'shoplifting' ? 'bg-red-100 text-red-700' :
-                          behavior.type === 'violence' ? 'bg-purple-100 text-purple-700' :
-                          behavior.type === 'normal' ? 'bg-green-100 text-green-700' :
-                          'bg-blue-100 text-blue-700'
-                        }`}>
+                      <div key={idx} className="flex items-center justify-between text-xs bg-white/60 rounded px-2 py-1.5">
+                        <span className="text-slate-700 capitalize truncate flex-1 font-medium">
                           {behavior.type}
+                        </span>
+                        <span className={`ml-2 px-2 py-0.5 rounded text-xs font-medium ${
+                          behavior.type === 'shoplifting' ? 'bg-red-100 text-red-700 border border-red-200' :
+                          behavior.type === 'violence' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
+                          behavior.type === 'normal' ? 'bg-green-100 text-green-700 border border-green-200' :
+                          'bg-blue-100 text-blue-700 border border-blue-200'
+                        }`}>
+                          {behavior.severity}
                         </span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-400 text-center py-1">No behaviors detected</div>
+                  <div className="text-xs text-purple-600/70 text-center py-2 bg-white/40 rounded">
+                    No behaviors detected yet
+                  </div>
                 )}
               </div>
-            )}
+            ) : hasBehaviorDetection ? (
+              <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-xs font-medium text-amber-800">Behavior Detection Not Configured</p>
+                    <p className="text-xs text-amber-600 mt-0.5">
+                      Draw zones to enable behavior detection (shoplifting, violence)
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
-            {/* View Details Button - Always show if camera has any AI services */}
-            {(hasInOutCounting || camera.ai_services?.includes('behavior_detection')) && (
-              <button
-                onClick={() => router.push('/dashboard/in-out')}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <BarChart3 className="w-3 h-3" />
-                View Dashboard
-              </button>
-            )}
+            {/* Quick Actions - Contextual buttons */}
+            <div className="flex flex-col gap-2">
+              {hasInOutLines && (
+                <button
+                  onClick={() => router.push('/dashboard/in-out')}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm"
+                >
+                  <BarChart3 className="w-3.5 h-3.5" />
+                  View In/Out Dashboard
+                </button>
+              )}
+              {hasZones && (
+                <button
+                  onClick={() => router.push('/dashboard/behavior')}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 transition-colors shadow-sm"
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                  View Behavior Dashboard
+                </button>
+              )}
+              {!hasInOutLines && !hasZones && (
+                <div className="text-center py-2">
+                  <p className="text-xs text-slate-500">
+                    Configure zones or lines to see analytics
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -971,47 +1186,159 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle }: {
                 <h3 className="text-lg font-semibold text-slate-900">{t('ai_details')}</h3>
                 <button className="text-slate-500 hover:text-slate-700" onClick={() => setShowAIDetails(false)}>{t('close')}</button>
               </div>
-              {/* Model configuration removed - AI services will handle all model settings */}
-              <div className="mt-6 grid md:grid-cols-2 gap-6">
-                <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
-                  <div className="text-sm text-slate-500 mb-2">{t('people_count')}</div>
-                  <div className="text-3xl font-bold text-slate-900">{currentCount ?? '—'}</div>
-                </div>
-                <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
-                  <div className="text-sm text-slate-500 mb-2">{t('zones')}</div>
-                  <div className="text-slate-900">{taskInfo?.zones?.length ?? 0}</div>
-                </div>
-              </div>
-              {hasInOutCounting && inOutCounts && (
-                <div className="mt-4 grid md:grid-cols-3 gap-4">
-                  <div className="bg-green-50 rounded-lg p-4 border border-green-200">
-                    <div className="text-sm text-green-600 mb-2 flex items-center">
-                      <TrendingUp className="w-4 h-4 mr-1" />
-                      Count In
+              {/* Configuration Summary */}
+              <div className="mt-6 space-y-4">
+                {/* People Count - Always show if available */}
+                {currentCount !== null && (
+                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm text-blue-600 mb-1 font-medium">Current People Count</div>
+                        <div className="text-3xl font-bold text-blue-900">{currentCount}</div>
+                        <div className="text-xs text-blue-600/70 mt-1">Real-time from AI</div>
+                      </div>
+                      <Users className="w-10 h-10 text-blue-400/50" />
                     </div>
-                    <div className="text-2xl font-bold text-green-900">{inOutCounts.count_in}</div>
                   </div>
-                  <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
-                    <div className="text-sm text-blue-600 mb-2 flex items-center">
-                      <TrendingDown className="w-4 h-4 mr-1" />
-                      Count Out
+                )}
+
+                {/* In/Out Counting Stats - Only if lines configured */}
+                {hasInOutLines && inOutCounts ? (
+                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-lg p-4 border border-green-200">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-sm font-semibold text-green-700 flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4" />
+                        In/Out Counting
+                      </h4>
+                      <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
+                        {taskInfo?.lines?.length || 0} line(s)
+                      </span>
                     </div>
-                    <div className="text-2xl font-bold text-blue-900">{inOutCounts.count_out}</div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="bg-white/60 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-green-700">{inOutCounts.count_in}</div>
+                        <div className="text-xs text-green-600 mt-1">IN</div>
+                      </div>
+                      <div className="bg-white/60 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-blue-700">{inOutCounts.count_out}</div>
+                        <div className="text-xs text-blue-600 mt-1">OUT</div>
+                      </div>
+                      <div className="bg-white/60 rounded-lg p-3 text-center">
+                        <div className="text-xl font-bold text-purple-700">{inOutCounts.cumulative}</div>
+                        <div className="text-xs text-purple-600 mt-1">NET</div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
-                    <div className="text-sm text-purple-600 mb-2">Net (Inside)</div>
-                    <div className="text-2xl font-bold text-purple-900">{inOutCounts.cumulative}</div>
+                ) : hasInOutCounting ? (
+                  <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium text-amber-800">In/Out Counting Not Configured</p>
+                        <p className="text-xs text-amber-600 mt-1">
+                          Draw counting lines (Line A + Line B) on the camera to enable in/out counting.
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
-              <div className="mt-4 grid md:grid-cols-2 gap-6 max-h-48 overflow-auto">
-                <div>
-                  <div className="text-sm font-medium text-slate-700 mb-2">{t('zones')}</div>
-                  <ul className="text-sm text-slate-600 space-y-1">
-                    {(taskInfo?.zones || []).map((z: any) => (
-                      <li key={z.id} className="truncate">{z.name || z.id}</li>
-                    ))}
-                  </ul>
+                ) : null}
+
+                {/* Behavior Detection - Only if zones configured */}
+                {hasZones ? (
+                  <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg p-4 border border-purple-200">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-sm font-semibold text-purple-700 flex items-center gap-2">
+                        <Activity className="w-4 h-4" />
+                        Behavior Detection
+                      </h4>
+                      <span className="text-xs text-purple-600 bg-purple-100 px-2 py-1 rounded">
+                        {taskInfo?.zones?.length || 0} zone(s)
+                      </span>
+                    </div>
+                    {recentBehaviors.length > 0 ? (
+                      <div className="space-y-2">
+                        {recentBehaviors.slice(0, 5).map((behavior, idx) => (
+                          <div key={idx} className="flex items-center justify-between bg-white/60 rounded px-3 py-2">
+                            <span className="text-sm text-slate-700 capitalize font-medium">
+                              {behavior.type}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              behavior.type === 'shoplifting' ? 'bg-red-100 text-red-700 border border-red-200' :
+                              behavior.type === 'violence' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
+                              'bg-blue-100 text-blue-700 border border-blue-200'
+                            }`}>
+                              {behavior.severity}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-purple-600/70 text-center py-2 bg-white/40 rounded">
+                        No behaviors detected yet
+                      </div>
+                    )}
+                  </div>
+                ) : hasBehaviorDetection ? (
+                  <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium text-amber-800">Behavior Detection Not Configured</p>
+                        <p className="text-xs text-amber-600 mt-1">
+                          Draw zones on the camera to enable behavior detection (shoplifting, violence).
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Configuration Details */}
+                <div className="grid md:grid-cols-2 gap-4 pt-4 border-t border-slate-200">
+                  {/* Zones List */}
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                      <MapPin className="w-4 h-4" />
+                      Zones ({taskInfo?.zones?.length || 0})
+                    </div>
+                    {taskInfo?.zones && taskInfo.zones.length > 0 ? (
+                      <ul className="text-sm text-slate-600 space-y-1 max-h-32 overflow-y-auto">
+                        {taskInfo.zones.map((z: any) => (
+                          <li key={z.id} className="flex items-center gap-2 py-1">
+                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                            <span className="truncate">{z.name || z.id}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">No zones configured</p>
+                    )}
+                  </div>
+
+                  {/* Lines List */}
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4" />
+                      Lines ({taskInfo?.lines?.length || 0})
+                    </div>
+                    {taskInfo?.lines && taskInfo.lines.length > 0 ? (
+                      <ul className="text-sm text-slate-600 space-y-1 max-h-32 overflow-y-auto">
+                        {taskInfo.lines.map((l: any) => {
+                          const isComplete = l.p1 && l.p2 && l.p1_b && l.p2_b;
+                          return (
+                            <li key={l.id} className="flex items-center gap-2 py-1">
+                              <div className={`w-2 h-2 rounded-full ${isComplete ? 'bg-blue-500' : 'bg-amber-400'}`}></div>
+                              <span className="truncate">{l.name || l.id}</span>
+                              {!isComplete && (
+                                <span className="text-xs text-amber-600">(incomplete)</span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">No lines configured</p>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="mt-6 flex justify-end gap-3">
@@ -1051,9 +1378,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [formData, setFormData] = useState({
     name: '',
     source: '', // RTSP URL only
-    // Model configuration removed - AI services will handle all model settings
-    skip_frame: 3,
-    allowMultipleAreas: true
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isPreviewConnected, setIsPreviewConnected] = useState(false);
@@ -1072,9 +1396,31 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   } | null>(null);
 
   // Helper function to convert normalized coordinates back to canvas coordinates for display
-  const normalizedToCanvas = (fx: number, fy: number, canvas: HTMLCanvasElement) => {
-    if (!contentBox) {
-      // Fallback to canvas-relative coordinates
+  // Uses current contentBox state OR recomputes it based on the canvas and media element
+  const normalizedToCanvas = useCallback((fx: number, fy: number, canvas: HTMLCanvasElement) => {
+    // Try to compute the current content box from the canvas and media element
+    // This ensures we always use the current dimensions, not stale state
+    const mediaEl = canvas.parentElement?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement | null;
+    
+    let currentBox = contentBox;
+    if (mediaEl) {
+      const containerW = canvas.width;
+      const containerH = canvas.height;
+      const naturalW = (mediaEl as HTMLVideoElement).videoWidth || (mediaEl as HTMLImageElement).naturalWidth || containerW;
+      const naturalH = (mediaEl as HTMLVideoElement).videoHeight || (mediaEl as HTMLImageElement).naturalHeight || containerH;
+      
+      if (naturalW > 0 && naturalH > 0) {
+        const scale = Math.min(containerW / naturalW, containerH / naturalH);
+        const displayW = naturalW * scale;
+        const displayH = naturalH * scale;
+        const offsetX = (containerW - displayW) / 2;
+        const offsetY = (containerH - displayH) / 2;
+        currentBox = { displayW, displayH, offsetX, offsetY, naturalW, naturalH };
+      }
+    }
+    
+    if (!currentBox || currentBox.displayW <= 0 || currentBox.displayH <= 0) {
+      // Fallback to canvas-relative coordinates (no letterboxing)
       return {
         x: fx * canvas.width,
         y: fy * canvas.height
@@ -1082,15 +1428,15 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
     
     // Convert normalized coordinates back to content box coordinates
-    const xInContent = fx * contentBox.displayW;
-    const yInContent = fy * contentBox.displayH;
+    const xInContent = fx * currentBox.displayW;
+    const yInContent = fy * currentBox.displayH;
     
-    // Convert to canvas coordinates
+    // Convert to canvas coordinates (add offset for letterboxing)
     return {
-      x: xInContent + contentBox.offsetX,
-      y: yInContent + contentBox.offsetY
+      x: xInContent + currentBox.offsetX,
+      y: yInContent + currentBox.offsetY
     };
-  };
+  }, [contentBox]);
 
   // Drawing functions - memoized to prevent re-renders
   const drawZone = useCallback((ctx: CanvasRenderingContext2D, points: any[], color: string, lineWidth: number, isDraft = false) => {
@@ -1122,7 +1468,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       ctx.closePath();
       ctx.stroke();
     }
-  }, []);
+  }, [normalizedToCanvas]);
 
   // Helper to draw a single line segment with endpoints
   const drawSingleLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false, label?: string) => {
@@ -1162,7 +1508,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       ctx.fillStyle = color;
       ctx.fillText(label, midX + 5, midY - 5);
     }
-  }, []);
+  }, [normalizedToCanvas]);
 
   // Draw line pair for In/Out counting (Line A and Line B)
   const drawLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false, area?: any) => {
@@ -1184,7 +1530,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       ctx.arc(point.x, point.y, 6, 0, 2 * Math.PI);
       ctx.fill();
     }
-  }, [drawSingleLine]);
+  }, [drawSingleLine, normalizedToCanvas]);
 
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1233,9 +1579,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       const cameraData = {
         name: formData.name.trim(),
         source: formData.source.trim(), // RTSP URL only
-        // Model configuration removed - AI services will handle all model settings
-        skip_frame: formData.skip_frame,
-        allowMultipleAreas: formData.allowMultipleAreas,
         zones,
         lines,
         canvasSize: drawSize ? { w: drawSize.w, h: drawSize.h } : null,
@@ -1259,9 +1602,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       setFormData({
         name: '',
         source: '', // RTSP URL only
-        // Model configuration removed - AI services will handle all model settings
-        skip_frame: 3,
-        allowMultipleAreas: true
     });
     setSelectedFile(null);
     setDrawnAreas([]);
@@ -1282,12 +1622,37 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
   };
 
+  // Initialize contentBox when preview image/video loads
+  const initializeContentBox = useCallback(() => {
+    const container = document.querySelector('[data-preview-container]');
+    const mediaEl = container?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement | null;
+    const canvas = container?.querySelector('canvas') as HTMLCanvasElement | null;
+    
+    if (mediaEl && canvas) {
+      const containerW = canvas.width || canvas.clientWidth;
+      const containerH = canvas.height || canvas.clientHeight;
+      const naturalW = (mediaEl as HTMLVideoElement).videoWidth || (mediaEl as HTMLImageElement).naturalWidth || containerW;
+      const naturalH = (mediaEl as HTMLVideoElement).videoHeight || (mediaEl as HTMLImageElement).naturalHeight || containerH;
+      
+      if (naturalW > 0 && naturalH > 0 && containerW > 0 && containerH > 0) {
+        const scale = Math.min(containerW / naturalW, containerH / naturalH);
+        const displayW = naturalW * scale;
+        const displayH = naturalH * scale;
+        const offsetX = (containerW - displayW) / 2;
+        const offsetY = (containerH - displayH) / 2;
+        setContentBox({ displayW, displayH, offsetX, offsetY, naturalW, naturalH });
+        console.log('ContentBox initialized:', { displayW, displayH, offsetX, offsetY, naturalW, naturalH });
+      }
+    }
+  }, []);
+
   const handleConnectPreview = async () => {
     if (isPreviewConnected) {
       // Disconnect preview - clear URL first to stop the stream
       setPreviewUrl('');
       setIsPreviewConnected(false);
       setPreviewError('');
+      setContentBox(null); // Clear contentBox when disconnecting
       // Generate new nonce for next connection
       setPreviewNonce(Date.now());
       toast.success('Preview disconnected');
@@ -1390,6 +1755,8 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     }
 
     // Compute content (letterboxed) box for object-contain media
+    // Use local variable to avoid async state update issues
+    let currentContentBox = contentBox;
     const mediaEl = canvas.parentElement?.querySelector('video, img') as HTMLVideoElement | HTMLImageElement | null;
     if (mediaEl) {
       const containerW = canvas.width;
@@ -1401,7 +1768,9 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       const displayH = naturalH * scale;
       const offsetX = (containerW - displayW) / 2;
       const offsetY = (containerH - displayH) / 2;
-      setContentBox({ displayW, displayH, offsetX, offsetY, naturalW, naturalH });
+      // Use the computed value immediately (not waiting for state update)
+      currentContentBox = { displayW, displayH, offsetX, offsetY, naturalW, naturalH };
+      setContentBox(currentContentBox);
     }
     const rect = canvas.getBoundingClientRect();
     // Map display coordinates to intrinsic canvas coordinates
@@ -1416,13 +1785,14 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       return;
     }
 
-    // Also store normalized coordinates relative to the content (letterboxed) box
-    // so they map correctly back to the original frame dimensions
+    // Calculate normalized coordinates relative to the content (letterboxed) box
+    // This maps clicks to [0,1] range relative to the actual video content area
     let fx = 0;
     let fy = 0;
-    if (contentBox && contentBox.displayW > 0 && contentBox.displayH > 0) {
-      fx = (x - contentBox.offsetX) / contentBox.displayW;
-      fy = (y - contentBox.offsetY) / contentBox.displayH;
+    if (currentContentBox && currentContentBox.displayW > 0 && currentContentBox.displayH > 0) {
+      // Use the computed contentBox directly (not the stale state)
+      fx = (x - currentContentBox.offsetX) / currentContentBox.displayW;
+      fy = (y - currentContentBox.offsetY) / currentContentBox.displayH;
     } else {
       // Fallback to canvas-relative normalization
       fx = canvas.width > 0 ? x / canvas.width : 0;
@@ -1431,8 +1801,6 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     // Clamp to [0,1] to avoid any numeric drift or clicks slightly outside
     fx = Math.max(0, Math.min(1, fx));
     fy = Math.max(0, Math.min(1, fy));
-    
-    // Removed debug console.log and manual canvas redraw - DrawingCanvas will handle redraw via useEffect
     
     if (drawingMode === 'zone') {
       handleZoneClick(x, y, fx, fy);
@@ -1719,24 +2087,26 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                      )}
 
 
-              {/* Multiple Areas Option */}
-            <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Draw Multiple Areas
-                </label>
-                <p className="text-sm text-slate-600 mb-3">
-                  Allow drawing and counting multiple areas for 1 camera (set up when drawing)
-                </p>
-                <label className="flex items-center">
-              <input
-                    type="checkbox"
-                    checked={formData.allowMultipleAreas}
-                    onChange={(e) => setFormData({...formData, allowMultipleAreas: e.target.checked})}
-                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
-                  />
-                  <span className="ml-2 text-sm text-slate-700">Enable multiple areas</span>
-                </label>
-            </div>
+              {/* Drawing Summary */}
+              {drawnAreas.length > 0 && (
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <p className="text-sm font-medium text-slate-700 mb-2">Configured Areas:</p>
+                  <div className="space-y-1 text-sm text-slate-600">
+                    {drawnAreas.filter(a => a.type === 'zone').length > 0 && (
+                      <p className="flex items-center gap-2">
+                        <span className="w-3 h-3 bg-green-500 rounded-full"></span>
+                        {drawnAreas.filter(a => a.type === 'zone').length} Zone(s) - Behavior Detection
+                      </p>
+                    )}
+                    {drawnAreas.filter(a => a.type === 'line').length > 0 && (
+                      <p className="flex items-center gap-2">
+                        <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
+                        {drawnAreas.filter(a => a.type === 'line').length} Line Pair(s) - In/Out Counting
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </form>
           </div>
 
@@ -1772,12 +2142,17 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                   <p className="text-slate-500">Connecting to preview...</p>
                 </div>
               ) : isPreviewConnected && previewUrl ? (
-                <div className="relative w-full h-full">
+                <div className="relative w-full h-full" data-preview-container>
                   <img
                     src={previewUrl}
                     alt="RTSP Stream"
                     className="w-full h-full object-contain bg-black rounded border"
                     style={{ pointerEvents: 'none' }}
+                    onLoad={() => {
+                      // Initialize contentBox when preview image loads
+                      // This ensures accurate coordinate calculation for drawing
+                      setTimeout(initializeContentBox, 100); // Small delay to ensure layout is complete
+                    }}
                     onError={(e) => {
                       console.error('Stream error:', e);
                       setPreviewError('Failed to load RTSP stream');
@@ -1803,9 +2178,19 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                           </div>
                   
                   {/* Drawing Mode Indicator */}
-                  {isDrawing && (
-                    <div className="absolute top-2 left-2 bg-blue-600 text-white px-2 py-1 rounded text-xs">
-                      Drawing Mode: Zone
+                  {drawingMode && (
+                    <div className={`absolute top-2 left-2 text-white px-2 py-1 rounded text-xs ${
+                      drawingMode === 'zone' ? 'bg-green-600' : 'bg-blue-600'
+                    }`}>
+                      {drawingMode === 'zone' ? '🟢 Drawing Zone' : '📏 Drawing In/Out Line'}
+                      {currentDrawing && (
+                        <span className="ml-2 opacity-75">
+                          {drawingMode === 'zone' 
+                            ? `(${currentDrawing.points?.length || 0} points)` 
+                            : `(Step ${currentDrawing.lineStep || 1}/4)`
+                          }
+                        </span>
+                      )}
                     </div>
                   )}
                   
@@ -1949,10 +2334,12 @@ export default function CamerasPage() {
         throw new Error('No store available');
       }
 
-      // Auto-add in_out_counting if lines are drawn
-      const hasLines = lines && lines.length >= 2;
+      // Auto-add in_out_counting if at least one complete line pair is drawn (Line A + Line B)
+      // A complete line pair has p1, p2 (Line A) and p1_b, p2_b (Line B)
+      const hasCompleteLinePair = lines && lines.length >= 1 && 
+        lines.some((l: any) => l.p1 && l.p2 && l.p1_b && l.p2_b);
       const aiServices = ['people_counting', 'behavior_detection'];
-      if (hasLines) {
+      if (hasCompleteLinePair) {
         aiServices.push('in_out_counting');
       }
 
@@ -1961,8 +2348,6 @@ export default function CamerasPage() {
         name: cameraConfig.name,
         source: cameraConfig.source, // RTSP URL only
         ai_services: aiServices,
-        // Model configuration removed - AI services will handle all model settings
-        skip_frame: cameraConfig.skip_frame || 3
       };
 
       // Creating camera via API
@@ -2116,8 +2501,9 @@ export default function CamerasPage() {
         }));
 
         // Convert lines if present - convert normalized coordinates to pixel coordinates
+        // Lines have Line A (p1, p2) and Line B (p1_b, p2_b) for In/Out counting
         const scaledLines = lines && lines.length > 0 ? lines.map((l: any) => {
-          // Lines should have normalized coordinates {fx, fy} in p1 and p2
+          // Line A: p1, p2 - normalized coordinates {fx, fy}
           const p1_fx = (l.p1 && typeof l.p1 === 'object' && 'fx' in l.p1) ? l.p1.fx : 0;
           const p1_fy = (l.p1 && typeof l.p1 === 'object' && 'fy' in l.p1) ? l.p1.fy : 0;
           const p2_fx = (l.p2 && typeof l.p2 === 'object' && 'fx' in l.p2) ? l.p2.fx : 0;
@@ -2129,7 +2515,7 @@ export default function CamerasPage() {
           const clamped_p2_fx = Math.max(0, Math.min(1, p2_fx));
           const clamped_p2_fy = Math.max(0, Math.min(1, p2_fy));
           
-          // Convert normalized to pixel coordinates
+          // Convert Line A normalized to pixel coordinates
           const p1_pixel = [
             Math.round(clamped_p1_fx * frameW),
             Math.round(clamped_p1_fy * frameH)
@@ -2139,19 +2525,45 @@ export default function CamerasPage() {
             Math.round(clamped_p2_fy * frameH)
           ];
           
+          // Line B: p1_b, p2_b - for In/Out detection
+          let p1_b_pixel = null;
+          let p2_b_pixel = null;
+          
+          if (l.p1_b && l.p2_b) {
+            const p1_b_fx = (typeof l.p1_b === 'object' && 'fx' in l.p1_b) ? l.p1_b.fx : 0;
+            const p1_b_fy = (typeof l.p1_b === 'object' && 'fy' in l.p1_b) ? l.p1_b.fy : 0;
+            const p2_b_fx = (typeof l.p2_b === 'object' && 'fx' in l.p2_b) ? l.p2_b.fx : 0;
+            const p2_b_fy = (typeof l.p2_b === 'object' && 'fy' in l.p2_b) ? l.p2_b.fy : 0;
+            
+            const clamped_p1_b_fx = Math.max(0, Math.min(1, p1_b_fx));
+            const clamped_p1_b_fy = Math.max(0, Math.min(1, p1_b_fy));
+            const clamped_p2_b_fx = Math.max(0, Math.min(1, p2_b_fx));
+            const clamped_p2_b_fy = Math.max(0, Math.min(1, p2_b_fy));
+            
+            p1_b_pixel = [
+              Math.round(clamped_p1_b_fx * frameW),
+              Math.round(clamped_p1_b_fy * frameH)
+            ];
+            p2_b_pixel = [
+              Math.round(clamped_p2_b_fx * frameW),
+              Math.round(clamped_p2_b_fy * frameH)
+            ];
+          }
+          
           // Log for debugging if needed
           if (process.env.NODE_ENV === 'development') {
             console.log('Converting line:', l.name, 
-              'normalized p1:', [clamped_p1_fx, clamped_p1_fy], 
-              'normalized p2:', [clamped_p2_fx, clamped_p2_fy],
-              'frame:', frameW, 'x', frameH,
-              'pixel p1:', p1_pixel, 'pixel p2:', p2_pixel);
+              'Line A:', p1_pixel, '→', p2_pixel,
+              'Line B:', p1_b_pixel, '→', p2_b_pixel,
+              'frame:', frameW, 'x', frameH);
           }
           
           return {
             name: l.name,
             p1: p1_pixel,
             p2: p2_pixel,
+            p1_b: p1_b_pixel,
+            p2_b: p2_b_pixel,
             is_active: true,
             camera_id: created.id,
           };

@@ -1,14 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { authApi, eventsApi, storeApi, cameraApi, type Alert, type Store, type Camera } from '@/lib/api';
+import DashboardFilters from '@/components/DashboardFilters';
 import { 
   Shield, 
-  Users, 
   Activity, 
   AlertTriangle, 
   Eye, 
@@ -18,18 +18,14 @@ import {
   Clock,
   RefreshCw,
   CheckCircle,
-  XCircle,
   Bell,
-  Video
+  Video,
+  Filter,
+  ShoppingBag,
+  Swords,
+  ChevronRight,
+  ExternalLink
 } from 'lucide-react';
-
-interface StoreStatus {
-  storeId: string;
-  storeName: string;
-  alerts: number;
-  cameras: number;
-  lastUpdate: Date;
-}
 
 export default function BehaviorDashboardPage() {
   const { t, lang } = useI18n();
@@ -37,73 +33,98 @@ export default function BehaviorDashboardPage() {
   const { user, isAuthenticated } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState<boolean | null>(null);
-  const [stores, setStores] = useState<StoreStatus[]>([]);
   const [storeList, setStoreList] = useState<Store[]>([]);
   const [cameraList, setCameraList] = useState<Camera[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedStore, setSelectedStore] = useState<string>('all');
+  const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
+  const [alertTypeFilter, setAlertTypeFilter] = useState<string>('all');
 
-  // Fetch data from API
+  // Filter alerts based on selections
+  const filteredAlerts = useMemo(() => {
+    let result = alerts;
+    
+    if (selectedStore !== 'all') {
+      result = result.filter(a => a.store_id === selectedStore);
+    }
+    
+    if (selectedCameras.length > 0) {
+      result = result.filter(a => a.camera_id && selectedCameras.includes(a.camera_id));
+    }
+    
+    if (alertTypeFilter !== 'all') {
+      result = result.filter(a => a.anomaly_type?.toLowerCase() === alertTypeFilter);
+    }
+    
+    return result;
+  }, [alerts, selectedStore, selectedCameras, alertTypeFilter]);
+
+  // Calculate stats per store
+  const storeStats = useMemo(() => {
+    const stats: Record<string, { total: number; unread: number; shoplifting: number; violence: number }> = {};
+    
+    storeList.forEach(store => {
+      const storeAlerts = alerts.filter(a => a.store_id === store.id);
+      stats[store.id] = {
+        total: storeAlerts.length,
+        unread: storeAlerts.filter(a => !a.acknowledged).length,
+        shoplifting: storeAlerts.filter(a => a.anomaly_type?.toLowerCase().includes('shoplifting')).length,
+        violence: storeAlerts.filter(a => a.anomaly_type?.toLowerCase().includes('violence')).length,
+      };
+    });
+    
+    return stats;
+  }, [alerts, storeList]);
+
+  // Alert type counts
+  const alertTypeCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    filteredAlerts.forEach(alert => {
+      const type = alert.anomaly_type?.toLowerCase() || 'unknown';
+      counts[type] = (counts[type] || 0) + 1;
+    });
+    return counts;
+  }, [filteredAlerts]);
+
+  // Fetch data
   const fetchData = useCallback(async () => {
     try {
       setError(null);
       
-      // Fetch stores, cameras, and alerts in parallel
       const [storesData, camerasData, alertsData] = await Promise.all([
         storeApi.getStores(),
         cameraApi.getCameras(),
-        eventsApi.getAlerts({ limit: 50 }),
+        eventsApi.getAlerts({ limit: 100 }),
       ]);
       
       setStoreList(storesData);
       setCameraList(camerasData);
       setAlerts(alertsData.alerts);
       setUnreadCount(alertsData.unread_count);
-      
-      // Build store status from data
-      const storeStatsMap: { [key: string]: StoreStatus } = {};
-      
-      storesData.forEach(store => {
-        const storeCameras = camerasData.filter(c => c.store_id === store.id);
-        const storeAlerts = alertsData.alerts.filter(a => a.store_id === store.id && !a.acknowledged);
-        
-        storeStatsMap[store.id] = {
-          storeId: store.id,
-          storeName: store.name,
-          alerts: storeAlerts.length,
-          cameras: storeCameras.length,
-          lastUpdate: new Date(),
-        };
-      });
-      
-      setStores(Object.values(storeStatsMap));
     } catch (err: any) {
       console.error('Failed to fetch behavior data:', err);
       setError(err.message || 'Failed to load data');
     }
   }, []);
 
-  // Manual refresh
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchData();
     setIsRefreshing(false);
   };
 
-  // Acknowledge alert
   const handleAcknowledgeAlert = async (alertId: string) => {
     try {
       await eventsApi.acknowledgeAlert(alertId);
-      // Refresh data
       await fetchData();
     } catch (err: any) {
       console.error('Failed to acknowledge alert:', err);
     }
   };
 
-  // Acknowledge all alerts
   const handleAcknowledgeAll = async () => {
     try {
       await eventsApi.acknowledgeAllAlerts();
@@ -122,17 +143,14 @@ export default function BehaviorDashboardPage() {
         return;
       }
 
-      // Managers always have access
       if (user.active_membership.role === 'manager') {
         setHasAccess(true);
         await fetchData();
-        // Poll for updates every 10 seconds
         interval = setInterval(fetchData, 10000);
         setIsLoading(false);
         return;
       }
 
-      // Check member permissions
       try {
         const permissions = await authApi.getMemberPermissions(
           user.active_membership.organization.id,
@@ -153,16 +171,14 @@ export default function BehaviorDashboardPage() {
     checkAccess();
 
     return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
+      if (interval) clearInterval(interval);
     };
   }, [isAuthenticated, user, fetchData]);
 
   if (isLoading || hasAccess === null) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500"></div>
       </div>
     );
   }
@@ -176,12 +192,9 @@ export default function BehaviorDashboardPage() {
             {lang === 'vi' ? 'Từ chối truy cập' : 'Access Denied'}
           </h2>
           <p className="text-slate-400 mb-4">
-            {lang === 'vi' ? 'Bạn không có quyền truy cập bảng điều khiển.' : "You don't have permission to access the dashboard."}
+            {lang === 'vi' ? 'Bạn không có quyền truy cập.' : "You don't have permission."}
           </p>
-          <button
-            onClick={() => router.push('/cameras')}
-            className="btn-primary btn-md"
-          >
+          <button onClick={() => router.push('/cameras')} className="btn-primary btn-md">
             {lang === 'vi' ? 'Đến trang Camera' : 'Go to Cameras'}
           </button>
         </div>
@@ -193,103 +206,169 @@ export default function BehaviorDashboardPage() {
     const date = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
     const now = new Date();
     const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
-    if (diff < 60) return lang === 'vi' ? `${diff} giây trước` : `${diff}s ago`;
-    if (diff < 3600) return lang === 'vi' ? `${Math.floor(diff / 60)} phút trước` : `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return lang === 'vi' ? `${Math.floor(diff / 3600)} giờ trước` : `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 60) return lang === 'vi' ? `${diff}s trước` : `${diff}s ago`;
+    if (diff < 3600) return lang === 'vi' ? `${Math.floor(diff / 60)}m trước` : `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return lang === 'vi' ? `${Math.floor(diff / 3600)}h trước` : `${Math.floor(diff / 3600)}h ago`;
     return date.toLocaleDateString();
   };
 
-  const getBehaviorColor = (type: string) => {
-    const normalizedType = type?.toLowerCase() || '';
-    if (normalizedType.includes('shoplifting') || normalizedType.includes('theft')) {
-      return 'bg-red-900/50 text-red-300 border-red-700';
+  const getBehaviorStyles = (type: string) => {
+    const t = type?.toLowerCase() || '';
+    if (t.includes('shoplifting') || t.includes('theft')) {
+      return {
+        bg: 'bg-red-500/10 border-red-500/30',
+        text: 'text-red-400',
+        icon: <ShoppingBag className="w-4 h-4" />,
+        badge: 'bg-red-900/50 text-red-300 border-red-700/50',
+      };
     }
-    if (normalizedType.includes('violence') || normalizedType.includes('fight')) {
-      return 'bg-purple-900/50 text-purple-300 border-purple-700';
+    if (t.includes('violence') || t.includes('fight')) {
+      return {
+        bg: 'bg-purple-500/10 border-purple-500/30',
+        text: 'text-purple-400',
+        icon: <Swords className="w-4 h-4" />,
+        badge: 'bg-purple-900/50 text-purple-300 border-purple-700/50',
+      };
     }
-    if (normalizedType.includes('normal')) {
-      return 'bg-green-900/50 text-green-300 border-green-700';
-    }
-    return 'bg-yellow-900/50 text-yellow-300 border-yellow-700';
+    return {
+      bg: 'bg-yellow-500/10 border-yellow-500/30',
+      text: 'text-yellow-400',
+      icon: <AlertTriangle className="w-4 h-4" />,
+      badge: 'bg-yellow-900/50 text-yellow-300 border-yellow-700/50',
+    };
   };
 
-  const getBehaviorIcon = (type: string) => {
-    const normalizedType = type?.toLowerCase() || '';
-    if (normalizedType.includes('shoplifting') || normalizedType.includes('theft')) {
-      return <AlertTriangle className="w-4 h-4 text-red-400" />;
-    }
-    if (normalizedType.includes('violence') || normalizedType.includes('fight')) {
-      return <Zap className="w-4 h-4 text-purple-400" />;
-    }
-    return <Eye className="w-4 h-4 text-yellow-400" />;
-  };
-
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'high': return 'text-red-400';
-      case 'medium': return 'text-yellow-400';
-      case 'low': return 'text-green-400';
-      default: return 'text-slate-400';
-    }
-  };
-
-  // Count alerts by type
-  const alertsByType = alerts.reduce((acc, alert) => {
-    const type = alert.anomaly_type || 'unknown';
-    acc[type] = (acc[type] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-
-  // Unacknowledged alerts
-  const unacknowledgedAlerts = alerts.filter(a => !a.acknowledged);
+  const unacknowledgedAlerts = filteredAlerts.filter(a => !a.acknowledged);
+  const filteredUnreadCount = unacknowledgedAlerts.length;
 
   return (
     <div className="space-y-6 text-slate-100">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-white flex items-center gap-2">
-            <Activity className="w-8 h-8" />
-            {lang === 'vi' ? 'Giám sát hành vi' : 'Behavior Monitoring'}
-          </h1>
-          <p className="text-slate-300 mt-1">
-            {lang === 'vi' ? 'Phát hiện hành vi bất thường theo thời gian thực' : 'Real-time anomaly behavior detection'}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* Refresh Button */}
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:bg-slate-700 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-          </button>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl flex items-center justify-center">
+                <Activity className="w-5 h-5" />
+              </div>
+              {lang === 'vi' ? 'Giám sát hành vi' : 'Behavior Monitoring'}
+            </h1>
+            <p className="text-slate-400 mt-1 text-sm">
+              {lang === 'vi' ? 'Phát hiện shoplifting và violence theo thời gian thực' : 'Real-time shoplifting & violence detection'}
+            </p>
+          </div>
 
-          {/* Live Indicator */}
-          <div className="flex items-center gap-2 px-4 py-2 bg-green-900/20 border border-green-700/50 rounded-lg">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="text-green-300 text-sm font-medium">Live</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+
+            <div className="flex items-center gap-2 px-3 py-2 bg-green-900/20 border border-green-700/30 rounded-lg">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <span className="text-green-300 text-xs font-medium">Live</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Filters Row */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+          <DashboardFilters
+            stores={storeList}
+            cameras={cameraList}
+            selectedStore={selectedStore}
+            selectedCameras={selectedCameras}
+            onStoreChange={setSelectedStore}
+            onCamerasChange={setSelectedCameras}
+            lang={lang}
+          />
+
+          {/* Alert Type Filter */}
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-slate-500" />
+            <div className="flex bg-slate-800/80 border border-slate-700 rounded-lg p-1">
+              <button
+                onClick={() => setAlertTypeFilter('all')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  alertTypeFilter === 'all'
+                    ? 'bg-slate-700 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {lang === 'vi' ? 'Tất cả' : 'All'}
+              </button>
+              <button
+                onClick={() => setAlertTypeFilter('shoplifting')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                  alertTypeFilter === 'shoplifting'
+                    ? 'bg-red-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <ShoppingBag className="w-3 h-3" />
+                Shoplifting
+              </button>
+              <button
+                onClick={() => setAlertTypeFilter('violence')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                  alertTypeFilter === 'violence'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Swords className="w-3 h-3" />
+                Violence
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-gradient-to-br from-red-600 to-orange-700 rounded-xl p-5 text-white shadow-lg"
+          className="bg-gradient-to-br from-red-500/20 to-orange-600/10 border border-red-500/30 rounded-xl p-5"
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-red-100 text-xs font-medium uppercase tracking-wide">
-                {lang === 'vi' ? 'Cảnh báo chưa xử lý' : 'Unread Alerts'}
+              <p className="text-red-300/80 text-xs font-medium uppercase tracking-wide mb-1">
+                {lang === 'vi' ? 'Chưa xử lý' : 'Unread'}
               </p>
-              <p className="text-3xl font-bold mt-1">{unreadCount}</p>
+              <p className="text-3xl font-bold text-red-400">{filteredUnreadCount}</p>
+              <p className="text-xs text-slate-500 mt-1">{lang === 'vi' ? 'cảnh báo mới' : 'new alerts'}</p>
             </div>
-            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-              <Bell className="w-6 h-6" />
+            <div className="w-12 h-12 bg-red-500/20 rounded-xl flex items-center justify-center relative">
+              <Bell className="w-6 h-6 text-red-400" />
+              {filteredUnreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-xs font-bold text-white">
+                  {filteredUnreadCount > 9 ? '9+' : filteredUnreadCount}
+                </span>
+              )}
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+          className="bg-gradient-to-br from-red-600/20 to-rose-600/10 border border-red-600/30 rounded-xl p-5"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-red-300/80 text-xs font-medium uppercase tracking-wide mb-1">
+                Shoplifting
+              </p>
+              <p className="text-3xl font-bold text-red-400">{alertTypeCounts['shoplifting'] || 0}</p>
+              <p className="text-xs text-slate-500 mt-1">{lang === 'vi' ? 'phát hiện' : 'detected'}</p>
+            </div>
+            <div className="w-12 h-12 bg-red-600/20 rounded-xl flex items-center justify-center">
+              <ShoppingBag className="w-6 h-6 text-red-400" />
             </div>
           </div>
         </motion.div>
@@ -298,228 +377,272 @@ export default function BehaviorDashboardPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="bg-gradient-to-br from-purple-600 to-pink-700 rounded-xl p-5 text-white shadow-lg"
+          className="bg-gradient-to-br from-purple-500/20 to-pink-600/10 border border-purple-500/30 rounded-xl p-5"
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-purple-100 text-xs font-medium uppercase tracking-wide">
+              <p className="text-purple-300/80 text-xs font-medium uppercase tracking-wide mb-1">
+                Violence
+              </p>
+              <p className="text-3xl font-bold text-purple-400">{alertTypeCounts['violence'] || 0}</p>
+              <p className="text-xs text-slate-500 mt-1">{lang === 'vi' ? 'phát hiện' : 'detected'}</p>
+            </div>
+            <div className="w-12 h-12 bg-purple-500/20 rounded-xl flex items-center justify-center">
+              <Swords className="w-6 h-6 text-purple-400" />
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="bg-gradient-to-br from-blue-500/20 to-cyan-600/10 border border-blue-500/30 rounded-xl p-5"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-blue-300/80 text-xs font-medium uppercase tracking-wide mb-1">
                 {lang === 'vi' ? 'Tổng cảnh báo' : 'Total Alerts'}
               </p>
-              <p className="text-3xl font-bold mt-1">{alerts.length}</p>
+              <p className="text-3xl font-bold text-blue-400">{filteredAlerts.length}</p>
+              <p className="text-xs text-slate-500 mt-1">{cameraList.filter(c => c.is_active).length} {lang === 'vi' ? 'camera' : 'cameras'}</p>
             </div>
-            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-              <AlertTriangle className="w-6 h-6" />
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="bg-gradient-to-br from-blue-600 to-cyan-700 rounded-xl p-5 text-white shadow-lg"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-blue-100 text-xs font-medium uppercase tracking-wide">
-                {lang === 'vi' ? 'Camera hoạt động' : 'Active Cameras'}
-              </p>
-              <p className="text-3xl font-bold mt-1">{cameraList.filter(c => c.is_active).length}</p>
-            </div>
-            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-              <Video className="w-6 h-6" />
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="bg-gradient-to-br from-green-600 to-emerald-700 rounded-xl p-5 text-white shadow-lg"
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-green-100 text-xs font-medium uppercase tracking-wide">
-                {lang === 'vi' ? 'Cửa hàng' : 'Stores'}
-              </p>
-              <p className="text-3xl font-bold mt-1">{storeList.length}</p>
-            </div>
-            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-              <MapPin className="w-6 h-6" />
+            <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center">
+              <AlertTriangle className="w-6 h-6 text-blue-400" />
             </div>
           </div>
         </motion.div>
       </div>
 
-      {/* Main Content */}
+      {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Alerts List */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="lg:col-span-2 bg-slate-800 rounded-xl border border-slate-700"
+          className="lg:col-span-2 bg-slate-800/50 backdrop-blur rounded-xl border border-slate-700 overflow-hidden"
         >
-          <div className="p-6 border-b border-slate-700 flex items-center justify-between">
-            <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+          <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
               <Eye className="w-5 h-5 text-purple-400" />
               {lang === 'vi' ? 'Cảnh báo gần đây' : 'Recent Alerts'}
+              {filteredUnreadCount > 0 && (
+                <span className="px-2 py-0.5 bg-red-500/20 text-red-400 rounded-full text-xs font-medium">
+                  {filteredUnreadCount} {lang === 'vi' ? 'mới' : 'new'}
+                </span>
+              )}
             </h2>
             {unacknowledgedAlerts.length > 0 && (
               <button
                 onClick={handleAcknowledgeAll}
-                className="text-xs px-3 py-1.5 bg-green-900/30 border border-green-700 rounded text-green-300 hover:bg-green-900/50 transition-colors"
+                className="text-xs px-3 py-1.5 bg-green-900/30 border border-green-700/50 rounded-lg text-green-300 hover:bg-green-900/50 transition-colors flex items-center gap-1.5"
               >
-                <CheckCircle className="w-3 h-3 inline mr-1" />
+                <CheckCircle className="w-3 h-3" />
                 {lang === 'vi' ? 'Đánh dấu tất cả đã đọc' : 'Mark all read'}
               </button>
             )}
           </div>
 
-          <div className="p-4 space-y-3 max-h-[600px] overflow-y-auto">
-            {alerts.length === 0 ? (
-              <div className="text-center py-12 text-slate-400">
-                <Eye className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                <p className="text-lg font-medium">
-                  {lang === 'vi' ? 'Chưa có cảnh báo' : 'No alerts yet'}
+          <div className="max-h-[600px] overflow-y-auto">
+            {filteredAlerts.length === 0 ? (
+              <div className="text-center py-16 text-slate-500">
+                <Eye className="w-16 h-16 mx-auto mb-4 opacity-30" />
+                <p className="text-lg font-medium text-slate-400">
+                  {lang === 'vi' ? 'Không có cảnh báo' : 'No alerts found'}
                 </p>
                 <p className="text-sm mt-1">
                   {lang === 'vi' 
-                    ? 'Cảnh báo sẽ xuất hiện khi AI phát hiện hành vi bất thường'
-                    : 'Alerts will appear when AI detects anomalous behavior'}
+                    ? 'Cảnh báo sẽ xuất hiện khi AI phát hiện shoplifting hoặc violence'
+                    : 'Alerts appear when AI detects shoplifting or violence'}
                 </p>
               </div>
             ) : (
-              alerts.map((alert) => (
-                <div
-                  key={alert.id}
-                  className={`bg-slate-900/50 rounded-lg p-4 border transition-colors ${
-                    alert.acknowledged 
-                      ? 'border-slate-700 opacity-60' 
-                      : 'border-slate-600 hover:border-slate-500'
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      {getBehaviorIcon(alert.anomaly_type || '')}
-                      <span className={`px-2 py-1 rounded text-xs font-medium border ${getBehaviorColor(alert.anomaly_type || '')}`}>
-                        {alert.anomaly_type || 'unknown'}
-                      </span>
-                      <span className={`text-xs font-medium ${getSeverityColor(alert.severity)}`}>
-                        {alert.severity.toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400">{formatTime(alert.timestamp)}</span>
-                      {!alert.acknowledged && (
-                        <button
-                          onClick={() => handleAcknowledgeAlert(alert.id)}
-                          className="p-1 hover:bg-slate-700 rounded transition-colors"
-                          title={lang === 'vi' ? 'Đánh dấu đã đọc' : 'Mark as read'}
-                        >
-                          <CheckCircle className="w-4 h-4 text-green-400" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <p className="text-sm text-slate-200 font-medium mb-2">{alert.message}</p>
-                  
-                  <div className="flex items-center gap-4 text-xs text-slate-400">
-                    {alert.store_name && (
-                      <span className="flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        {alert.store_name}
-                      </span>
-                    )}
-                    {alert.camera_name && (
-                      <span className="flex items-center gap-1">
-                        <Video className="w-3 h-3" />
-                        {alert.camera_name}
-                      </span>
-                    )}
-                    {alert.confidence && (
-                      <span className="text-blue-400 font-medium">
-                        {(alert.confidence * 100).toFixed(0)}% {lang === 'vi' ? 'độ tin cậy' : 'confidence'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))
+              <div className="divide-y divide-slate-700/50">
+                <AnimatePresence>
+                  {filteredAlerts.map((alert, idx) => {
+                    const styles = getBehaviorStyles(alert.anomaly_type || '');
+                    return (
+                      <motion.div
+                        key={alert.id}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 20 }}
+                        transition={{ delay: idx * 0.02 }}
+                        className={`p-4 hover:bg-slate-700/20 transition-colors ${
+                          alert.acknowledged ? 'opacity-50' : ''
+                        }`}
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${styles.bg} border`}>
+                            <span className={styles.text}>{styles.icon}</span>
+                          </div>
+                          
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-2 mb-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`px-2 py-0.5 rounded text-xs font-medium border ${styles.badge}`}>
+                                  {alert.anomaly_type || 'unknown'}
+                                </span>
+                                {alert.confidence && (
+                                  <span className="text-xs text-blue-400 font-medium">
+                                    {(alert.confidence * 100).toFixed(0)}%
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <span className="text-xs text-slate-500">{formatTime(alert.timestamp)}</span>
+                                {!alert.acknowledged && (
+                                  <button
+                                    onClick={() => handleAcknowledgeAlert(alert.id)}
+                                    className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors"
+                                    title={lang === 'vi' ? 'Đánh dấu đã đọc' : 'Mark as read'}
+                                  >
+                                    <CheckCircle className="w-4 h-4 text-green-400" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            
+                            <p className="text-sm text-slate-200 font-medium mb-2 line-clamp-2">
+                              {alert.message}
+                            </p>
+                            
+                            <div className="flex items-center gap-3 text-xs text-slate-500">
+                              {alert.store_name && (
+                                <span className="flex items-center gap-1">
+                                  <MapPin className="w-3 h-3" />
+                                  {alert.store_name}
+                                </span>
+                              )}
+                              {alert.camera_name && (
+                                <span className="flex items-center gap-1">
+                                  <Video className="w-3 h-3" />
+                                  {alert.camera_name}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+              </div>
             )}
           </div>
         </motion.div>
 
-        {/* Statistics */}
+        {/* Side Stats */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="space-y-6"
+          className="space-y-4"
         >
-          {/* Alert Types */}
-          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-            <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2 mb-4">
-              <TrendingUp className="w-5 h-5 text-green-400" />
-              {lang === 'vi' ? 'Thống kê theo loại' : 'Alerts by Type'}
-            </h2>
-
-            <div className="space-y-3">
-              {Object.entries(alertsByType).length === 0 ? (
-                <div className="text-center py-6 text-slate-400">
-                  <Activity className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">{lang === 'vi' ? 'Chưa có dữ liệu' : 'No data yet'}</p>
-                </div>
+          {/* Store Breakdown */}
+          <div className="bg-slate-800/50 backdrop-blur rounded-xl border border-slate-700 p-4">
+            <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-orange-400" />
+              {lang === 'vi' ? 'Theo cửa hàng' : 'By Store'}
+            </h3>
+            
+            <div className="space-y-2">
+              {storeList.length === 0 ? (
+                <p className="text-center text-slate-500 py-4 text-sm">
+                  {lang === 'vi' ? 'Chưa có cửa hàng' : 'No stores'}
+                </p>
               ) : (
-                Object.entries(alertsByType).map(([type, count]) => (
-                  <div key={type} className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-700">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-3 h-3 rounded-full ${
-                        type.includes('shoplifting') ? 'bg-red-500' :
-                        type.includes('violence') ? 'bg-purple-500' :
-                        type.includes('normal') ? 'bg-green-500' : 'bg-yellow-500'
-                      }`}></div>
-                      <span className="text-slate-200 capitalize">{type}</span>
+                storeList.map(store => {
+                  const stats = storeStats[store.id] || { total: 0, unread: 0, shoplifting: 0, violence: 0 };
+                  return (
+                    <div 
+                      key={store.id}
+                      className={`p-3 rounded-lg border transition-colors cursor-pointer ${
+                        selectedStore === store.id 
+                          ? 'bg-blue-900/30 border-blue-700/50'
+                          : 'bg-slate-900/50 border-slate-700/50 hover:border-slate-600/50'
+                      }`}
+                      onClick={() => setSelectedStore(selectedStore === store.id ? 'all' : store.id)}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-slate-200">{store.name}</span>
+                        {stats.unread > 0 && (
+                          <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-xs font-medium">
+                            {stats.unread}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="text-red-400 flex items-center gap-1">
+                          <ShoppingBag className="w-3 h-3" />
+                          {stats.shoplifting}
+                        </span>
+                        <span className="text-purple-400 flex items-center gap-1">
+                          <Swords className="w-3 h-3" />
+                          {stats.violence}
+                        </span>
+                        <span className="text-slate-500 ml-auto">
+                          {stats.total} total
+                        </span>
+                      </div>
                     </div>
-                    <span className="text-slate-100 font-semibold">{count}</span>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
 
-          {/* Store Status */}
-          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-            <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2 mb-4">
-              <MapPin className="w-5 h-5 text-orange-400" />
-              {lang === 'vi' ? 'Trạng thái cửa hàng' : 'Store Status'}
-            </h2>
-
-            <div className="space-y-3">
-              {stores.length === 0 ? (
-                <div className="text-center py-6 text-slate-400">
-                  <MapPin className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">{lang === 'vi' ? 'Chưa có cửa hàng' : 'No stores yet'}</p>
+          {/* Quick Actions */}
+          <div className="bg-slate-800/50 backdrop-blur rounded-xl border border-slate-700 p-4">
+            <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+              <Zap className="w-4 h-4 text-yellow-400" />
+              {lang === 'vi' ? 'Truy cập nhanh' : 'Quick Access'}
+            </h3>
+            
+            <div className="space-y-2">
+              <button
+                onClick={() => router.push('/videos')}
+                className="w-full p-3 bg-slate-900/50 border border-slate-700/50 rounded-lg hover:border-slate-600/50 transition-colors text-left flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <Video className="w-4 h-4 text-blue-400" />
+                  <span className="text-sm text-slate-300">{lang === 'vi' ? 'Video đã lưu' : 'Saved Videos'}</span>
                 </div>
-              ) : (
-                stores.map((store) => (
-                  <div key={store.storeId} className="p-3 bg-slate-900/50 rounded-lg border border-slate-700">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-slate-200 font-medium">{store.storeName}</span>
-                      {store.alerts > 0 && (
-                        <span className="px-2 py-0.5 bg-red-900/30 border border-red-700 rounded text-red-300 text-xs">
-                          {store.alerts} {lang === 'vi' ? 'cảnh báo' : 'alerts'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-4 text-xs text-slate-400">
-                      <span className="flex items-center gap-1">
-                        <Video className="w-3 h-3" />
-                        {store.cameras} {lang === 'vi' ? 'camera' : 'cameras'}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
+                <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-slate-300 transition-colors" />
+              </button>
+              
+              <button
+                onClick={() => router.push('/cameras')}
+                className="w-full p-3 bg-slate-900/50 border border-slate-700/50 rounded-lg hover:border-slate-600/50 transition-colors text-left flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <Video className="w-4 h-4 text-green-400" />
+                  <span className="text-sm text-slate-300">{lang === 'vi' ? 'Quản lý camera' : 'Manage Cameras'}</span>
+                </div>
+                <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-slate-300 transition-colors" />
+              </button>
+            </div>
+          </div>
+
+          {/* System Status */}
+          <div className="bg-slate-800/50 backdrop-blur rounded-xl border border-slate-700 p-4">
+            <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-green-400" />
+              {lang === 'vi' ? 'Trạng thái hệ thống' : 'System Status'}
+            </h3>
+            
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500">{lang === 'vi' ? 'Camera hoạt động' : 'Active Cameras'}</span>
+                <span className="text-green-400 font-medium">{cameraList.filter(c => c.is_active).length}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500">{lang === 'vi' ? 'Cửa hàng' : 'Stores'}</span>
+                <span className="text-slate-300 font-medium">{storeList.length}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500">{lang === 'vi' ? 'Cập nhật' : 'Refresh'}</span>
+                <span className="text-slate-400">10s</span>
+              </div>
             </div>
           </div>
         </motion.div>

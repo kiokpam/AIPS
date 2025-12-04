@@ -27,3 +27,5 @@ ENV/
 
 # VS Code
 .vscode/
+ai/videomae/best_checkpoint.pt
+ai/videomae/videomae_runner.onnx.data

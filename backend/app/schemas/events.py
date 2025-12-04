@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from datetime import datetime
+from pydantic import BaseModel, field_serializer
+from datetime import datetime, timezone
 from typing import Optional, List
 
 class CounterUpdateEvent(BaseModel):
@@ -7,6 +7,7 @@ class CounterUpdateEvent(BaseModel):
     event: str = "counter_update"
     store_id: str
     zone_id: str
+    camera_id: Optional[str] = None  # Optional: for better tracking
     value: int
     ts: str
 
@@ -50,12 +51,44 @@ class AlertResponse(BaseModel):
     camera_id: Optional[str] = None
     anomaly_type: Optional[str] = None
     confidence: Optional[float] = None
+    clip_ref: Optional[str] = None  # Reference to saved video clip filename
     timestamp: datetime
     acknowledged: bool
     store_name: Optional[str] = None
     camera_name: Optional[str] = None
+    
+    @field_serializer('timestamp')
+    def serialize_timestamp(self, value: datetime) -> str:
+        """Serialize timestamp as ISO format with Z suffix to indicate UTC."""
+        if value.tzinfo is None:
+            # Assume naive datetime is UTC
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat().replace('+00:00', 'Z')
 
 class AlertsResponse(BaseModel):
     alerts: List[AlertResponse]
     unread_count: int
     total_count: int
+
+
+class Detection(BaseModel):
+    """Single person detection with bounding box."""
+    track_id: int
+    bbox: List[int]  # [x1, y1, x2, y2]
+    label: str = ""  # MobileNet label (normal, suspicious, etc.)
+    confidence: float = 0.0
+    in_zone: bool = False  # Whether person is inside a zone
+
+
+class DetectionUpdateEvent(BaseModel):
+    """
+    Real-time detection data from AI service.
+    
+    Sent every frame with current bounding boxes and labels.
+    Used to visualize detections in the stream overlay.
+    """
+    event: str = "detection_update"
+    camera_id: str
+    detections: List[Detection]
+    people_in_zone: int = 0
+    ts: str

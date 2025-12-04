@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   Shield,
@@ -65,7 +65,15 @@ const navigation = [
 function InnerLayout({ children }: AppLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, logout, switchOrganization, isAuthenticated, isLoading: authLoading } = useAuth();
+  const { user, logout, switchOrganization, isAuthenticated, isLoading: authLoading, connectionError, retryAuth } = useAuth();
+  const hasRedirectedRef = useRef(false); // Prevent multiple redirects
+  
+  // Reset redirect flag when user becomes authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      hasRedirectedRef.current = false;
+    }
+  }, [isAuthenticated]);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -138,7 +146,7 @@ function InnerLayout({ children }: AppLayoutProps) {
     return <>{children}</>;
   }
 
-  // Show loading or redirect if not authenticated
+  // Show loading spinner during auth check
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -147,8 +155,50 @@ function InnerLayout({ children }: AppLayoutProps) {
     );
   }
 
-  if (!isAuthenticated) {
+  // Show connection error page when backend is down but user has a token
+  if (connectionError && localStorage.getItem('auth_token')) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+        <div className="text-center p-8 max-w-md">
+          <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-red-500/20 flex items-center justify-center">
+            <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-semibold text-white mb-2">Connection Error</h2>
+          <p className="text-slate-400 mb-6">
+            Unable to connect to the server. Please check if the backend is running.
+          </p>
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={() => retryAuth()}
+              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+            >
+              Retry Connection
+            </button>
+            <button
+              onClick={() => {
+                logout();
+              }}
+              className="px-6 py-3 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-colors font-medium"
+            >
+              Logout &amp; Go to Login
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Redirect to login if not authenticated (only once)
+  if (!isAuthenticated && !hasRedirectedRef.current) {
+    hasRedirectedRef.current = true;
     router.push('/login');
+    return null;
+  }
+  
+  // If already redirecting, show nothing
+  if (!isAuthenticated) {
     return null;
   }
 

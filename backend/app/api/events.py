@@ -1,13 +1,20 @@
 import uuid
+import os
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from app.api.deps import CurrentMembership, get_current_membership, get_db, MembershipRole
 from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission
-from app.schemas.events import CounterUpdateEvent, InOutUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse
+from app.schemas.events import CounterUpdateEvent, InOutUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse, DetectionUpdateEvent
+from app.services.camera_manager import camera_manager
+
+# Clips directory (shared with AI service)
+CLIPS_DIR = Path(os.environ.get('CLIPS_DIR', '/app/clips'))
 
 router = APIRouter(prefix="/events", tags=["events"])
 logger = logging.getLogger(__name__)
@@ -23,12 +30,16 @@ def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_
             raise HTTPException(status_code=404, detail="Store not found")
 
         db.execute(text("""
-            INSERT INTO people_counts (time, store_id, zone_id, value, org_id)
-            VALUES (:time, :store_id, :zone_id, :value, :org_id)
+            INSERT INTO people_counts (time, store_id, zone_id, camera_id, value, org_id)
+            VALUES (:time, :store_id, :zone_id, :camera_id, :value, :org_id)
+            ON CONFLICT (time, store_id, zone_id) DO UPDATE SET
+                value = :value,
+                camera_id = COALESCE(:camera_id, people_counts.camera_id)
         """), {
             "time": event.ts,
             "store_id": event.store_id,
             "zone_id": event.zone_id,
+            "camera_id": event.camera_id,
             "value": event.value,
             "org_id": store.org_id,
         })
@@ -65,6 +76,22 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
             logger.warning(f"InOut update received for non-existent store: {event.store_id}")
             raise HTTPException(status_code=404, detail="Store not found")
 
+        # Parse ISO timestamp string to datetime
+        from datetime import datetime
+        try:
+            # Remove 'Z' suffix if present and parse
+            ts_str = event.ts.rstrip('Z')
+            if '+' in ts_str:
+                # Has timezone offset, parse with timezone
+                ts_dt = datetime.fromisoformat(ts_str)
+            else:
+                # No timezone, assume UTC
+                ts_dt = datetime.fromisoformat(ts_str)
+        except (ValueError, AttributeError):
+            # Fallback to current time if parsing fails
+            logger.warning(f"Failed to parse timestamp '{event.ts}', using current time")
+            ts_dt = datetime.utcnow()
+        
         # Insert into inout_counts table
         db.execute(text("""
             INSERT INTO inout_counts (time, camera_id, store_id, count_in, count_out, org_id)
@@ -73,7 +100,7 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
                 count_in = :count_in,
                 count_out = :count_out
         """), {
-            "time": event.ts,
+            "time": ts_dt,
             "camera_id": event.camera_id,
             "store_id": event.store_id,
             "count_in": event.count_in,
@@ -89,6 +116,44 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to store inout update: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/detection-update")
+def receive_detection_update(event: DetectionUpdateEvent):
+    """
+    Receive real-time detection data from AI service.
+    
+    This endpoint receives bounding boxes and labels for visualization.
+    Data is stored in-memory (not persisted) and used by the stream overlay.
+    """
+    try:
+        # Convert to format expected by camera manager
+        detections = [
+            {
+                "track_id": d.track_id,
+                "bbox": d.bbox,
+                "label": d.label,
+                "confidence": d.confidence,
+                "in_zone": d.in_zone,
+            }
+            for d in event.detections
+        ]
+        
+        # Log occasionally for debugging
+        if len(detections) > 0:
+            logger.debug(f"Received {len(detections)} detections for camera {event.camera_id}, {event.people_in_zone} in zone")
+        
+        # Update camera manager with latest detections
+        camera_manager.update_detections(
+            camera_id=event.camera_id,
+            detections=detections,
+            people_in_zone=event.people_in_zone
+        )
+        
+        return {"status": "success", "count": len(detections)}
+    except Exception as e:
+        logger.error(f"Failed to process detection update: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -200,6 +265,12 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
             if not camera:
                 raise HTTPException(status_code=404, detail="Camera not found")
 
+        # Extract filename from clip_ref if provided (clip_ref might be full path)
+        clip_filename = None
+        if event.clip_ref:
+            # Extract just the filename from path (e.g., "/app/clips/camera_id_track_id_shoplifting_55.mp4" -> "camera_id_track_id_shoplifting_55.mp4")
+            clip_filename = Path(event.clip_ref).name
+        
         alert = AlertModel(
             id=str(uuid.uuid4()),
             type="anomaly",
@@ -209,6 +280,7 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
             camera_id=event.camera_id,
             anomaly_type=event.type,
             confidence=severity_float,
+            clip_ref=clip_filename,  # Store just the filename for matching
             timestamp=datetime.fromisoformat(event.ts.replace('Z', '+00:00')) if isinstance(event.ts, str) else event.ts,
             acknowledged=False,
             org_id=store.org_id,
@@ -230,17 +302,22 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
 @router.get("/people-counts")
 def get_people_counts(
     store_id: Optional[str] = None,
+    camera_id: Optional[str] = None,
     limit: int = 100,
     current: CurrentMembership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
     """Get recent people count data"""
-    base_query = "SELECT time, store_id, zone_id, value FROM people_counts WHERE org_id = :org_id"
+    base_query = "SELECT time, store_id, zone_id, camera_id, value FROM people_counts WHERE org_id = :org_id"
     params = {"org_id": current.organization.id, "limit": limit}
 
     if store_id:
         base_query += " AND store_id = :store_id"
         params["store_id"] = store_id
+    
+    if camera_id:
+        base_query += " AND camera_id = :camera_id"
+        params["camera_id"] = camera_id
 
     base_query += " ORDER BY time DESC LIMIT :limit"
 
@@ -249,9 +326,10 @@ def get_people_counts(
 
     return [
         {
-            "time": row.time.isoformat(),
+            "time": row.time.isoformat() if hasattr(row.time, 'isoformat') else str(row.time),
             "store_id": row.store_id,
             "zone_id": row.zone_id,
+            "camera_id": row.camera_id,
             "value": row.value,
         }
         for row in rows
@@ -381,6 +459,7 @@ def get_alerts(
             camera_id=alert.camera_id,
             anomaly_type=alert.anomaly_type,
             confidence=alert.confidence,
+            clip_ref=alert.clip_ref,
             timestamp=alert.timestamp,
             acknowledged=alert.acknowledged,
             store_name=stores.get(alert.store_id) if alert.store_id else None,
@@ -482,3 +561,64 @@ def acknowledge_all_alerts(
     db.commit()
     
     return {"status": "success", "message": f"{count} alert(s) acknowledged", "count": count}
+
+
+@router.get("/clips")
+def list_clips(
+    camera_id: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    current: CurrentMembership = Depends(get_current_membership),
+):
+    """List available anomaly clips."""
+    if not CLIPS_DIR.exists():
+        return {"clips": [], "total": 0}
+    
+    clips = []
+    for clip_path in CLIPS_DIR.glob("*.mp4"):
+        # Parse clip filename: {camera_id}_{track_id}_{label}_{score}.mp4
+        name = clip_path.stem
+        parts = name.split('_')
+        
+        clip_camera_id = parts[0] if len(parts) > 0 else None
+        
+        # Filter by camera if specified
+        if camera_id and clip_camera_id != camera_id:
+            continue
+        
+        clips.append({
+            "name": clip_path.name,
+            "camera_id": clip_camera_id,
+            "track_id": parts[1] if len(parts) > 1 else None,
+            "label": parts[2] if len(parts) > 2 else None,
+            "score": parts[3] if len(parts) > 3 else None,
+            "size": clip_path.stat().st_size,
+            "created": datetime.fromtimestamp(clip_path.stat().st_mtime).isoformat(),
+        })
+    
+    # Sort by creation time (newest first)
+    clips.sort(key=lambda x: x['created'], reverse=True)
+    
+    return {
+        "clips": clips[:limit],
+        "total": len(clips),
+    }
+
+
+@router.get("/clips/{clip_name}")
+def get_clip(
+    clip_name: str,
+    current: CurrentMembership = Depends(get_current_membership),
+):
+    """Download an anomaly clip."""
+    # Sanitize filename to prevent directory traversal
+    safe_name = Path(clip_name).name
+    clip_path = CLIPS_DIR / safe_name
+    
+    if not clip_path.exists():
+        raise HTTPException(status_code=404, detail="Clip not found")
+    
+    return FileResponse(
+        path=clip_path,
+        media_type="video/mp4",
+        filename=safe_name,
+    )

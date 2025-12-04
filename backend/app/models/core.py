@@ -131,6 +131,7 @@ class Alert(Base):
     camera_id: Mapped[str] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=True)
     anomaly_type: Mapped[str] = mapped_column(String, nullable=True)  # 'fighting', 'theft', etc.
     confidence: Mapped[float] = mapped_column(Float, nullable=True)
+    clip_ref: Mapped[str] = mapped_column(String, nullable=True)  # Reference to saved video clip filename
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)

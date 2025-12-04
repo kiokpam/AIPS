@@ -9,6 +9,7 @@ interface AuthContextType {
   user: ProfileResponse | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  connectionError: boolean; // True when backend is unreachable
   login: (email: string, password: string, organizationId?: string, rememberMe?: boolean) => Promise<void>;
   memberLogin: (password: string, organizationId?: string, organizationName?: string, joinCode?: string) => Promise<void>;
   signupManager: (payload: { email: string; password: string; name: string; organizationName: string }) => Promise<void>;
@@ -17,6 +18,7 @@ interface AuthContextType {
   switchOrganization: (organizationId: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
   createOrganization: (name: string) => Promise<void>;
+  retryAuth: () => Promise<void>; // Retry auth check when backend comes back
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,6 +26,8 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ProfileResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [connectionError, setConnectionError] = useState(false); // Track if backend is unreachable
+  const isCheckingRef = React.useRef(false); // Prevent concurrent auth checks
   const router = useRouter();
 
   useEffect(() => {
@@ -46,15 +50,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const checkAuth = async () => {
+    // Prevent concurrent auth checks
+    if (isCheckingRef.current) {
+      return;
+    }
+    isCheckingRef.current = true;
+    
     try {
       const token = localStorage.getItem('auth_token');
       if (!token) {
         setIsLoading(false);
+        setConnectionError(false);
+        isCheckingRef.current = false;
         return;
       }
 
       const profile = await authApi.getCurrentUser();
       setUser(profile);
+      setConnectionError(false);
     } catch (error: any) {
       // Only clear auth on actual authentication errors (401/403)
       // Don't clear on network errors, timeouts, or backend crashes
@@ -62,21 +75,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Actual auth failure - clear tokens
         authApi.logout();
         setUser(null);
+        setConnectionError(false);
       } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
         // Network timeout - keep token, user can retry
         console.warn('Auth check timeout - keeping token for retry');
         setUser(null); // Clear user state but keep token
+        setConnectionError(true);
       } else if (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')) {
         // Network error - keep token, backend might be down
         console.warn('Auth check network error - keeping token');
         setUser(null); // Clear user state but keep token
+        setConnectionError(true);
       } else {
         // Other errors - keep token but clear user state
         console.warn('Auth check failed (non-auth error):', error.message || error);
         setUser(null);
+        setConnectionError(true);
       }
     } finally {
       setIsLoading(false);
+      isCheckingRef.current = false;
     }
   };
 
@@ -243,12 +261,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const retryAuth = async () => {
+    setIsLoading(true);
+    setConnectionError(false);
+    await checkAuth();
+  };
+
   return (
     <AuthContext.Provider
       value={{
         user,
         isLoading,
         isAuthenticated: !!user,
+        connectionError,
         login,
         memberLogin,
         signupManager,
@@ -257,6 +282,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         switchOrganization,
         refreshProfile,
         createOrganization,
+        retryAuth,
       }}
     >
       {children}

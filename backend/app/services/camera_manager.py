@@ -507,6 +507,8 @@ class CameraManager:
         self.source_to_camera: Dict[str, str] = {}  # Map source URL to camera_id for reuse
         self.source_to_streams: Dict[str, VideoStream] = {}  # Shared VideoStream instances per source
         self.source_ref_count: Dict[str, int] = {}  # Reference count for shared streams
+        # Detection data from AI service (for overlay visualization)
+        self.camera_detections: Dict[str, Dict] = {}  # camera_id -> {detections: [], people_in_zone: int, updated_at: float}
     
     def add_camera(self, camera_id: str, store_id: str, source: str, 
                    name: str, ai_services: List[str] = None,
@@ -695,8 +697,55 @@ class CameraManager:
             return buffer.tobytes()
         return None
     
+    def update_detections(self, camera_id: str, detections: List[Dict], people_in_zone: int = 0):
+        """Update detection data from AI service for overlay visualization"""
+        # Only update if we have detections, or if it's been >5s since last update (to clear stale data)
+        current_data = self.camera_detections.get(camera_id)
+        current_time = time.time()
+        
+        # If we have detections, always update
+        # If no detections but we have recent data (<5s), keep the old data (don't overwrite with empty)
+        # If no detections and data is stale (>5s), clear it
+        if len(detections) > 0:
+            # Always update when we have detections
+            self.camera_detections[camera_id] = {
+                "detections": detections,
+                "people_in_zone": people_in_zone,
+                "updated_at": current_time
+            }
+        elif current_data and (current_time - current_data.get("updated_at", 0)) < 5.0:
+            # Keep existing detections if they're recent (within 5s)
+            # This prevents empty updates from clearing valid bounding boxes
+            # Only update the timestamp and people_in_zone
+            self.camera_detections[camera_id] = {
+                "detections": current_data.get("detections", []),
+                "people_in_zone": people_in_zone,
+                "updated_at": current_data.get("updated_at", current_time)
+            }
+        else:
+            # Clear stale data (>5s old) or initialize new entry
+            self.camera_detections[camera_id] = {
+                "detections": [],
+                "people_in_zone": people_in_zone,
+                "updated_at": current_time
+            }
+        
+        # Also update the camera worker's current_count for stats API
+        camera = self.cameras.get(camera_id)
+        if camera:
+            camera.current_count = people_in_zone
+            camera.stats["current_count"] = people_in_zone
+    
+    def get_detections(self, camera_id: str) -> Optional[Dict]:
+        """Get current detections for a camera (if recent, within 5 seconds)"""
+        data = self.camera_detections.get(camera_id)
+        # Increased from 2s to 5s to handle slower AI processing (especially on CPU)
+        if data and (time.time() - data.get("updated_at", 0)) < 5.0:
+            return data
+        return None
+    
     def get_camera_frame_with_overlay(self, camera_id: str) -> Optional[np.ndarray]:
-        """Get camera frame with task overlays (zones, lines, counts)"""
+        """Get camera frame with task overlays (zones, lines, counts, bounding boxes)"""
         camera_worker = self.get_camera(camera_id)
         if not camera_worker or not camera_worker.stream:
             return None
@@ -740,18 +789,94 @@ class CameraManager:
                                tuple(polygon[0]), cv2.FONT_HERSHEY_SIMPLEX, 
                                0.7, (0, 255, 0), 2)
         
-        # Draw lines
+        # Draw lines (Line A in red, Line B in blue)
         for line in camera_worker.lines:
+            # Draw Line A (p1 → p2)
             if line.get("p1") and line.get("p2"):
                 p1 = tuple(_denorm_point(line["p1"], w, h))
                 p2 = tuple(_denorm_point(line["p2"], w, h))
-                cv2.line(overlay_frame, p1, p2, (255, 0, 0), 2)
-                # Add line name
-                if line.get("name"):
-                    mid_point = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
-                    cv2.putText(overlay_frame, line["name"], 
-                               mid_point, cv2.FONT_HERSHEY_SIMPLEX, 
-                               0.7, (255, 0, 0), 2)
+                cv2.line(overlay_frame, p1, p2, (0, 0, 255), 2)  # Red for Line A
+                # Add "Line A" label
+                mid_a = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
+                cv2.putText(overlay_frame, "Line A", mid_a, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            
+            # Draw Line B (p1_b → p2_b) if present
+            if line.get("p1_b") and line.get("p2_b"):
+                p1_b = tuple(_denorm_point(line["p1_b"], w, h))
+                p2_b = tuple(_denorm_point(line["p2_b"], w, h))
+                cv2.line(overlay_frame, p1_b, p2_b, (255, 0, 0), 2)  # Blue for Line B
+                # Add "Line B" label
+                mid_b = ((p1_b[0] + p2_b[0]) // 2, (p1_b[1] + p2_b[1]) // 2)
+                cv2.putText(overlay_frame, "Line B", mid_b, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        
+        # Draw AI detections (bounding boxes from AI service)
+        detection_data = self.get_detections(camera_id)
+        if detection_data:
+            for det in detection_data.get("detections", []):
+                bbox = det.get("bbox", [])
+                if len(bbox) == 4:
+                    x1, y1, x2, y2 = bbox
+                    label = det.get("label", "")
+                    confidence = det.get("confidence", 0.0)
+                    in_zone = det.get("in_zone", False)
+                    
+                    # Color coding based on behavior type and zone status
+                    label_lower = label.lower() if label else ""
+                    
+                    if "shoplifting" in label_lower or "theft" in label_lower:
+                        # Red for shoplifting/theft (critical)
+                        color = (0, 0, 255)  # Bright red (BGR format)
+                    elif "violence" in label_lower or "fight" in label_lower:
+                        # Purple/Magenta for violence (critical)
+                        color = (255, 0, 255)  # Magenta (BGR format)
+                    elif label_lower != "normal" and confidence >= 0.5:
+                        # Orange for other suspicious behavior
+                        color = (0, 165, 255)  # Orange (BGR format)
+                    elif in_zone:
+                        # Green for normal people in zone
+                        color = (57, 255, 20)  # Green (BGR format)
+                    else:
+                        # Blue for normal people outside zone
+                        color = (255, 144, 30)  # Light blue (BGR format)
+                    
+                    # Draw bounding box with thicker line for critical behaviors
+                    line_thickness = 3 if ("shoplifting" in label_lower or "violence" in label_lower) else 2
+                    cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), color, line_thickness)
+                    
+                    # Draw label with behavior type and confidence
+                    if label:
+                        # Format label text based on behavior type
+                        if "shoplifting" in label_lower or "theft" in label_lower:
+                            label_text = f"[SHOPLIFTING] {confidence:.0%}"
+                        elif "violence" in label_lower or "fight" in label_lower:
+                            label_text = f"[VIOLENCE] {confidence:.0%}"
+                        elif label_lower != "normal" and confidence >= 0.5:
+                            label_text = f"[{label.upper()}] {confidence:.0%}"
+                        else:
+                            label_text = f"{label} ({confidence:.0%})" if confidence > 0 else label
+                        
+                        # Draw label background for better visibility
+                        (text_width, text_height), baseline = cv2.getTextSize(
+                            label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+                        )
+                        label_y = max(text_height + 5, y1 - 5)
+                        cv2.rectangle(
+                            overlay_frame,
+                            (x1, label_y - text_height - 5),
+                            (x1 + text_width + 5, label_y + baseline),
+                            (0, 0, 0),  # Black background
+                            -1
+                        )
+                        cv2.putText(
+                            overlay_frame, label_text, (x1 + 2, label_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
+                        )
+            
+            # Draw people in zone count from AI
+            people_in_zone = detection_data.get("people_in_zone", 0)
+            if people_in_zone > 0:
+                cv2.putText(overlay_frame, f"In Zone: {people_in_zone}", 
+                           (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         
         # Draw current count
         if camera_worker.current_count > 0:

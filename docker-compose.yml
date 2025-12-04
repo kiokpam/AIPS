@@ -37,8 +37,11 @@ services:
       - SMTP_USERNAME=${SMTP_USERNAME:-}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - CLIPS_DIR=/app/clips
     ports:
       - "8000:8000"
+    volumes:
+      - ./clips:/app/clips  # Shared with AI service for anomaly clips
     depends_on:
       db:
         condition: service_healthy
@@ -67,6 +70,7 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - AI_DEVICE=cuda  # GPU acceleration enabled
+      - CLIPS_DIR=/app/clips  # Directory for saving video clips
       - PYTHONUNBUFFERED=1
       - NVIDIA_VISIBLE_DEVICES=all
     depends_on:

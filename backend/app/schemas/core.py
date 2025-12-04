@@ -108,8 +108,10 @@ class CountingLine(BaseModel):
     id: str
     camera_id: str
     name: str
-    p1: List[float]  # [x, y]
-    p2: List[float]  # [x, y]
+    p1: List[float]  # [x, y] - Line A start
+    p2: List[float]  # [x, y] - Line A end
+    p1_b: Optional[List[float]] = None  # [x, y] - Line B start (for In/Out)
+    p2_b: Optional[List[float]] = None  # [x, y] - Line B end (for In/Out)
     is_active: bool
     org_id: str
 
@@ -117,8 +119,10 @@ class CountingLine(BaseModel):
 class CountingLineCreate(BaseModel):
     camera_id: str
     name: str
-    p1: List[float]  # [x, y]
-    p2: List[float]  # [x, y]
+    p1: List[float]  # [x, y] - Line A start
+    p2: List[float]  # [x, y] - Line A end
+    p1_b: Optional[List[float]] = None  # [x, y] - Line B start (for In/Out)
+    p2_b: Optional[List[float]] = None  # [x, y] - Line B end (for In/Out)
     is_active: bool = True
 
 

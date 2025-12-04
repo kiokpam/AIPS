@@ -107,6 +107,8 @@ class CameraProcessor:
     - YOLO detection + DeepSORT tracking
     - In/Out counting (if lines configured)
     - Behavior detection (if zone configured)
+    - VideoMAE detailed analysis when suspicious
+    - Clip saving for anomalies
     - Result pushing to backend
     """
     
@@ -133,8 +135,21 @@ class CameraProcessor:
         self.mobi_labels: Dict[int, Tuple[str, float]] = {}
         self.last_mobi_frame: Dict[int, int] = {}
         
+        # VideoMAE processing state
+        self.awaiting_vmae: Dict[int, int] = {}  # track_id -> extra_frames needed
+        self.vmae_processing: set = set()  # track_ids currently being processed
+        self.last_vmae_frame: Dict[int, int] = {}  # track_id -> frame_idx when VMAE started
+        self.base_max_frames: Dict[int, int] = {}  # preserve original buffer size per track
+        self.vmae_results: Dict[int, Tuple[str, float]] = {}  # track_id -> (label, score)
+        
+        # Buffer config
+        self.buffer_sec = 2.0  # Base buffer size in seconds
+        self.extra_sec = 1.0  # Extra buffer for VideoMAE
+        
         # Initialize In/Out counter if lines configured
         self.inout_api: Optional[InOutAPI] = None
+        self.inout_line_a_norm = None
+        self.inout_line_b_norm = None
         self._setup_inout()
         
         # Initialize zone for behavior detection
@@ -152,6 +167,7 @@ class CameraProcessor:
         LOGGER.info(f"Camera {camera_id}: Processor initialized")
         LOGGER.info(f"  - In/Out counting: {'enabled' if self.inout_api else 'disabled'}")
         LOGGER.info(f"  - Behavior zone: {'configured' if self.zone else 'not configured'}")
+        LOGGER.info(f"  - VideoMAE: {'enabled' if self.models.videomae else 'disabled'}")
     
     def _setup_inout(self):
         """Setup In/Out counter from config lines."""
@@ -166,17 +182,17 @@ class CameraProcessor:
                     line_a = line['line_a']
                     line_b = line['line_b']
                     
-                    # Convert to tuple format expected by InOutAPI
-                    # Format: ((x1,y1), (x2,y2))
-                    a_p1 = tuple(line_a[0])
-                    a_p2 = tuple(line_a[1])
-                    b_p1 = tuple(line_b[0])
-                    b_p2 = tuple(line_b[1])
+                    # Convert normalized coordinates to pixel coordinates
+                    # Backend sends: [{"fx": 0.5, "fy": 0.3}, {"fx": 0.6, "fy": 0.4}]
+                    # We'll convert to pixels when we get the first frame (frame dimensions unknown at setup)
+                    # Store normalized coordinates for later conversion
+                    self.inout_line_a_norm = line_a
+                    self.inout_line_b_norm = line_b
+                    self.inout_api = None  # Will be initialized on first frame
                     
-                    self.inout_api = InOutAPI((a_p1, a_p2), (b_p1, b_p2))
-                    LOGGER.info(f"Camera {self.camera_id}: In/Out lines configured")
-                    LOGGER.info(f"  Line A: {a_p1} → {a_p2}")
-                    LOGGER.info(f"  Line B: {b_p1} → {b_p2}")
+                    LOGGER.info(f"Camera {self.camera_id}: In/Out lines configured (normalized)")
+                    LOGGER.info(f"  Line A (norm): {line_a}")
+                    LOGGER.info(f"  Line B (norm): {line_b}")
                     break
                 except (IndexError, TypeError) as e:
                     LOGGER.warning(f"Invalid line format: {e}")
@@ -221,15 +237,73 @@ class CameraProcessor:
         """
         Run AI pipeline on a single frame.
         
+        Full pipeline (like main.py):
+        1. YOLO detection
+        2. DeepSORT tracking  
+        3. In/Out counting
+        4. MobileNet fast screening
+        5. VideoMAE detailed analysis (when suspicious)
+        6. Clip saving (for anomalies)
+        
         Returns dict with:
         - inout: {in: N, out: N} or None
         - behaviors: [{track_id, label, confidence, bbox}]
+        - detections: [{track_id, bbox, label, confidence, in_zone}] for visualization
+        - people_in_zone: int
+        - clips: [{track_id, path, label, score}] for saved clips
         """
         self.frame_idx += 1
         results = {
             'inout': None,
             'behaviors': [],
+            'detections': [],  # All detections for visualization
+            'people_in_zone': 0,
+            'clips': [],  # Saved anomaly clips
         }
+        
+        # Initialize InOutAPI on first frame (now we know frame dimensions)
+        if self.inout_line_a_norm and self.inout_line_b_norm and not self.inout_api:
+            try:
+                frame_h, frame_w = frame.shape[:2]
+                
+                # Convert normalized coordinates to pixel coordinates
+                def norm_to_pixel(norm_point, width, height):
+                    """Convert normalized {fx, fy} or [fx, fy] to pixel (x, y) tuple."""
+                    if isinstance(norm_point, dict):
+                        # Format: {"fx": 0.5, "fy": 0.3}
+                        fx = float(norm_point.get('fx', 0))
+                        fy = float(norm_point.get('fy', 0))
+                    elif isinstance(norm_point, (list, tuple)):
+                        if len(norm_point) >= 2:
+                            # Could be [fx, fy] or [{"fx": 0.5, "fy": 0.3}]
+                            if isinstance(norm_point[0], dict):
+                                fx = float(norm_point[0].get('fx', 0))
+                                fy = float(norm_point[0].get('fy', 0))
+                            else:
+                                fx = float(norm_point[0])
+                                fy = float(norm_point[1])
+                        else:
+                            fx, fy = 0, 0
+                    else:
+                        fx, fy = 0, 0
+                    # Clamp to valid pixel range
+                    x = max(0, min(int(fx * width), width - 1))
+                    y = max(0, min(int(fy * height), height - 1))
+                    return (x, y)
+                
+                a_p1 = norm_to_pixel(self.inout_line_a_norm[0], frame_w, frame_h)
+                a_p2 = norm_to_pixel(self.inout_line_a_norm[1], frame_w, frame_h)
+                b_p1 = norm_to_pixel(self.inout_line_b_norm[0], frame_w, frame_h)
+                b_p2 = norm_to_pixel(self.inout_line_b_norm[1], frame_w, frame_h)
+                
+                self.inout_api = InOutAPI((a_p1, a_p2), (b_p1, b_p2))
+                LOGGER.info(f"Camera {self.camera_id}: InOutAPI initialized with pixel coordinates")
+                LOGGER.info(f"  Line A: {a_p1} → {a_p2} (frame: {frame_w}x{frame_h})")
+                LOGGER.info(f"  Line B: {b_p1} → {b_p2}")
+            except Exception as e:
+                LOGGER.error(f"Failed to initialize InOutAPI: {e}", exc_info=True)
+                self.inout_line_a_norm = None
+                self.inout_line_b_norm = None
         
         # 1. YOLO detection
         dets = self.models.yolo.detect(frame)
@@ -245,23 +319,47 @@ class CameraProcessor:
             self.inout_api.process_tracks(tracks, lost_ids=lost)
             cin, cout = self.inout_api.get_counts()
             results['inout'] = {'in': cin, 'out': cout}
+            
+            # Log when counts change (for debugging)
+            if cin != self.last_in_count or cout != self.last_out_count:
+                LOGGER.debug(f"Camera {self.camera_id}: InOut counts changed - IN: {self.last_in_count}→{cin}, OUT: {self.last_out_count}→{cout} (tracks: {len(tracks)})")
         
-        # 4. Zone-based behavior detection
-        if self.zone and self.models.mobilenet:
-            for tid, xyxy in tracks:
-                cx, cy = bbox_center(xyxy)
-                
-                # Skip if outside zone
-                if not point_in_polygon((cx, cy), self.zone):
-                    continue
-                
+        # 4. Process all tracks for visualization and zone-based behavior detection
+        people_in_zone = 0
+        for tid, xyxy in tracks:
+            cx, cy = bbox_center(xyxy)
+            in_zone = point_in_polygon((cx, cy), self.zone) if self.zone else False
+            
+            if in_zone:
+                people_in_zone += 1
+            
+            # Get label from MobileNet if available (or VideoMAE if processed)
+            label = ""
+            confidence = 0.0
+            if tid in self.mobi_labels:
+                label, confidence = self.mobi_labels[tid]
+            
+            # Add to detections for visualization
+            results['detections'].append({
+                'track_id': tid,
+                'bbox': [int(x) for x in xyxy],  # [x1, y1, x2, y2]
+                'label': label,
+                'confidence': confidence,
+                'in_zone': in_zone,
+            })
+            
+            # Zone-based behavior detection (only for people inside zone)
+            if in_zone and self.models.mobilenet:
                 # Initialize buffer for new track
                 if tid not in self.buffers:
-                    max_frames = int(2.0 * self.fps)  # 2 seconds buffer
+                    max_frames = int(self.buffer_sec * self.fps)
                     self.buffers[tid] = PersonBuffer(tid, max_frames=max_frames, fps=self.fps)
+                    self.base_max_frames[tid] = max_frames
+                    LOGGER.debug(f"Track {tid}: initialized buffer with {max_frames} frames")
                 
-                # Add frame to buffer
-                self.buffers[tid].append(frame, xyxy)
+                # Add frame to buffer (with timestamp)
+                timestamp = self.frame_idx / self.fps
+                self.buffers[tid].append(frame, xyxy, timestamp)
                 
                 # Run MobileNet every 2 frames
                 last = self.last_mobi_frame.get(tid, -100)
@@ -274,30 +372,183 @@ class CameraProcessor:
                             label, prob = self.models.mobilenet.predict_on_crop(crop)
                             self.mobi_labels[tid] = (label, prob)
                             
-                            # If suspicious, add to results
+                            # Update the detection entry with new label
+                            for det in results['detections']:
+                                if det['track_id'] == tid:
+                                    det['label'] = label
+                                    det['confidence'] = prob
+                                    break
+                            
+                            # If suspicious, schedule VideoMAE analysis
                             if label.lower() != 'normal' and prob > 0.5:
+                                # Add to behaviors (MobileNet detection)
                                 results['behaviors'].append({
                                     'track_id': tid,
                                     'label': label,
                                     'confidence': prob,
                                     'bbox': xyxy,
+                                    'source': 'mobilenet',
                                 })
+                                
+                                # Schedule VideoMAE if not already processing
+                                if self.models.videomae:
+                                    if tid not in self.awaiting_vmae and tid not in self.vmae_processing:
+                                        # Extend buffer to collect more context
+                                        extra_frames = int(self.extra_sec * self.fps)
+                                        self.buffers[tid].extend_capacity(extra_frames)
+                                        self.awaiting_vmae[tid] = extra_frames
+                                        self.last_vmae_frame[tid] = self.frame_idx
+                                        LOGGER.info(f"Track {tid}: MobileNet suspicious ({prob:.2f}), scheduling VideoMAE")
                         except Exception as e:
                             LOGGER.debug(f"MobileNet error for track {tid}: {e}")
+                
+                # Check if awaiting VideoMAE and buffer is ready
+                if tid in self.awaiting_vmae and tid not in self.vmae_processing:
+                    cur_frames = self.buffers[tid].get_clip_frames()
+                    cur_len = len(cur_frames)
+                    target_len = self.base_max_frames.get(tid, int(self.buffer_sec * self.fps)) + self.awaiting_vmae[tid]
+                    
+                    # Check if collected enough frames
+                    start_frame = self.last_vmae_frame.get(tid, 0)
+                    frames_collected = self.frame_idx - start_frame
+                    frames_needed = self.awaiting_vmae[tid]
+                    
+                    if cur_len >= target_len and frames_collected >= frames_needed:
+                        # Run VideoMAE analysis
+                        self.vmae_processing.add(tid)
+                        LOGGER.info(f"Track {tid}: Running VideoMAE analysis ({cur_len} frames)")
+                        
+                        try:
+                            vres = self.models.videomae.predict_buffer(cur_frames, num_frames=16, fps=self.fps)
+                            vmae_label = vres.get('label', 'normal')
+                            vmae_score = vres.get('score', 0.0)
+                            
+                            LOGGER.info(f"Track {tid}: VideoMAE result: {vmae_label} ({vmae_score:.2f})")
+                            
+                            # If VideoMAE confirms anomaly, save clip and add to results
+                            # ONLY save clips for shoplifting and violence (critical anomalies)
+                            label_lower = vmae_label.lower()
+                            is_critical = 'shoplifting' in label_lower or 'violence' in label_lower or 'fight' in label_lower
+                            
+                            if is_critical and vmae_score > 0.5:
+                                # Save clip only for shoplifting/violence
+                                clip_name = f"{self.camera_id}_{tid}_{vmae_label.replace(' ', '_')}_{int(vmae_score*100)}.mp4"
+                                clip_path = self.clip_dir / clip_name
+                                
+                                try:
+                                    save_frames_as_video(cur_frames, self.fps, str(clip_path))
+                                    LOGGER.info(f"🎥 Track {tid}: Saved {vmae_label} clip: {clip_path.name}")
+                                    
+                                    results['clips'].append({
+                                        'track_id': tid,
+                                        'path': str(clip_path),
+                                        'label': vmae_label,
+                                        'score': vmae_score,
+                                    })
+                                    
+                                    # Add VideoMAE behavior (higher confidence than MobileNet)
+                                    results['behaviors'].append({
+                                        'track_id': tid,
+                                        'label': vmae_label,
+                                        'confidence': vmae_score,
+                                        'bbox': xyxy if tid in [t[0] for t in tracks] else None,
+                                        'source': 'videomae',
+                                        'clip_path': str(clip_path),
+                                    })
+                                except Exception as e:
+                                    LOGGER.error(f"Failed to save clip for track {tid}: {e}")
+                            elif vmae_score > 0.5:
+                                # Log non-critical detections but don't save clip or send alert
+                                LOGGER.debug(f"Track {tid}: Non-critical VideoMAE: {vmae_label} ({vmae_score:.2f})")
+                            
+                            # Cleanup VideoMAE state
+                            self.vmae_results[tid] = (vmae_label, vmae_score)
+                            
+                        except Exception as e:
+                            LOGGER.error(f"VideoMAE error for track {tid}: {e}")
+                        finally:
+                            # Remove extra frames and restore buffer
+                            self.awaiting_vmae.pop(tid, None)
+                            self.vmae_processing.discard(tid)
+                            self.last_vmae_frame.pop(tid, None)
+                            
+                            # Restore buffer capacity
+                            if tid in self.base_max_frames and tid in self.buffers:
+                                try:
+                                    self.buffers[tid].pop_oldest(int(self.extra_sec * self.fps))
+                                    self.buffers[tid].set_capacity(self.base_max_frames[tid])
+                                except Exception:
+                                    pass
+        
+        results['people_in_zone'] = people_in_zone
         
         # Cleanup old buffers
         active_tids = set(tid for tid, _ in tracks)
         for tid in list(self.buffers.keys()):
             if tid not in active_tids:
+                # Process lost tracks with VideoMAE if they were awaiting
+                if tid in self.awaiting_vmae and tid not in self.vmae_processing:
+                    if self.models.videomae:
+                        frames = self.buffers[tid].get_clip_frames()
+                        if frames:
+                            try:
+                                vres = self.models.videomae.predict_buffer(frames, num_frames=16, fps=self.fps)
+                                vmae_label = vres.get('label', 'normal')
+                                vmae_score = vres.get('score', 0.0)
+                                
+                                label_lower = vmae_label.lower()
+                                is_critical = 'shoplifting' in label_lower or 'violence' in label_lower or 'fight' in label_lower
+                                if is_critical and vmae_score > 0.5:
+                                    clip_name = f"{self.camera_id}_{tid}_{vmae_label.replace(' ', '_')}_{int(vmae_score*100)}_lost.mp4"
+                                    clip_path = self.clip_dir / clip_name
+                                    save_frames_as_video(frames, self.fps, str(clip_path))
+                                    LOGGER.info(f"🎥 Lost track {tid}: Saved {vmae_label} clip: {clip_path.name}")
+                            except Exception as e:
+                                LOGGER.debug(f"Failed to process lost track {tid}: {e}")
+                
+                # Cleanup
                 del self.buffers[tid]
                 self.mobi_labels.pop(tid, None)
                 self.last_mobi_frame.pop(tid, None)
+                self.awaiting_vmae.pop(tid, None)
+                self.vmae_processing.discard(tid)
+                self.base_max_frames.pop(tid, None)
+                self.vmae_results.pop(tid, None)
         
         return results
     
     def push_results(self, results: Dict[str, Any]):
         """Push results to backend API."""
         now = datetime.utcnow().isoformat() + 'Z'
+        
+        # Push detection updates for visualization (bounding boxes)
+        detections = results.get('detections', [])
+        people_in_zone = results.get('people_in_zone', 0)
+        
+        # Push detections when we have them (or every 10 frames to keep connection alive)
+        if len(detections) > 0 or self.frame_idx % 10 == 0:
+            try:
+                resp = requests.post(
+                    f"{self.backend_url}/api/events/detection-update",
+                    json={
+                        'event': 'detection_update',
+                        'camera_id': self.camera_id,
+                        'detections': detections,
+                        'people_in_zone': people_in_zone,
+                        'ts': now,
+                    },
+                    timeout=2  # Short timeout for real-time updates
+                )
+                if resp.status_code == 200:
+                    # Log occasionally to avoid spam
+                    if len(detections) > 0 and self.frame_idx % 50 == 0:
+                        LOGGER.debug(f"Detection update: {len(detections)} people, {people_in_zone} in zone")
+                else:
+                    LOGGER.warning(f"Detection push failed: {resp.status_code} - {resp.text}")
+            except Exception as e:
+                # Only log errors occasionally to avoid spam
+                if self.frame_idx % 100 == 0:
+                    LOGGER.warning(f"Detection push error: {e}")
         
         # Push In/Out counts (only if changed)
         if results.get('inout'):
@@ -309,36 +560,60 @@ class CameraProcessor:
                 self.last_out_count = cout
                 
                 try:
-                    resp = requests.post(
-                        f"{self.backend_url}/api/events/inout-update",
-                        json={
-                            'event': 'inout_update',
-                            'camera_id': self.camera_id,
-                            'store_id': self.config.get('store_id', ''),
-                            'count_in': cin,
-                            'count_out': cout,
-                            'ts': now,
-                        },
-                        timeout=5
-                    )
-                    if resp.status_code == 200:
-                        LOGGER.debug(f"Pushed InOut: in={cin}, out={cout}")
+                    store_id = self.config.get('store_id', '')
+                    if not store_id:
+                        LOGGER.warning(f"Camera {self.camera_id}: No store_id in config, cannot send inout update")
                     else:
-                        LOGGER.warning(f"InOut push failed: {resp.status_code}")
+                        resp = requests.post(
+                            f"{self.backend_url}/api/events/inout-update",
+                            json={
+                                'event': 'inout_update',
+                                'camera_id': self.camera_id,
+                                'store_id': store_id,
+                                'count_in': cin,
+                                'count_out': cout,
+                                'ts': now,
+                            },
+                            timeout=5
+                        )
+                        if resp.status_code == 200:
+                            LOGGER.info(f"✅ InOut update: camera={self.camera_id}, IN={cin}, OUT={cout}")
+                        else:
+                            LOGGER.warning(f"InOut push failed: {resp.status_code} - {resp.text}")
                 except Exception as e:
-                    LOGGER.warning(f"InOut push error: {e}")
+                    LOGGER.error(f"InOut push error: {e}", exc_info=True)
         
-        # Push behavior alerts
+        # Push behavior alerts - ONLY for VideoMAE confirmed shoplifting/violence
+        # MobileNet "suspicious" is just a filter to trigger VideoMAE, not an actual alert
+        pushed_tracks = set()
+        
         for behavior in results.get('behaviors', []):
+            # Only send alerts for VideoMAE confirmed detections
+            if behavior.get('source') != 'videomae':
+                continue
+            
+            tid = behavior.get('track_id')
+            if tid in pushed_tracks:
+                continue
+            
+            # Map label to anomaly type - ONLY shoplifting and violence
+            label = behavior['label'].lower()
+            
+            if 'shoplifting' in label:
+                anomaly_type = 'shoplifting'
+            elif 'violence' in label or 'fight' in label:
+                anomaly_type = 'violence'
+            else:
+                # Skip other labels (loitering, suspicious, normal, etc.)
+                # These don't warrant alerts/notifications
+                LOGGER.debug(f"Skipping non-critical VideoMAE label: {label}")
+                continue
+            
+            pushed_tracks.add(tid)
+            
             try:
-                # Map label to anomaly type
-                label = behavior['label'].lower()
-                if 'suspicious' in label:
-                    anomaly_type = 'shoplifting'  # Default suspicious to shoplifting
-                elif 'violence' in label or 'fight' in label:
-                    anomaly_type = 'violence'
-                else:
-                    anomaly_type = label
+                # Include clip reference if available
+                clip_ref = behavior.get('clip_path', '')
                 
                 resp = requests.post(
                     f"{self.backend_url}/api/events/anomaly-detected",
@@ -348,12 +623,13 @@ class CameraProcessor:
                         'store_id': self.config.get('store_id', ''),
                         'type': anomaly_type,
                         'severity': behavior['confidence'],
+                        'clip_ref': clip_ref,
                         'ts': now,
                     },
                     timeout=5
                 )
                 if resp.status_code == 200:
-                    LOGGER.info(f"Alert pushed: {anomaly_type} ({behavior['confidence']:.2f})")
+                    LOGGER.info(f"🚨 Alert pushed: {anomaly_type} ({behavior['confidence']:.2f}) clip={clip_ref}")
                 else:
                     LOGGER.warning(f"Alert push failed: {resp.status_code}")
             except Exception as e:
@@ -475,11 +751,14 @@ class AIService:
                     if cam_id not in self.processors:
                         config = self._get_camera_config(cam_id)
                         if config:
+                            # Use /app/clips in Docker, fallback to ./clips for local dev
+                            clip_dir = os.environ.get('CLIPS_DIR', '/app/clips')
                             self.processors[cam_id] = CameraProcessor(
                                 camera_id=cam_id,
                                 config=config,
                                 models=self.models,
                                 backend_url=self.backend_url,
+                                clip_dir=clip_dir,
                             )
                             LOGGER.info(f"Added processor for camera: {cam_id}")
             
