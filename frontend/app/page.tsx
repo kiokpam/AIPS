@@ -498,19 +498,19 @@ export default function HomePage() {
           </div>
 
           {/* CTA Buttons */}
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            {isAuthenticated ? (
-              <Link href="/cameras" className="btn-primary btn-lg group">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              {isAuthenticated ? (
+                <Link href="/cameras" className="btn-primary btn-lg group">
                 {lang === 'vi' ? 'Đi Tới Bảng Điều Khiển' : 'Go to Dashboard'}
-                <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-              </Link>
-            ) : (
-              <Link href="/login" className="btn-primary btn-lg group">
-                {t('cta2_btn_trial')}
-                <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-              </Link>
-            )}
-          </div>
+                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                </Link>
+              ) : (
+                <Link href="/login" className="btn-primary btn-lg group">
+                  {t('cta2_btn_trial')}
+                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+                </Link>
+              )}
+            </div>
         </div>
       </section>
 

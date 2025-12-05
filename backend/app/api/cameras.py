@@ -673,7 +673,7 @@ def clear_camera_tasks(
     # Clear runtime tasks if camera is running
     camera_worker = camera_manager.get_camera(camera_id)
     if camera_worker:
-        camera_worker.clear_tasks()
+    camera_worker.clear_tasks()
     
     return {"message": "Tasks cleared successfully"}
 

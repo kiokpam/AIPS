@@ -213,7 +213,7 @@ class CameraProcessor:
                 try:
                     line_a = line['line_a']
                     line_b = line['line_b']
-
+                    
                     # Backend (ai_integration) sends pixel coordinates:
                     # line_a = [[x1, y1], [x2, y2]], line_b = [[x1, y1], [x2, y2]]
                     # We can initialize InOutAPI directly with these pixel points.
@@ -221,7 +221,7 @@ class CameraProcessor:
                     a_p2 = (int(line_a[1][0]), int(line_a[1][1]))
                     b_p1 = (int(line_b[0][0]), int(line_b[0][1]))
                     b_p2 = (int(line_b[1][0]), int(line_b[1][1]))
-
+                    
                     self.inout_api = InOutAPI((a_p1, a_p2), (b_p1, b_p2))
                     LOGGER.info(f"Camera {self.camera_id}: In/Out lines configured (pixels)")
                     LOGGER.info(f"  Line A: {a_p1} → {a_p2}")
@@ -287,7 +287,7 @@ class CameraProcessor:
         except Exception as e:
             self.consecutive_failures += 1
             LOGGER.debug(f"Frame pull error for {self.camera_id}: {e}")
-            return None
+        return None
     
     def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """
@@ -346,7 +346,7 @@ class CameraProcessor:
             self.inout_api.process_tracks(tracks, lost_ids=lost)
             cin, cout = self.inout_api.get_counts()
             results['inout'] = {'in': cin, 'out': cout}
-            
+        
             # Log when counts change (for debugging)
             if cin != self.last_in_count or cout != self.last_out_count:
                 LOGGER.debug(f"Camera {self.camera_id}: InOut counts changed - IN: {self.last_in_count}→{cin}, OUT: {self.last_out_count}→{cout} (tracks: {len(tracks)})")
@@ -379,19 +379,16 @@ class CameraProcessor:
             if in_zone and self.models.mobilenet:
                 # Initialize buffer for new track
                 if tid not in self.buffers:
-                    # Use actual processing FPS to calculate buffer size
-                    # This ensures we collect the correct duration (e.g., 3 seconds)
-                    # even if processing rate differs from camera FPS
-                    buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
-                    max_frames = int(self.buffer_sec * buffer_fps)
-                    self.buffers[tid] = PersonBuffer(tid, max_frames=max_frames, fps=buffer_fps)
+                    # Use camera's reported FPS for buffer size (matches AI developers' logic)
+                    # This ensures consistent 3-second clips (buffer_sec + extra_sec)
+                    max_frames = int(round(self.buffer_sec * self.fps))
+                    self.buffers[tid] = PersonBuffer(tid, max_frames=max_frames, fps=self.fps)
                     self.base_max_frames[tid] = max_frames
-                    LOGGER.debug(f"Track {tid}: initialized buffer with {max_frames} frames (using {buffer_fps:.1f} FPS for {self.buffer_sec}s = {max_frames} frames)")
+                    LOGGER.debug(f"Track {tid}: initialized buffer with {max_frames} frames (using {self.fps:.1f} FPS for {self.buffer_sec}s)")
                 
                 # Add frame to buffer (with timestamp)
-                # Use actual FPS for timestamp to match collection rate
-                buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
-                timestamp = self.frame_idx / buffer_fps
+                # Use camera FPS for timestamp (matches AI developers' logic)
+                timestamp = self.frame_idx / self.fps
                 self.buffers[tid].append(frame, xyxy, timestamp)
                 
                 # Run MobileNet every 2 frames
@@ -427,13 +424,12 @@ class CameraProcessor:
                                 if self.models.videomae:
                                     if tid not in self.awaiting_vmae and tid not in self.vmae_processing:
                                         # Extend buffer to collect more context
-                                        # Use actual processing FPS to ensure correct duration
-                                        buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
-                                        extra_frames = int(self.extra_sec * buffer_fps)
+                                        # Use camera's reported FPS (matches AI developers' logic)
+                                        extra_frames = int(round(self.extra_sec * self.fps))
                                         self.buffers[tid].extend_capacity(extra_frames)
                                         self.awaiting_vmae[tid] = extra_frames
                                         self.last_vmae_frame[tid] = self.frame_idx
-                                        LOGGER.info(f"Track {tid}: MobileNet suspicious ({prob:.2f}), scheduling VideoMAE (extending by {extra_frames} frames at {buffer_fps:.1f} FPS)")
+                                        LOGGER.info(f"Track {tid}: MobileNet suspicious ({prob:.2f}), scheduling VideoMAE (extending by {extra_frames} frames at {self.fps:.1f} FPS)")
                         except Exception as e:
                             LOGGER.debug(f"MobileNet error for track {tid}: {e}")
                 
@@ -441,9 +437,8 @@ class CameraProcessor:
                 if tid in self.awaiting_vmae and tid not in self.vmae_processing:
                     cur_frames = self.buffers[tid].get_clip_frames()
                     cur_len = len(cur_frames)
-                    # Use actual FPS for target calculation to match collection rate
-                    buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
-                    target_len = self.base_max_frames.get(tid, int(self.buffer_sec * buffer_fps)) + self.awaiting_vmae[tid]
+                    # Use camera's reported FPS for target calculation (matches AI developers' logic)
+                    target_len = self.base_max_frames.get(tid, int(round(self.buffer_sec * self.fps))) + self.awaiting_vmae[tid]
                     
                     # Check if collected enough frames
                     start_frame = self.last_vmae_frame.get(tid, 0)
@@ -520,9 +515,9 @@ class CameraProcessor:
                             # Restore buffer capacity
                             if tid in self.base_max_frames and tid in self.buffers:
                                 try:
-                                    # Use actual FPS for frame count calculation
-                                    buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
-                                    self.buffers[tid].pop_oldest(int(self.extra_sec * buffer_fps))
+                                    # Use camera's reported FPS (matches AI developers' logic)
+                                    extra_frames_to_remove = int(round(self.extra_sec * self.fps))
+                                    self.buffers[tid].pop_oldest(extra_frames_to_remove)
                                     self.buffers[tid].set_capacity(self.base_max_frames[tid])
                                 except Exception:
                                     pass
@@ -659,7 +654,7 @@ class CameraProcessor:
             if tid in pushed_tracks:
                 continue
             
-            label = behavior['label'].lower()
+                label = behavior['label'].lower()
             
             # Treat any non-normal VideoMAE label as an anomaly type.
             if label == 'normal':
