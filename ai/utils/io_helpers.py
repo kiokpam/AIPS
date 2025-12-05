@@ -19,12 +19,12 @@ def save_frames_as_video(frames: List, fps: float, out_path: str) -> None:
     
     h, w = frames[0].shape[:2]
     
-    # Try browser-compatible codecs first, then fallback to mp4v
-    # Note: mp4v is NOT browser-compatible, so we'll re-encode if needed
+    # Prefer widely available codecs in this container (mp4v/XVID). H.264 encoder
+    # is not available in the current ffmpeg build, so we avoid it to prevent
+    # codec_id=27 errors.
     codecs_to_try = [
-        ('avc1', 'H.264/AVC'),  # Best browser compatibility
-        ('H264', 'H.264'),      # Alternative H.264 fourcc
-        ('mp4v', 'MPEG-4'),     # AI developers' codec (will re-encode if used)
+        ('mp4v', 'MPEG-4'),
+        ('XVID', 'XVID'),
     ]
     
     writer = None
@@ -67,41 +67,7 @@ def save_frames_as_video(frames: List, fps: float, out_path: str) -> None:
         writer.write(f)
     writer.release()
     
-    # If we used mp4v (not browser-compatible), re-encode with ffmpeg to H.264
-    if used_codec and 'mp4v' in used_codec.lower():
-        temp_path = out_path + '.tmp'
-        try:
-            os.rename(out_path, temp_path)
-            # Re-encode to H.264 using ffmpeg for browser compatibility
-            cmd = [
-                'ffmpeg', '-y', '-i', temp_path,
-                '-c:v', 'libx264',  # H.264 codec
-                '-preset', 'fast',   # Fast encoding
-                '-crf', '23',        # Good quality
-                '-pix_fmt', 'yuv420p',  # Browser-compatible pixel format
-                '-movflags', '+faststart',  # Enable streaming
-                out_path
-            ]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            if result.returncode == 0:
-                os.remove(temp_path)
-                LOGGER.debug(f"Re-encoded {out_path} to H.264 for browser compatibility")
-            else:
-                # Re-encoding failed, restore original
-                os.rename(temp_path, out_path)
-                LOGGER.warning(f"Failed to re-encode {out_path} to H.264: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            os.rename(temp_path, out_path)
-            LOGGER.warning(f"ffmpeg re-encoding timed out for {out_path}")
-        except Exception as e:
-            if os.path.exists(temp_path):
-                os.rename(temp_path, out_path)
-            LOGGER.warning(f"Error re-encoding {out_path} to H.264: {e}")
+    # Skip H.264 re-encode because libx264 is unavailable in this container.
 
 def save_metadata(meta: dict, out_path: str) -> None:
     with open(out_path, 'w', encoding='utf-8') as f:

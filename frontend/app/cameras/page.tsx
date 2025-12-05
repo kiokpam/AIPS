@@ -998,13 +998,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
           </div>
         </div>
 
-        <div className="space-y-2 text-xs text-slate-500">
-          <div className="flex justify-between">
-            <span>AI Services:</span>
-            <span className="font-medium">{camera.ai_services.length}</span>
-          </div>
-        </div>
-
         {/* Contextual Stats - Only show what's configured */}
         <div className="mt-4 pt-4 border-t border-slate-200">
           <div className="space-y-3">
@@ -2776,16 +2769,6 @@ export default function CamerasPage() {
               <p className="stat-value">{cameras.filter(c => !c.is_active).length}</p>
             </div>
             <Clock className="w-8 h-8 text-slate-400" />
-          </div>
-        </div>
-        
-        <div className="stat-card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="stat-label">AI Services</p>
-              <p className="stat-value">{cameras.reduce((acc, c) => acc + c.ai_services.length, 0)}</p>
-            </div>
-            <Eye className="w-8 h-8 text-purple-600" />
           </div>
         </div>
       </div>

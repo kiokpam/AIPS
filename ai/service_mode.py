@@ -469,9 +469,8 @@ class CameraProcessor:
                                     if not cur_frames or len(cur_frames) == 0:
                                         LOGGER.warning(f"Track {tid}: No frames to save for {vmae_label} clip")
                                     else:
-                                        # Use actual processing FPS to ensure correct playback speed
-                                        # This ensures videos play at the same speed they were captured
-                                        save_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                                        # Prefer camera FPS when actual_fps is too low to avoid slow playback
+                                        save_fps = self.actual_fps if (self.actual_fps > 0 and self.actual_fps >= 0.8 * self.fps) else self.fps
                                         clip_duration = len(cur_frames) / save_fps if save_fps > 0 else 0
                                         LOGGER.info(f"Track {tid}: Saving {len(cur_frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
                                         save_frames_as_video(cur_frames, save_fps, str(clip_path))
@@ -547,8 +546,8 @@ class CameraProcessor:
                                         LOGGER.warning(f"Lost track {tid}: No frames to save for {vmae_label} clip")
                                     else:
                                         try:
-                                            # Use actual processing FPS to ensure correct playback speed
-                                            save_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                                            # Prefer camera FPS when actual_fps is too low to avoid slow playback
+                                            save_fps = self.actual_fps if (self.actual_fps > 0 and self.actual_fps >= 0.8 * self.fps) else self.fps
                                             clip_duration = len(frames) / save_fps if save_fps > 0 else 0
                                             LOGGER.info(f"Lost track {tid}: Saving {len(frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
                                             save_frames_as_video(frames, save_fps, str(clip_path))
