@@ -1,14 +1,25 @@
 # AI Service Dockerfile - GPU Accelerated
 # Requires: NVIDIA GPU + nvidia-docker runtime
 
-# Use CUDA 12.1 with cuDNN 8 for compatibility with latest onnxruntime-gpu
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+# Use CUDA 12.1.1 runtime and install cuDNN 9 to satisfy onnxruntime-gpu requirements
+# Compatible with NVIDIA drivers 525.60.13+ (CUDA 12.0+)
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Add NVIDIA apt repository for cuDNN 9
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    ca-certificates \
+    gnupg \
+    && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && apt-get update
+
+# Install system dependencies including cuDNN 9 for CUDA 12
+RUN apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
     python3.10-venv \
@@ -19,6 +30,8 @@ RUN apt-get update && apt-get install -y \
     libxrender-dev \
     libgomp1 \
     ffmpeg \
+    libcudnn9-cuda-12 \
+    libcudnn9-dev-cuda-12 \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.10 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.10 /usr/bin/python

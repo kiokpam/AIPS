@@ -606,47 +606,54 @@ def get_camera_tasks_from_db(
     Get zones and lines from database (persisted config).
     This is what AI services will use.
     """
-    _get_camera_or_404(db, camera_id, current.organization.id)
-    org_id = current.organization.id
-    
-    # Query zones
-    zones = db.query(CountingZoneModel).filter(
-        CountingZoneModel.camera_id == camera_id,
-        CountingZoneModel.org_id == org_id,
-        CountingZoneModel.is_active == True
-    ).all()
-    
-    # Query lines
-    lines = db.query(CountingLineModel).filter(
-        CountingLineModel.camera_id == camera_id,
-        CountingLineModel.org_id == org_id,
-        CountingLineModel.is_active == True
-    ).all()
-    
-    return {
-        "camera_id": camera_id,
-        "zones": [
-            {
-                "id": z.id,
-                "name": z.name,
-                "polygon": z.polygon,
-                "is_active": z.is_active,
-            }
-            for z in zones
-        ],
-        "lines": [
-            {
-                "id": l.id,
-                "name": l.name,
-                "p1": l.p1,
-                "p2": l.p2,
-                "p1_b": l.p1_b,
-                "p2_b": l.p2_b,
-                "is_active": l.is_active,
-            }
-            for l in lines
-        ],
-    }
+    try:
+        _get_camera_or_404(db, camera_id, current.organization.id)
+        org_id = current.organization.id
+        
+        # Query zones
+        zones = db.query(CountingZoneModel).filter(
+            CountingZoneModel.camera_id == camera_id,
+            CountingZoneModel.org_id == org_id,
+            CountingZoneModel.is_active == True
+        ).all()
+        
+        # Query lines
+        lines = db.query(CountingLineModel).filter(
+            CountingLineModel.camera_id == camera_id,
+            CountingLineModel.org_id == org_id,
+            CountingLineModel.is_active == True
+        ).all()
+        
+        return {
+            "camera_id": camera_id,
+            "zones": [
+                {
+                    "id": z.id,
+                    "name": z.name,
+                    "polygon": z.polygon,
+                    "is_active": z.is_active,
+                }
+                for z in zones
+            ],
+            "lines": [
+                {
+                    "id": l.id,
+                    "name": l.name,
+                    "p1": l.p1,
+                    "p2": l.p2,
+                    "p1_b": l.p1_b,
+                    "p2_b": l.p2_b,
+                    "is_active": l.is_active,
+                }
+                for l in lines
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error fetching camera tasks from DB for {camera_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while fetching camera tasks")
 
 
 @router.post("/{camera_id}/tasks/clear")

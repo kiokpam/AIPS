@@ -414,6 +414,7 @@ class CameraProcessor:
                         except Exception as e:
                             LOGGER.debug(f"MobileNet error for track {tid}: {e}")
                             label, prob = 'normal', 0.0
+
                         self.mobi_labels[tid] = (label, prob)
                         
                         # Update the detection entry with new label
@@ -421,31 +422,29 @@ class CameraProcessor:
                             if det['track_id'] == tid:
                                 det['label'] = label
                                 det['confidence'] = prob
-                                    break
+                                break
+                        
+                        # If suspicious, schedule VideoMAE analysis
+                        if label.lower() != 'normal' and prob > 0.5:
+                            # Add to behaviors (MobileNet detection)
+                            results['behaviors'].append({
+                                'track_id': tid,
+                                'label': label,
+                                'confidence': prob,
+                                'bbox': xyxy,
+                                'source': 'mobilenet',
+                            })
                             
-                            # If suspicious, schedule VideoMAE analysis
-                            if label.lower() != 'normal' and prob > 0.5:
-                                # Add to behaviors (MobileNet detection)
-                                results['behaviors'].append({
-                                    'track_id': tid,
-                                    'label': label,
-                                    'confidence': prob,
-                                    'bbox': xyxy,
-                                    'source': 'mobilenet',
-                                })
-                                
-                                # Schedule VideoMAE if not already processing
-                                if self.models.videomae:
-                                    if tid not in self.awaiting_vmae and tid not in self.vmae_processing:
-                                        # Extend buffer to collect more context
-                                        # Use camera's reported FPS (matches AI developers' logic)
-                                        extra_frames = int(round(self.extra_sec * self.fps))
-                                        self.buffers[tid].extend_capacity(extra_frames)
-                                        self.awaiting_vmae[tid] = extra_frames
-                                        self.last_vmae_frame[tid] = self.frame_idx
-                                        LOGGER.info(f"Track {tid}: MobileNet suspicious ({prob:.2f}), scheduling VideoMAE (extending by {extra_frames} frames at {self.fps:.1f} FPS)")
-                        except Exception as e:
-                            LOGGER.debug(f"MobileNet error for track {tid}: {e}")
+                            # Schedule VideoMAE if not already processing
+                            if self.models.videomae:
+                                if tid not in self.awaiting_vmae and tid not in self.vmae_processing:
+                                    # Extend buffer to collect more context
+                                    # Use camera's reported FPS (matches AI developers' logic)
+                                    extra_frames = int(round(self.extra_sec * self.fps))
+                                    self.buffers[tid].extend_capacity(extra_frames)
+                                    self.awaiting_vmae[tid] = extra_frames
+                                    self.last_vmae_frame[tid] = self.frame_idx
+                                    LOGGER.info(f"Track {tid}: MobileNet suspicious ({prob:.2f}), scheduling VideoMAE (extending by {extra_frames} frames at {self.fps:.1f} FPS)")
                 
                 # Check if awaiting VideoMAE and buffer is ready
                 if tid in self.awaiting_vmae and tid not in self.vmae_processing:
@@ -486,31 +485,36 @@ class CameraProcessor:
                                         # Prefer camera FPS when actual_fps is too low to avoid slow playback
                                         save_fps = self.actual_fps if (self.actual_fps > 0 and self.actual_fps >= 0.8 * self.fps) else self.fps
                                         clip_duration = len(cur_frames) / save_fps if save_fps > 0 else 0
-                                        LOGGER.info(f"Track {tid}: Saving {len(cur_frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
-                                        save_frames_as_video(cur_frames, save_fps, str(clip_path))
                                         
-                                        # Verify file was actually created
-                                        if clip_path.exists() and clip_path.stat().st_size > 0:
-                                            LOGGER.info(f"🎥 Track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
-                                            
-                                            results['clips'].append({
-                                                'track_id': tid,
-                                                'path': str(clip_path),
-                                                'label': vmae_label,
-                                                'score': vmae_score,
-                                            })
-                                            
-                                            # Add VideoMAE behavior (higher confidence than MobileNet)
-                                            results['behaviors'].append({
-                                                'track_id': tid,
-                                                'label': vmae_label,
-                                                'confidence': vmae_score,
-                                                'bbox': xyxy if tid in [t[0] for t in tracks] else None,
-                                                'source': 'videomae',
-                                                'clip_path': str(clip_path),
-                                            })
+                                        # Minimum clip duration check: require at least 1 second of footage
+                                        min_frames_required = int(round(save_fps * 1.0))  # At least 1 second
+                                        if len(cur_frames) < min_frames_required:
+                                            LOGGER.warning(f"Track {tid}: Skipping clip save - only {len(cur_frames)} frames (need {min_frames_required} for 1s at {save_fps:.1f} FPS)")
                                         else:
-                                            LOGGER.error(f"Track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
+                                            LOGGER.info(f"Track {tid}: Saving {len(cur_frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
+                                            save_frames_as_video(cur_frames, save_fps, str(clip_path))
+                                            
+                                            # Verify file was actually created
+                                                LOGGER.info(f"🎥 Track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
+                                                
+                                                results['clips'].append({
+                                                    'track_id': tid,
+                                                    'path': str(clip_path),
+                                                    'label': vmae_label,
+                                                    'score': vmae_score,
+                                                })
+                                                
+                                                # Add VideoMAE behavior (higher confidence than MobileNet)
+                                                results['behaviors'].append({
+                                                    'track_id': tid,
+                                                    'label': vmae_label,
+                                                    'confidence': vmae_score,
+                                                    'bbox': xyxy if tid in [t[0] for t in tracks] else None,
+                                                    'source': 'videomae',
+                                                    'clip_path': str(clip_path),
+                                                })
+                                            else:
+                                                LOGGER.error(f"Track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
                                 except Exception as e:
                                     LOGGER.error(f"Failed to save clip for track {tid}: {e}", exc_info=True)
                             
@@ -563,21 +567,29 @@ class CameraProcessor:
                                             # Prefer camera FPS when actual_fps is too low to avoid slow playback
                                             save_fps = self.actual_fps if (self.actual_fps > 0 and self.actual_fps >= 0.8 * self.fps) else self.fps
                                             clip_duration = len(frames) / save_fps if save_fps > 0 else 0
-                                            LOGGER.info(f"Lost track {tid}: Saving {len(frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
-                                            save_frames_as_video(frames, save_fps, str(clip_path))
                                             
-                                            # Verify file was actually created
-                                            if clip_path.exists() and clip_path.stat().st_size > 0:
-                                                LOGGER.info(f"🎥 Lost track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
-                                                # Add behavior so alerts can be pushed (even on lost tracks)
-                                                results['behaviors'].append({
-                                                    'track_id': tid,
-                                                    'label': vmae_label,
-                                                    'confidence': vmae_score,
-                                                    'bbox': None,
-                                                    'source': 'videomae',
-                                                    'clip_path': str(clip_path),
-                                                })
+                                            # Minimum clip duration check: require at least 1 second of footage
+                                            min_frames_required = int(round(save_fps * 1.0))  # At least 1 second
+                                            if len(frames) < min_frames_required:
+                                                LOGGER.warning(f"Lost track {tid}: Skipping clip save - only {len(frames)} frames (need {min_frames_required} for 1s at {save_fps:.1f} FPS)")
+                                            else:
+                                                LOGGER.info(f"Lost track {tid}: Saving {len(frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
+                                                save_frames_as_video(frames, save_fps, str(clip_path))
+                                                
+                                                # Verify file was actually created
+                                                if clip_path.exists() and clip_path.stat().st_size > 0:
+                                                    LOGGER.info(f"🎥 Lost track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
+                                                    # Add behavior so alerts can be pushed (even on lost tracks)
+                                                    results['behaviors'].append({
+                                                        'track_id': tid,
+                                                        'label': vmae_label,
+                                                        'confidence': vmae_score,
+                                                        'bbox': None,
+                                                        'source': 'videomae',
+                                                        'clip_path': str(clip_path),
+                                                    })
+                                                else:
+                                                    LOGGER.error(f"Lost track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
                                             else:
                                                 LOGGER.error(f"Lost track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
                                         except Exception as e:
@@ -676,7 +688,7 @@ class CameraProcessor:
             if tid in pushed_tracks:
                 continue
             
-                label = behavior['label'].lower()
+            label = behavior['label'].lower()
             
             # Treat any non-normal VideoMAE label as an anomaly type.
             if label == 'normal':

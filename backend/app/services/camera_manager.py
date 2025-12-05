@@ -193,7 +193,7 @@ class VideoStream:
                 if not ret or frame is None:
                     consecutive_read_failures += 1
                     fail_count += 1
-
+                    
                     if self.is_video_file:
                         # Loop video file
                         try:
@@ -226,11 +226,11 @@ class VideoStream:
                     # Successfully read frame
                     consecutive_read_failures = 0
                     fail_count = 0
-
+                    
                     with self.lock:
                         self.latest_frame = frame
                         self.frame_times.append(time.time())
-
+                    
                     # Sync FPS
                     elapsed = time.time() - last_time
                     delay = self.frame_delay - elapsed
@@ -539,7 +539,7 @@ class CameraManager:
                 # Add small delay between camera additions to avoid resource conflicts
                 if len(self.cameras) > 0:
                     time.sleep(0.3)  # 300ms delay to let previous streams stabilize
-            
+                
                 worker = CameraWorker(
                     camera_id, store_id, source, name, ai_services,
                     skip_frame, shared_stream=shared_stream  # Pass shared stream if available
@@ -580,7 +580,7 @@ class CameraManager:
                     self.source_ref_count[source] = max(
                         0, self.source_ref_count.get(source, 1) - 1
                     )
-                return False
+            return False
     
     def remove_camera(self, camera_id: str) -> bool:
         """Remove a camera"""
