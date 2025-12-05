@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import original AI modules (unchanged)
 from detectors.yolo_onnx_detector import YOLOONNXDetector
 from detectors.deepsort_tracker import DeepSortTracker
-from ai.mobilenet_runner import MobileNetRunner
+from ai.mobilenet_onnx_runner import MobileNetONNXRunner
 from ai.videomae_onnx_runner import VideoMAEONNXRunner
 from inout_pkg.inout_api import InOutAPI
 from buffers.person_buffer import PersonBuffer
@@ -59,7 +59,7 @@ class AIModels:
     def __init__(self, device: str = 'cuda'):
         self.device = device
         self.yolo: Optional[YOLOONNXDetector] = None
-        self.mobilenet: Optional[MobileNetRunner] = None
+        self.mobilenet: Optional[MobileNetONNXRunner] = None
         self.videomae: Optional[VideoMAEONNXRunner] = None
         self._lock = threading.Lock()
     
@@ -80,10 +80,10 @@ class AIModels:
             LOGGER.info("✓ YOLO loaded")
             
             # MobileNet for fast behavior screening
-            mobilenet_path = Path(__file__).parent / 'models' / 'mobilenet_pytorch_best.pth'
+            mobilenet_path = Path(__file__).parent / 'models' / 'mobilenet.onnx'
             if mobilenet_path.exists():
-                self.mobilenet = MobileNetRunner(str(mobilenet_path), device=self.device)
-                LOGGER.info("✓ MobileNet loaded")
+                self.mobilenet = MobileNetONNXRunner(str(mobilenet_path), device=self.device)
+                LOGGER.info("✓ MobileNet (ONNX) loaded")
             else:
                 LOGGER.warning(f"MobileNet model not found: {mobilenet_path}")
             
@@ -400,13 +400,20 @@ class CameraProcessor:
                     if crop is not None:
                         try:
                             label, prob = self.models.mobilenet.predict_on_crop(crop)
-                            self.mobi_labels[tid] = (label, prob)
-                            
-                            # Update the detection entry with new label
-                            for det in results['detections']:
-                                if det['track_id'] == tid:
-                                    det['label'] = label
-                                    det['confidence'] = prob
+                            if label is None:
+                                label = 'normal'
+                            if prob is None:
+                                prob = 0.0
+                        except Exception as e:
+                            LOGGER.debug(f"MobileNet error for track {tid}: {e}")
+                            label, prob = 'normal', 0.0
+                        self.mobi_labels[tid] = (label, prob)
+                        
+                        # Update the detection entry with new label
+                        for det in results['detections']:
+                            if det['track_id'] == tid:
+                                det['label'] = label
+                                det['confidence'] = prob
                                     break
                             
                             # If suspicious, schedule VideoMAE analysis
