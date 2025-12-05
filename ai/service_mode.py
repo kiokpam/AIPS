@@ -128,8 +128,15 @@ class CameraProcessor:
         self.clip_dir = Path(clip_dir)
         self.clip_dir.mkdir(parents=True, exist_ok=True)
         
-        # Per-camera tracker (not shared)
-        self.tracker = DeepSortTracker(max_age=30, use_embedder=False)
+        # Per-camera tracker (not shared) – enable embedder to stabilize IDs (matches dev main.py)
+        use_gpu = str(self.models.device).lower() in ("cuda", "gpu") or str(self.models.device).isdigit()
+        self.tracker = DeepSortTracker(
+            max_age=10,  
+            use_embedder=True,
+            embedder="mobilenet",
+            embedder_gpu=use_gpu,
+            half=True,
+        )
         
         # Buffers for behavior detection
         self.buffers: Dict[int, PersonBuffer] = {}
@@ -562,6 +569,15 @@ class CameraProcessor:
                                             # Verify file was actually created
                                             if clip_path.exists() and clip_path.stat().st_size > 0:
                                                 LOGGER.info(f"🎥 Lost track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
+                                                # Add behavior so alerts can be pushed (even on lost tracks)
+                                                results['behaviors'].append({
+                                                    'track_id': tid,
+                                                    'label': vmae_label,
+                                                    'confidence': vmae_score,
+                                                    'bbox': None,
+                                                    'source': 'videomae',
+                                                    'clip_path': str(clip_path),
+                                                })
                                             else:
                                                 LOGGER.error(f"Lost track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
                                         except Exception as e:

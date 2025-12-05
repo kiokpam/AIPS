@@ -67,7 +67,69 @@ def save_frames_as_video(frames: List, fps: float, out_path: str) -> None:
         writer.write(f)
     writer.release()
     
-    # Skip H.264 re-encode because libx264 is unavailable in this container.
+    # Try to re-encode to H.264 for browser compatibility if ffmpeg + libx264 are available.
+    # If it fails, we keep the original mp4v/XVID file.
+    def _try_reencode_h264(path: str) -> None:
+        import shutil
+        if shutil.which("ffmpeg") is None:
+            LOGGER.debug("ffmpeg not found; skipping H.264 re-encode")
+            return
+        temp_path = path + ".tmp"
+        try:
+            os.rename(path, temp_path)
+        except Exception as e:
+            LOGGER.warning(f"Could not rename {path} for re-encode: {e}")
+            return
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            temp_path,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                LOGGER.debug(f"Re-encoded {path} to H.264 for browser playback")
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            else:
+                LOGGER.warning(f"ffmpeg re-encode failed for {path}: {result.stderr}")
+                # Restore original
+                try:
+                    os.rename(path, path + ".failed")
+                except Exception:
+                    pass
+                try:
+                    os.rename(temp_path, path)
+                except Exception:
+                    pass
+        except Exception as e:
+            LOGGER.warning(f"ffmpeg re-encode error for {path}: {e}")
+            try:
+                os.rename(path, path + ".failed")
+            except Exception:
+                pass
+            try:
+                os.rename(temp_path, path)
+            except Exception:
+                pass
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    _try_reencode_h264(out_path)
 
 def save_metadata(meta: dict, out_path: str) -> None:
     with open(out_path, 'w', encoding='utf-8') as f:
