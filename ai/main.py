@@ -19,7 +19,7 @@ import numpy as np
 from detectors.yolo_onnx_detector import YOLOONNXDetector
 from detectors.deepsort_tracker import DeepSortTracker
 from buffers.person_buffer import PersonBuffer
-from ai.mobilenet_runner import MobileNetRunner
+from ai.mobilenet_onnx_runner import MobileNetONNXRunner
 from ai.videomae_onnx_runner import VideoMAEONNXRunner
 from inout_pkg.inout_api import InOutAPI
 from ui.selector import select_lines, select_polygon
@@ -107,7 +107,7 @@ def parse_args():
 
     p.add_argument('--buffer-sec', type=float, default=2.0)
     p.add_argument('--extra-sec', type=float, default=1.0)
-    p.add_argument('--mobilenet', default='models/mobilenet_pytorch_best.pth')
+    p.add_argument('--mobilenet', default='models/mobilenet.onnx')
     p.add_argument('--videomae-dir', default='videomae')
     p.add_argument('--yolo', default='models/yolov8n.onnx', help='YOLO model path (default: ONNX for better performance)')
     p.add_argument('--use-pytorch-yolo', action='store_true', help='Use PyTorch YOLO instead of ONNX')
@@ -213,7 +213,7 @@ def main():
         use_embedder=use_embedder
     )
     
-    mobi = MobileNetRunner(args.mobilenet, device=device)
+    mobi = MobileNetONNXRunner(args.mobilenet, device=device)
     
  
     LOGGER.info('Using ONNX VideoMAE (faster with GPU)')
