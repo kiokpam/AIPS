@@ -360,9 +360,45 @@ export default function VideosPage() {
               {/* Video Player Area */}
               <div className="bg-slate-900 rounded-lg overflow-hidden border border-slate-700">
                 <video
+                  key={selectedVideo.filename} // Force re-render when video changes
                   src={clipsApi.getClipUrl(selectedVideo.filename)}
                   controls
-                  className="w-full aspect-video"
+                  preload="metadata"
+                  crossOrigin="anonymous"
+                  playsInline
+                  className="w-full aspect-video bg-black"
+                  onError={(e) => {
+                    console.error('Video playback error:', e);
+                    const video = e.target as HTMLVideoElement;
+                    const error = video.error;
+                    console.error('Video error details:', {
+                      error: error ? {
+                        code: error.code,
+                        message: error.message
+                      } : null,
+                      networkState: video.networkState,
+                      readyState: video.readyState,
+                      src: video.src,
+                      currentSrc: video.currentSrc
+                    });
+                    toast.error(`Failed to load video: ${error?.message || 'Unknown error'}`);
+                  }}
+                  onLoadStart={() => console.log('Video loading started')}
+                  onLoadedMetadata={(e) => {
+                    const video = e.target as HTMLVideoElement;
+                    console.log('Video metadata loaded', {
+                      duration: video.duration,
+                      videoWidth: video.videoWidth,
+                      videoHeight: video.videoHeight
+                    });
+                  }}
+                  onCanPlay={() => console.log('Video can play')}
+                  onProgress={(e) => {
+                    const video = e.target as HTMLVideoElement;
+                    if (video.buffered.length > 0 && video.duration > 0) {
+                      console.log('Video buffered:', (video.buffered.end(0) / video.duration * 100).toFixed(1), '%');
+                    }
+                  }}
                 >
                   Your browser does not support the video tag.
                 </video>

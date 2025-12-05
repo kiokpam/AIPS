@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import { useAuth } from '@/src/contexts/AuthContext';
-import { authApi, eventsApi, storeApi, cameraApi, type Alert, type Store, type Camera } from '@/lib/api';
+import { authApi, eventsApi, storeApi, cameraApi, clipsApi, type Alert, type Store, type Camera } from '@/lib/api';
 import DashboardFilters from '@/components/DashboardFilters';
 import { 
   Shield, 
@@ -24,7 +24,9 @@ import {
   ShoppingBag,
   Swords,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  Play,
+  FileVideo
 } from 'lucide-react';
 
 export default function BehaviorDashboardPage() {
@@ -146,7 +148,7 @@ export default function BehaviorDashboardPage() {
       if (user.active_membership.role === 'manager') {
         setHasAccess(true);
         await fetchData();
-        interval = setInterval(fetchData, 10000);
+        interval = setInterval(fetchData, 2000);  // Reduced from 10000ms to 2000ms for faster updates
         setIsLoading(false);
         return;
       }
@@ -159,7 +161,7 @@ export default function BehaviorDashboardPage() {
         setHasAccess(permissions.can_access_dashboard);
         if (permissions.can_access_dashboard) {
           await fetchData();
-          interval = setInterval(fetchData, 10000);
+          interval = setInterval(fetchData, 2000);  // Reduced from 10000ms to 2000ms for faster updates
         }
       } catch (error: any) {
         setHasAccess(false);
@@ -507,18 +509,36 @@ export default function BehaviorDashboardPage() {
                               {alert.message}
                             </p>
                             
-                            <div className="flex items-center gap-3 text-xs text-slate-500">
-                              {alert.store_name && (
-                                <span className="flex items-center gap-1">
-                                  <MapPin className="w-3 h-3" />
-                                  {alert.store_name}
-                                </span>
-                              )}
-                              {alert.camera_name && (
-                                <span className="flex items-center gap-1">
-                                  <Video className="w-3 h-3" />
-                                  {alert.camera_name}
-                                </span>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3 text-xs text-slate-500">
+                                {alert.store_name && (
+                                  <span className="flex items-center gap-1">
+                                    <MapPin className="w-3 h-3" />
+                                    {alert.store_name}
+                                  </span>
+                                )}
+                                {alert.camera_name && (
+                                  <span className="flex items-center gap-1">
+                                    <Video className="w-3 h-3" />
+                                    {alert.camera_name}
+                                  </span>
+                                )}
+                              </div>
+                              
+                              {alert.clip_ref && (
+                                <a
+                                  href={clipsApi.getClipUrl(alert.clip_ref)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-lg transition-colors"
+                                  title={lang === 'vi' ? 'Xem video' : 'View video'}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                  }}
+                                >
+                                  <Play className="w-3 h-3" />
+                                  <span>{lang === 'vi' ? 'Xem video' : 'View Video'}</span>
+                                </a>
                               )}
                             </div>
                           </div>

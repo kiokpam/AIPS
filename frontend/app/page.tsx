@@ -18,6 +18,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useI18n } from '@/src/contexts/I18nContext';
 import { useAuth } from '@/src/contexts/AuthContext';
 
@@ -39,7 +40,6 @@ function LanguageButton() {
 }
 
 export default function HomePage() {
-  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const { lang } = useI18n();
   const { user, isAuthenticated, logout } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -78,13 +78,13 @@ export default function HomePage() {
       features_sub: { en: 'Our AI-powered surveillance system provides comprehensive security and analytics solutions tailored for retail environments.', vi: 'Hệ thống giám sát dùng AI cung cấp giải pháp an ninh và phân tích toàn diện cho môi trường bán lẻ.' },
       // Features cards
       features_rtm_title: { en: 'Real-time Monitoring', vi: 'Giám sát theo thời gian thực' },
-      features_rtm_desc: { en: 'Advanced AI-powered surveillance with live video streaming and instant alerts.', vi: 'Giám sát dùng AI với phát video trực tiếp và cảnh báo tức thời.' },
+      features_rtm_desc: { en: 'Live camera streaming with YOLO detection, DeepSORT tracking, and instant WebSocket notifications.', vi: 'Phát video camera trực tiếp với phát hiện YOLO, theo dõi DeepSORT và thông báo WebSocket tức thời.' },
       features_people_title: { en: 'People Counting', vi: 'Đếm số người' },
-      features_people_desc: { en: 'Accurate customer counting and traffic analysis with zone-based detection.', vi: 'Đếm khách chính xác và phân tích lưu lượng với vùng phát hiện.' },
+      features_people_desc: { en: 'Real-time in/out counting and people tracking with line-based detection and zone\u00A0monitoring.', vi: 'Đếm vào/ra thời gian thực và theo dõi người với phát hiện dựa trên đường và giám\u00A0sát\u00A0vùng.' },
       features_behavior_title: { en: 'Behavior Detection', vi: 'Phát hiện hành vi' },
-      features_behavior_desc: { en: 'Intelligent anomaly detection for theft prevention and security monitoring.', vi: 'Phát hiện bất thường thông minh để ngăn ngừa trộm cắp và giám sát an ninh.' },
+      features_behavior_desc: { en: 'AI-powered detection of shoplifting and violence with real-time alerts and video\u00A0clips.', vi: 'Phát hiện shoplifting và bạo lực bằng AI với cảnh báo thời gian thực và video clip.' },
       features_analytics_title: { en: 'Analytics Dashboard', vi: 'Bảng điều khiển phân tích' },
-      features_analytics_desc: { en: 'Comprehensive insights and reporting for business optimization.', vi: 'Thông tin chuyên sâu và báo cáo toàn diện để tối ưu hoạt động.' },
+      features_analytics_desc: { en: 'Dashboard with behavior alerts, in/out statistics, and saved video clips for review and analysis.', vi: 'Bảng điều khiển với cảnh báo hành vi, thống kê vào/ra và video clip đã lưu để xem xét và phân tích.' },
       stats_title: { en: 'Trusted by Retailers Worldwide', vi: 'Được các nhà bán lẻ tin dùng trên toàn cầu' },
       cta2_title: { en: 'Ready to Secure Your Store?', vi: 'Sẵn sàng bảo vệ cửa hàng của bạn?' },
       cta2_sub: { en: 'Start your free trial today and experience the power of AI-driven surveillance. No setup fees, no long-term contracts.', vi: 'Bắt đầu dùng thử miễn phí ngay hôm nay và trải nghiệm sức mạnh giám sát bằng AI. Không phí cài đặt, không ràng buộc dài hạn.' },
@@ -128,10 +128,10 @@ export default function HomePage() {
   // no manage button; no auth state needed here
 
   const stats = [
-    { label: 'Status', value: 'Early Access', icon: Shield },
-    { label: 'Active Deployments', value: '—', icon: Camera },
-    { label: 'Incidents Monitored', value: '—', icon: AlertTriangle },
-    { label: 'Accuracy', value: 'Evolving', icon: Star }
+    { label: lang === 'vi' ? 'Trạng thái' : 'Status', value: lang === 'vi' ? 'Đang hoạt động' : 'Active', icon: Shield },
+    { label: lang === 'vi' ? 'AI Models' : 'AI Models', value: 'YOLO + VideoMAE', icon: Camera },
+    { label: lang === 'vi' ? 'Phát hiện' : 'Detection', value: lang === 'vi' ? 'Shoplifting & Violence' : 'Shoplifting & Violence', icon: AlertTriangle },
+    { label: lang === 'vi' ? 'Độ chính xác' : 'Accuracy', value: lang === 'vi' ? 'Cao' : 'High', icon: Star }
   ];
 
   return (
@@ -243,9 +243,9 @@ export default function HomePage() {
                 <p className="text-xl text-slate-300 leading-relaxed max-w-3xl mx-auto">{t('hero_sub')}</p>
                 {/* Feature chips */}
                 <div className="flex flex-wrap items-center justify-center gap-3">
-                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium"><Star className="mr-1 w-4 h-4 text-yellow-400" /> Real-time Detection</span>
-                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium">People Counting</span>
-                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium">Privacy-first</span>
+                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium"><Star className="mr-1 w-4 h-4 text-yellow-400" /> {lang === 'vi' ? 'Phát hiện thời gian thực' : 'Real-time Detection'}</span>
+                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium">{lang === 'vi' ? 'Đếm vào/ra' : 'In/Out Counting'}</span>
+                  <span className="flex items-center px-3 py-1 bg-blue-950/80 border border-blue-700 text-blue-200 rounded-lg text-xs font-medium">{lang === 'vi' ? 'Shoplifting & Violence' : 'Shoplifting & Violence'}</span>
               </div>
                 {/* Micro-stats removed per request */}
               </div>
@@ -262,7 +262,12 @@ export default function HomePage() {
                   </Link>
                 )}
                 <button 
-                  onClick={() => setIsVideoPlaying(!isVideoPlaying)}
+                  onClick={() => {
+                    const demoSection = document.getElementById('demo-section');
+                    if (demoSection) {
+                      demoSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                  }}
                   className="btn-outline btn-lg group"
                 >
                   <Play className="w-5 h-5 mr-2 group-hover:scale-110 transition-transform" />
@@ -352,7 +357,9 @@ export default function HomePage() {
           >
             <h2 className="text-4xl font-bold text-white">{t('stats_title')}</h2>
             <p className="text-xl text-blue-100 max-w-3xl mx-auto">
-              Join thousands of stores that rely on our AI surveillance system for security and insights.
+              {lang === 'vi' 
+                ? 'Hệ thống giám sát AI tiên tiến với phát hiện hành vi thời gian thực và phân tích dữ liệu.'
+                : 'Advanced AI surveillance system with real-time behavior detection and data analytics.'}
             </p>
           </motion.div>
 
@@ -364,46 +371,146 @@ export default function HomePage() {
                 whileInView={{ opacity: 1, scale: 1 }}
                 transition={{ duration: 0.8, delay: index * 0.1 }}
                 viewport={{ once: true }}
-                className="text-center space-y-4"
+                className="text-center space-y-2"
               >
-                <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mx-auto">
-                  <stat.icon className="w-8 h-8 text-white" />
+                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center mx-auto">
+                  <stat.icon className="w-6 h-6 text-white" />
                 </div>
-                <div className="text-4xl font-bold text-white">{stat.value}</div>
-                <div className="text-blue-100">{stat.label}</div>
+                <div className="text-2xl font-bold text-white">{stat.value}</div>
+                <div className="text-sm text-blue-100">{stat.label}</div>
               </motion.div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* CTA Section */}
-      <section className="py-20 bg-slate-900">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      {/* Demo/Screenshots Section */}
+      <section id="demo-section" className="py-20 bg-gradient-to-b from-slate-900 to-slate-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div
             initial={{ opacity: 0, y: 50 }}
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8 }}
             viewport={{ once: true }}
-            className="space-y-8"
+            className="text-center space-y-4 mb-12"
           >
-            <h2 className="text-4xl font-bold text-white">{t('cta2_title')}</h2>
-            <p className="text-xl text-slate-300 max-w-2xl mx-auto">{t('cta2_sub')}</p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              {isAuthenticated ? (
-                <Link href="/cameras" className="btn-primary btn-lg group">
-                  Go to Dashboard
-                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-                </Link>
-              ) : (
-                <Link href="/login" className="btn-primary btn-lg group">
-                  {t('cta2_btn_trial')}
-                  <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-                </Link>
-              )}
-              <button className="btn-outline btn-lg text-white border-white hover:bg-white hover:text-slate-900">{t('cta2_btn_demo')}</button>
-            </div>
+            <h2 className="text-4xl font-bold text-white">
+              {lang === 'vi' ? 'Xem Demo Hệ Thống' : 'See It In Action'}
+            </h2>
+            <p className="text-xl text-slate-300 max-w-3xl mx-auto">
+              {lang === 'vi' 
+                ? 'Khám phá giao diện và tính năng của hệ thống giám sát AI'
+                : 'Explore the interface and features of our AI surveillance system'}
+            </p>
           </motion.div>
+
+          {/* Demo Images Grid */}
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+            {/* Dashboard Screenshot */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.6, delay: 0.1 }}
+              viewport={{ once: true }}
+              className="group relative overflow-hidden rounded-xl border border-slate-700 bg-slate-800/50 backdrop-blur-sm hover:border-blue-500/50 transition-all duration-300"
+            >
+              <div className="aspect-video relative bg-slate-900">
+                <Image
+                  src="/demos/dashboard.png"
+                  alt={lang === 'vi' ? 'Bảng điều khiển' : 'Dashboard'}
+                  fill
+                  className="object-cover group-hover:scale-105 transition-transform duration-300"
+                  unoptimized
+                />
+                <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Camera className="w-16 h-16 text-slate-500" />
+                </div>
+              </div>
+              <div className="p-4">
+                <h3 className="text-lg font-semibold text-white mb-1">
+                  {lang === 'vi' ? 'Bảng Điều Khiển' : 'Dashboard'}
+                </h3>
+                <p className="text-sm text-slate-400">
+                  {lang === 'vi' ? 'Theo dõi camera và cảnh báo thời gian thực' : 'Real-time camera monitoring and alerts'}
+                </p>
+              </div>
+            </motion.div>
+
+            {/* Behavior Detection Screenshot */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              viewport={{ once: true }}
+              className="group relative overflow-hidden rounded-xl border border-slate-700 bg-slate-800/50 backdrop-blur-sm hover:border-purple-500/50 transition-all duration-300"
+            >
+              <div className="aspect-video relative bg-slate-900">
+                <Image
+                  src="/demos/behavior.png"
+                  alt={lang === 'vi' ? 'Phát hiện hành vi' : 'Behavior Detection'}
+                  fill
+                  className="object-cover group-hover:scale-105 transition-transform duration-300"
+                  unoptimized
+                />
+                <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <AlertTriangle className="w-16 h-16 text-slate-500" />
+                </div>
+              </div>
+              <div className="p-4">
+                <h3 className="text-lg font-semibold text-white mb-1">
+                  {lang === 'vi' ? 'Phát Hiện Hành Vi' : 'Behavior Detection'}
+                </h3>
+                <p className="text-sm text-slate-400">
+                  {lang === 'vi' ? 'Cảnh báo shoplifting và violence' : 'Shoplifting & violence alerts'}
+                </p>
+              </div>
+            </motion.div>
+
+            {/* In/Out Counting Screenshot */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.6, delay: 0.3 }}
+              viewport={{ once: true }}
+              className="group relative overflow-hidden rounded-xl border border-slate-700 bg-slate-800/50 backdrop-blur-sm hover:border-green-500/50 transition-all duration-300"
+            >
+              <div className="aspect-video relative bg-slate-900">
+                <Image
+                  src="/demos/inout.png"
+                  alt={lang === 'vi' ? 'Đếm vào/ra' : 'In/Out Counting'}
+                  fill
+                  className="object-cover group-hover:scale-105 transition-transform duration-300"
+                  unoptimized
+                />
+                <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Users className="w-16 h-16 text-slate-500" />
+                </div>
+              </div>
+              <div className="p-4">
+                <h3 className="text-lg font-semibold text-white mb-1">
+                  {lang === 'vi' ? 'Đếm Vào/Ra' : 'In/Out Counting'}
+                </h3>
+                <p className="text-sm text-slate-400">
+                  {lang === 'vi' ? 'Theo dõi lưu lượng khách hàng' : 'Customer traffic tracking'}
+                </p>
+              </div>
+            </motion.div>
+          </div>
+
+          {/* CTA Buttons */}
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            {isAuthenticated ? (
+              <Link href="/cameras" className="btn-primary btn-lg group">
+                {lang === 'vi' ? 'Đi Tới Bảng Điều Khiển' : 'Go to Dashboard'}
+                <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+              </Link>
+            ) : (
+              <Link href="/login" className="btn-primary btn-lg group">
+                {t('cta2_btn_trial')}
+                <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
+              </Link>
+            )}
+          </div>
         </div>
       </section>
 

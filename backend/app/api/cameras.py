@@ -139,21 +139,21 @@ def create_camera(
     logger = logging.getLogger(__name__)
     
     try:
-    db.add(item)
+        db.add(item)
         db.flush()  # Get ID without committing yet
 
         # Try to start camera before committing to database
-    success = camera_manager.add_camera(
-        camera_id=item.id,
-        store_id=item.store_id,
-        source=item.source,
-        name=item.name,
-        ai_services=item.ai_services,
+        success = camera_manager.add_camera(
+            camera_id=item.id,
+            store_id=item.store_id,
+            source=item.source,
+            name=item.name,
+            ai_services=item.ai_services,
             # Model configuration removed - AI services will handle all model settings
-        skip_frame=item.skip_frame,
-    )
+            skip_frame=item.skip_frame,
+        )
 
-    if not success:
+        if not success:
             db.rollback()
             # Check if it's a resource limit issue
             current_count = camera_manager.get_camera_count()
@@ -233,34 +233,37 @@ def update_camera(
     
     try:
         # Update fields but don't commit yet
-    if payload.name is not None:
-        camera.name = payload.name
-    if payload.source is not None:
-        camera.source = payload.source
-    if payload.ai_services is not None:
-        camera.ai_services = payload.ai_services
-        # Model configuration removed - AI services will handle all model settings
-    if payload.skip_frame is not None:
-        camera.skip_frame = payload.skip_frame
-    if payload.is_active is not None:
-        camera.is_active = payload.is_active
+        if payload.name is not None:
+            camera.name = payload.name
+        if payload.source is not None:
+            camera.source = payload.source
+        if payload.ai_services is not None:
+            camera.ai_services = payload.ai_services
+            # Model configuration removed - AI services will handle all model settings
+        if payload.skip_frame is not None:
+            camera.skip_frame = payload.skip_frame
+        if payload.is_active is not None:
+            camera.is_active = payload.is_active
 
         # If source or AI services changed, restart camera BEFORE committing
-    if payload.source is not None or payload.ai_services is not None:
-        camera_manager.remove_camera(camera_id)
-        success = camera_manager.add_camera(
-            camera_id=camera.id,
-            store_id=camera.store_id,
-            source=camera.source,
-            name=camera.name,
-            ai_services=camera.ai_services,
+        if payload.source is not None or payload.ai_services is not None:
+            camera_manager.remove_camera(camera_id)
+            success = camera_manager.add_camera(
+                camera_id=camera.id,
+                store_id=camera.store_id,
+                source=camera.source,
+                name=camera.name,
+                ai_services=camera.ai_services,
                 # Model configuration removed - AI services will handle all model settings
-            skip_frame=camera.skip_frame,
-        )
-        if not success:
+                skip_frame=camera.skip_frame,
+            )
+            if not success:
                 db.rollback()
                 logger.error(f"Failed to restart camera {camera_id} with new configuration")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to restart camera with new configuration")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to restart camera with new configuration",
+                )
             logger.info(f"Camera {camera_id} restarted with new configuration")
 
         # Only commit if restart succeeded (or no restart needed)
@@ -670,7 +673,7 @@ def clear_camera_tasks(
     # Clear runtime tasks if camera is running
     camera_worker = camera_manager.get_camera(camera_id)
     if camera_worker:
-    camera_worker.clear_tasks()
+        camera_worker.clear_tasks()
     
     return {"message": "Tasks cleared successfully"}
 

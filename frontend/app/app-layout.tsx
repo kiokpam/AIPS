@@ -141,7 +141,7 @@ function InnerLayout({ children }: AppLayoutProps) {
   };
 
   // Public pages that don't require authentication
-  const publicPages = ['/', '/login', '/register', '/forgot-password', '/reset-password', '/terms', '/privacy'];
+  const publicPages = ['/', '/login', '/register', '/forgot-password', '/reset-password', '/terms', '/privacy', '/features'];
   if (publicPages.includes(pathname)) {
     return <>{children}</>;
   }

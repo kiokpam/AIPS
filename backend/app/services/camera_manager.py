@@ -192,25 +192,25 @@ class VideoStream:
                 ret, frame = self.cap.read()
                 if not ret or frame is None:
                     consecutive_read_failures += 1
-                fail_count += 1
-                
-                if self.is_video_file:
-                    # Loop video file
+                    fail_count += 1
+                    
+                    if self.is_video_file:
+                        # Loop video file
                         try:
                             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                             consecutive_read_failures = 0
                             fail_count = 0
-                        except:
+                        except Exception:
                             pass
                     else:
                         # For network streams, be more aggressive about reconnecting
                         if consecutive_read_failures >= 20:  # Reduced threshold
                             try:
                                 self.cap.release()
-                            except:
+                            except Exception:
                                 pass
                             try:
-                        self.cap = self._open_capture(self.src)
+                                self.cap = self._open_capture(self.src)
                                 consecutive_read_failures = 0
                                 logger = logging.getLogger(__name__)
                                 logger.info(f"Reconnected stream {self.src} after read failures")
@@ -219,24 +219,24 @@ class VideoStream:
                                     logger = logging.getLogger(__name__)
                                     logger.warning(f"Reconnection attempt failed for {self.src}: {e}")
                                 time.sleep(0.5)  # Wait before retry
+
                     time.sleep(0.05)
-                continue
-            
-                # Successfully read frame
-                consecutive_read_failures = 0
-                fail_count = 0
-                
-            with self.lock:
-                self.latest_frame = frame
-                self.frame_times.append(time.time())
-            
-            # Sync FPS
-            elapsed = time.time() - last_time
-            delay = self.frame_delay - elapsed
-            if delay > 0:
-                time.sleep(min(delay, 0.01))
-            last_time = time.time()
-                
+                    continue
+                else:
+                    # Successfully read frame
+                    consecutive_read_failures = 0
+                    fail_count = 0
+                    
+                    with self.lock:
+                        self.latest_frame = frame
+                        self.frame_times.append(time.time())
+                    
+                    # Sync FPS
+                    elapsed = time.time() - last_time
+                    delay = self.frame_delay - elapsed
+                    if delay > 0:
+                        time.sleep(min(delay, 0.01))
+                    last_time = time.time()
             except Exception as e:
                 fail_count += 1
                 consecutive_read_failures += 1
@@ -286,7 +286,7 @@ class VideoStream:
             try:
                 # Wait a bit for the update thread to finish current operation
                 time.sleep(0.1)
-            self.cap.release()
+                self.cap.release()
                 logger.debug(f"Released VideoCapture for {self.src}")
             except Exception as e:
                 logger.warning(f"Error releasing VideoCapture for {self.src}: {e}")
@@ -339,7 +339,7 @@ class CameraWorker:
         try:
             # Only create new stream if not using shared stream
             if self.stream is None:
-            self.stream = VideoStream(self.source)
+                self.stream = VideoStream(self.source)
                 # Give stream more time to initialize and read first frame
                 # This helps prevent conflicts when multiple streams are created
                 time.sleep(0.5)
@@ -373,13 +373,13 @@ class CameraWorker:
         # Only stop stream if it's not shared (shared streams are managed by CameraManager)
         if self.stream and not self.is_shared_stream:
             try:
-            self.stream.stop()
+                self.stream.stop()
             except Exception as e:
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Error stopping stream for camera {self.camera_id}: {e}")
         if self.thread:
             try:
-            self.thread.join(timeout=2)
+                self.thread.join(timeout=2)
             except Exception as e:
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Error joining thread for camera {self.camera_id}: {e}")
@@ -530,19 +530,22 @@ class CameraManager:
                 shared_stream = self.source_to_streams[source]
                 self.source_ref_count[source] = self.source_ref_count.get(source, 0) + 1
                 logger = logging.getLogger(__name__)
-                logger.info(f"Reusing existing VideoStream for source {source} (camera {camera_id}, ref_count: {self.source_ref_count[source]})")
+                logger.info(
+                    f"Reusing existing VideoStream for source {source} "
+                    f"(camera {camera_id}, ref_count: {self.source_ref_count[source]})"
+                )
             
             try:
                 # Add small delay between camera additions to avoid resource conflicts
                 if len(self.cameras) > 0:
                     time.sleep(0.3)  # 300ms delay to let previous streams stabilize
-            
-            worker = CameraWorker(
-                camera_id, store_id, source, name, ai_services,
+                
+                worker = CameraWorker(
+                    camera_id, store_id, source, name, ai_services,
                     skip_frame, shared_stream=shared_stream  # Pass shared stream if available
-            )
-            if worker.start():
-                self.cameras[camera_id] = worker
+                )
+                if worker.start():
+                    self.cameras[camera_id] = worker
                     # Track source mapping (keep first camera as primary for preview)
                     if source not in self.source_to_camera:
                         self.source_to_camera[source] = camera_id
@@ -552,24 +555,31 @@ class CameraManager:
                         self.source_ref_count[source] = 1
                     
                     logger = logging.getLogger(__name__)
-                    logger.info(f"Successfully added camera {camera_id} (source: {source}, total cameras: {len(self.cameras)})")
-                return True
+                    logger.info(
+                        f"Successfully added camera {camera_id} "
+                        f"(source: {source}, total cameras: {len(self.cameras)})"
+                    )
+                    return True
                 else:
                     # Cleanup failed worker
                     try:
                         worker.stop()
-                    except:
+                    except Exception:
                         pass
                     # Decrement ref count if we were reusing a stream
                     if shared_stream:
-                        self.source_ref_count[source] = max(0, self.source_ref_count.get(source, 1) - 1)
+                        self.source_ref_count[source] = max(
+                            0, self.source_ref_count.get(source, 1) - 1
+                        )
                     return False
             except Exception as e:
                 logger = logging.getLogger(__name__)
                 logger.error(f"Error adding camera {camera_id}: {e}", exc_info=True)
                 # Decrement ref count if we were reusing a stream
                 if shared_stream:
-                    self.source_ref_count[source] = max(0, self.source_ref_count.get(source, 1) - 1)
+                    self.source_ref_count[source] = max(
+                        0, self.source_ref_count.get(source, 1) - 1
+                    )
             return False
     
     def remove_camera(self, camera_id: str) -> bool:

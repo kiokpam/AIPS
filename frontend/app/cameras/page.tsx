@@ -543,9 +543,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
           ctx.beginPath();
           ctx.arc(p2[0], p2[1], 6, 0, 2 * Math.PI);
           ctx.fill();
-          // Draw label for Line A
-            ctx.font = '14px sans-serif';
-          ctx.fillText('Line A', (p1[0] + p2[0]) / 2 + 4, (p1[1] + p2[1]) / 2 - 8);
           
           // Draw Line B if present (blue color) - required for In/Out counting
           if (line.p1_b && line.p2_b && Array.isArray(line.p1_b) && Array.isArray(line.p2_b)) {
@@ -567,17 +564,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
             ctx.beginPath();
             ctx.arc(p2b[0], p2b[1], 6, 0, 2 * Math.PI);
             ctx.fill();
-            // Draw label for Line B
-            ctx.fillText('Line B', (p1b[0] + p2b[0]) / 2 + 4, (p1b[1] + p2b[1]) / 2 - 8);
-          }
-          
-          // Draw name label if present
-          if (line.name) {
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 12px sans-serif';
-            const midX = (p1[0] + p2[0]) / 2;
-            const midY = (p1[1] + p2[1]) / 2;
-            ctx.fillText(String(line.name), midX + 4, midY + 24);
           }
         }
       });
@@ -840,13 +826,16 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
           </span>
         </div>
 
-        {/* People count badge */}
-        <div className="absolute bottom-3 left-3">
+        {/* People / In-Out badges */}
+        <div className="absolute bottom-3 left-3 space-y-1">
+          {/* Show people count only for cameras with zones (people-in-zone) */}
+          {hasZones && currentCount !== null && (
           <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
-            {t('people_count')}: {currentCount !== null ? currentCount : '—'}
+              {t('people_count')}: {currentCount}
           </span>
+          )}
           {hasInOutLines && inOutCounts && (
-            <div className="flex gap-2 mt-1">
+            <div className="flex gap-2">
               <span className="text-xs text-white bg-green-600/70 px-2 py-1 rounded">
                 IN: {inOutCounts.count_in}
               </span>
@@ -1526,12 +1515,12 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const drawLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false, area?: any) => {
     // Draw Line A (first line) - always in red/green
     if (p1 && p2) {
-      drawSingleLine(ctx, p1, p2, '#ef4444', lineWidth, isDraft, 'Line A');
+      drawSingleLine(ctx, p1, p2, '#ef4444', lineWidth, isDraft);
     }
     
     // Draw Line B (second line for In/Out detection) - in blue
     if (area && area.p1_b && area.p2_b) {
-      drawSingleLine(ctx, area.p1_b, area.p2_b, '#3b82f6', lineWidth, isDraft, 'Line B');
+      drawSingleLine(ctx, area.p1_b, area.p2_b, '#3b82f6', lineWidth, isDraft);
     } else if (area && area.p1_b && !area.p2_b) {
       // Draw just the first point of Line B while drawing
       const point = (area.p1_b.x !== undefined && area.p1_b.y !== undefined)

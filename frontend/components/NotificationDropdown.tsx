@@ -47,18 +47,18 @@ export default function NotificationDropdown({ isOpen, onClose, unreadCount: ext
     }
   }, [isOpen, isAuthenticated]);
 
-  // Poll for new alerts every 30 seconds when dropdown is open
+  // Poll for new alerts every 3 seconds when dropdown is open (reduced from 30s for faster updates)
   useEffect(() => {
     if (!isOpen || !isAuthenticated) return;
     
     const interval = setInterval(() => {
       fetchAlerts();
-    }, 30000);
+    }, 3000);  // Reduced from 30000ms to 3000ms
 
     return () => clearInterval(interval);
   }, [isOpen, isAuthenticated]);
 
-  // Poll for unread count every 10 seconds when dropdown is closed
+  // Poll for unread count every 2 seconds when dropdown is closed (reduced from 10s for faster updates)
   useEffect(() => {
     if (!isAuthenticated) return;
     
@@ -72,7 +72,7 @@ export default function NotificationDropdown({ isOpen, onClose, unreadCount: ext
     };
 
     fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 10000);
+    const interval = setInterval(fetchUnreadCount, 2000);  // Reduced from 10000ms to 2000ms
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 

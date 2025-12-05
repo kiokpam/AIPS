@@ -183,14 +183,29 @@ def list_video_clips(
     return VideoClipsResponse(clips=clips, total_count=len(clips))
 
 
+@router.options("/{filename}")
+def options_video_clip():
+    """Handle CORS preflight requests for video clips."""
+    return Response(
+        status_code=200,
+        headers={
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'Range, Authorization',
+            'Access-Control-Max-Age': '3600',
+        }
+    )
+
 @router.get("/{filename}")
 def get_video_clip(
     filename: str,
     request: Request,
-    current: CurrentMembership = Depends(get_current_membership_optional),
+    current: Optional[CurrentMembership] = Depends(get_current_membership_optional),
     range: Optional[str] = Header(None),
 ):
     """Download or stream a video clip with range support."""
+    # Note: Authentication is optional for video playback (token in URL)
+    # But we still check if token is provided and valid
     safe_filename = Path(filename).name
     clip_path = CLIPS_DIR / safe_filename
 
@@ -227,6 +242,10 @@ def get_video_clip(
                 'Content-Length': str(content_length),
                 'Content-Type': media_type,
                 'Cache-Control': 'public, max-age=3600',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+                'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
             },
             media_type=media_type,
         )
@@ -239,6 +258,10 @@ def get_video_clip(
             'Accept-Ranges': 'bytes',
             'Content-Length': str(file_size),
             'Cache-Control': 'public, max-age=3600',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': 'Range',
+            'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
         },
     )
 

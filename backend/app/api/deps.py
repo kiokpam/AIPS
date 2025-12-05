@@ -115,8 +115,9 @@ def require_manager(
 def get_current_membership_optional(
     request: Request,
     db: Session = Depends(get_db),
-) -> CurrentMembership:
-    """Get current membership from Authorization header or token query param (for img tags)"""
+) -> Optional[CurrentMembership]:
+    """Get current membership from Authorization header or token query param (for img/video tags).
+    Returns None if no token is provided (allows optional authentication)."""
     token = None
     
     # Try Authorization header first
@@ -124,8 +125,15 @@ def get_current_membership_optional(
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ")[1]
     else:
-        # Try token query parameter (for img tags that can't send headers)
+        # Try token query parameter (for img/video tags that can't send headers)
         token = request.query_params.get("token")
     
-    return authenticate_token(token, db)
+    if not token:
+        return None
+    
+    try:
+        return authenticate_token(token, db)
+    except HTTPException:
+        # If token is invalid, return None instead of raising
+        return None
 

@@ -24,6 +24,7 @@ import argparse
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -154,15 +155,48 @@ class CameraProcessor:
         self.zone: Optional[List[Tuple[int, int]]] = None
         self._setup_zone()
         
-        # Frame counter
+        # Frame counter and timing
         self.frame_idx = 0
-        self.fps = 25.0  # Assumed FPS
+        self.fps = 25.0  # Default FPS, will be updated from camera stats
+        self.actual_fps = 25.0  # Actual frame processing rate (calculated from timing)
+        self.frame_times = deque(maxlen=30)  # Track last 30 frame timestamps for FPS calculation
+        self.last_frame_time = time.time()
+        self._update_fps_from_camera()
+    
+    def _update_fps_from_camera(self):
+        """Update FPS from camera stats to ensure videos play at correct speed."""
+        try:
+            resp = requests.get(
+                f"{self.backend_url}/api/ai/cameras/{self.camera_id}/health",
+                timeout=2
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                camera_fps = data.get('fps', 0)
+                if camera_fps > 0:
+                    # Use actual camera FPS if available
+                    old_fps = self.fps
+                    self.fps = float(camera_fps)
+                    if abs(old_fps - self.fps) > 1.0:  # Only log if significantly different
+                        LOGGER.info(f"Camera {self.camera_id}: Updated FPS from {old_fps:.1f} to {self.fps:.1f}")
+                else:
+                    # Fallback: try to estimate from frame timing if available
+                    # Keep default 25.0 if no stats available
+                    pass
+        except Exception as e:
+            LOGGER.debug(f"Could not update FPS for {self.camera_id}: {e}")
+            # Keep using default FPS
         
         # Last pushed counts (to avoid duplicate pushes)
         self.last_in_count = 0
         self.last_out_count = 0
         
-        LOGGER.info(f"Camera {camera_id}: Processor initialized")
+        # Failure tracking for logging throttling
+        self.consecutive_failures = 0
+        self.last_failure_log_time = 0.0
+        
+        LOGGER.info(f"Camera {self.camera_id}: Processor initialized")
+        LOGGER.info(f"  - FPS: {self.fps:.2f} (for video clip encoding)")
         LOGGER.info(f"  - In/Out counting: {'enabled' if self.inout_api else 'disabled'}")
         LOGGER.info(f"  - Behavior zone: {'configured' if self.zone else 'not configured'}")
         LOGGER.info(f"  - VideoMAE: {'enabled' if self.models.videomae else 'disabled'}")
@@ -213,24 +247,47 @@ class CameraProcessor:
         """Pull latest frame from backend API."""
         try:
             url = f"{self.backend_url}/api/ai/cameras/{self.camera_id}/frame"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=2)  # Reduced from 5s to 2s for faster response
             
             if resp.status_code == 200:
+                # Success - reset failure counter
+                if self.consecutive_failures > 0:
+                    LOGGER.debug(f"Frame pull recovered for {self.camera_id} after {self.consecutive_failures} failures")
+                self.consecutive_failures = 0
+                
                 # Decode JPEG to numpy array
                 arr = np.frombuffer(resp.content, np.uint8)
                 frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 return frame
             elif resp.status_code == 503:
-                # Camera not ready, this is normal during startup
+                # Camera not ready, this is normal during startup - use debug level
+                self.consecutive_failures += 1
+                return None
+            elif resp.status_code == 404:
+                # Camera not found or stopped - expected, log only occasionally
+                self.consecutive_failures += 1
+                now = time.time()
+                # Log warning only every 5 seconds to avoid spam
+                if now - self.last_failure_log_time > 5.0:
+                    LOGGER.debug(f"Frame pull failed for {self.camera_id}: 404 (camera not found/stopped, {self.consecutive_failures} consecutive failures)")
+                    self.last_failure_log_time = now
                 return None
             else:
-                LOGGER.warning(f"Frame pull failed for {self.camera_id}: {resp.status_code}")
+                # Other errors - log occasionally
+                self.consecutive_failures += 1
+                now = time.time()
+                if now - self.last_failure_log_time > 5.0:
+                    LOGGER.warning(f"Frame pull failed for {self.camera_id}: {resp.status_code} ({self.consecutive_failures} consecutive failures)")
+                    self.last_failure_log_time = now
+                return None
         except requests.exceptions.Timeout:
+            self.consecutive_failures += 1
             LOGGER.debug(f"Frame pull timeout for {self.camera_id}")
+            return None
         except Exception as e:
+            self.consecutive_failures += 1
             LOGGER.debug(f"Frame pull error for {self.camera_id}: {e}")
-        
-        return None
+            return None
     
     def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """
@@ -252,6 +309,20 @@ class CameraProcessor:
         - clips: [{track_id, path, label, score}] for saved clips
         """
         self.frame_idx += 1
+        
+        # Track actual frame processing rate (how fast we're actually collecting frames)
+        now = time.time()
+        self.frame_times.append(now)
+        if len(self.frame_times) >= 2:
+            span = self.frame_times[-1] - self.frame_times[0]
+            if span > 0:
+                self.actual_fps = (len(self.frame_times) - 1) / span
+        self.last_frame_time = now
+        
+        # Update FPS periodically (every 100 frames) to ensure videos use correct frame rate
+        if self.frame_idx % 100 == 0:
+            self._update_fps_from_camera()
+        
         results = {
             'inout': None,
             'behaviors': [],
@@ -308,13 +379,19 @@ class CameraProcessor:
             if in_zone and self.models.mobilenet:
                 # Initialize buffer for new track
                 if tid not in self.buffers:
-                    max_frames = int(self.buffer_sec * self.fps)
-                    self.buffers[tid] = PersonBuffer(tid, max_frames=max_frames, fps=self.fps)
+                    # Use actual processing FPS to calculate buffer size
+                    # This ensures we collect the correct duration (e.g., 3 seconds)
+                    # even if processing rate differs from camera FPS
+                    buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                    max_frames = int(self.buffer_sec * buffer_fps)
+                    self.buffers[tid] = PersonBuffer(tid, max_frames=max_frames, fps=buffer_fps)
                     self.base_max_frames[tid] = max_frames
-                    LOGGER.debug(f"Track {tid}: initialized buffer with {max_frames} frames")
+                    LOGGER.debug(f"Track {tid}: initialized buffer with {max_frames} frames (using {buffer_fps:.1f} FPS for {self.buffer_sec}s = {max_frames} frames)")
                 
                 # Add frame to buffer (with timestamp)
-                timestamp = self.frame_idx / self.fps
+                # Use actual FPS for timestamp to match collection rate
+                buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                timestamp = self.frame_idx / buffer_fps
                 self.buffers[tid].append(frame, xyxy, timestamp)
                 
                 # Run MobileNet every 2 frames
@@ -350,11 +427,13 @@ class CameraProcessor:
                                 if self.models.videomae:
                                     if tid not in self.awaiting_vmae and tid not in self.vmae_processing:
                                         # Extend buffer to collect more context
-                                        extra_frames = int(self.extra_sec * self.fps)
+                                        # Use actual processing FPS to ensure correct duration
+                                        buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                                        extra_frames = int(self.extra_sec * buffer_fps)
                                         self.buffers[tid].extend_capacity(extra_frames)
                                         self.awaiting_vmae[tid] = extra_frames
                                         self.last_vmae_frame[tid] = self.frame_idx
-                                        LOGGER.info(f"Track {tid}: MobileNet suspicious ({prob:.2f}), scheduling VideoMAE")
+                                        LOGGER.info(f"Track {tid}: MobileNet suspicious ({prob:.2f}), scheduling VideoMAE (extending by {extra_frames} frames at {buffer_fps:.1f} FPS)")
                         except Exception as e:
                             LOGGER.debug(f"MobileNet error for track {tid}: {e}")
                 
@@ -362,7 +441,9 @@ class CameraProcessor:
                 if tid in self.awaiting_vmae and tid not in self.vmae_processing:
                     cur_frames = self.buffers[tid].get_clip_frames()
                     cur_len = len(cur_frames)
-                    target_len = self.base_max_frames.get(tid, int(self.buffer_sec * self.fps)) + self.awaiting_vmae[tid]
+                    # Use actual FPS for target calculation to match collection rate
+                    buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                    target_len = self.base_max_frames.get(tid, int(self.buffer_sec * buffer_fps)) + self.awaiting_vmae[tid]
                     
                     # Check if collected enough frames
                     start_frame = self.last_vmae_frame.get(tid, 0)
@@ -381,41 +462,49 @@ class CameraProcessor:
                             
                             LOGGER.info(f"Track {tid}: VideoMAE result: {vmae_label} ({vmae_score:.2f})")
                             
-                            # If VideoMAE confirms anomaly, save clip and add to results
-                            # ONLY save clips for shoplifting and violence (critical anomalies)
+                            # If VideoMAE confirms anomaly (ANY non-normal label), save clip and add to results
+                            # This matches the original AI developers' behavior: any label != 'normal' is anomalous.frames go camera → backend → AI via HTTP, potentially with small resizing/delay.
                             label_lower = vmae_label.lower()
-                            is_critical = 'shoplifting' in label_lower or 'violence' in label_lower or 'fight' in label_lower
-                            
-                            if is_critical and vmae_score > 0.5:
-                                # Save clip only for shoplifting/violence
+                            if label_lower != 'normal' and vmae_score > 0.5:
                                 clip_name = f"{self.camera_id}_{tid}_{vmae_label.replace(' ', '_')}_{int(vmae_score*100)}.mp4"
                                 clip_path = self.clip_dir / clip_name
                                 
                                 try:
-                                    save_frames_as_video(cur_frames, self.fps, str(clip_path))
-                                    LOGGER.info(f"🎥 Track {tid}: Saved {vmae_label} clip: {clip_path.name}")
-                                    
-                                    results['clips'].append({
-                                        'track_id': tid,
-                                        'path': str(clip_path),
-                                        'label': vmae_label,
-                                        'score': vmae_score,
-                                    })
-                                    
-                                    # Add VideoMAE behavior (higher confidence than MobileNet)
-                                    results['behaviors'].append({
-                                        'track_id': tid,
-                                        'label': vmae_label,
-                                        'confidence': vmae_score,
-                                        'bbox': xyxy if tid in [t[0] for t in tracks] else None,
-                                        'source': 'videomae',
-                                        'clip_path': str(clip_path),
-                                    })
+                                    # Check if we have frames to save
+                                    if not cur_frames or len(cur_frames) == 0:
+                                        LOGGER.warning(f"Track {tid}: No frames to save for {vmae_label} clip")
+                                    else:
+                                        # Use actual processing FPS to ensure correct playback speed
+                                        # This ensures videos play at the same speed they were captured
+                                        save_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                                        clip_duration = len(cur_frames) / save_fps if save_fps > 0 else 0
+                                        LOGGER.info(f"Track {tid}: Saving {len(cur_frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
+                                        save_frames_as_video(cur_frames, save_fps, str(clip_path))
+                                        
+                                        # Verify file was actually created
+                                        if clip_path.exists() and clip_path.stat().st_size > 0:
+                                            LOGGER.info(f"🎥 Track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
+                                            
+                                            results['clips'].append({
+                                                'track_id': tid,
+                                                'path': str(clip_path),
+                                                'label': vmae_label,
+                                                'score': vmae_score,
+                                            })
+                                            
+                                            # Add VideoMAE behavior (higher confidence than MobileNet)
+                                            results['behaviors'].append({
+                                                'track_id': tid,
+                                                'label': vmae_label,
+                                                'confidence': vmae_score,
+                                                'bbox': xyxy if tid in [t[0] for t in tracks] else None,
+                                                'source': 'videomae',
+                                                'clip_path': str(clip_path),
+                                            })
+                                        else:
+                                            LOGGER.error(f"Track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
                                 except Exception as e:
-                                    LOGGER.error(f"Failed to save clip for track {tid}: {e}")
-                            elif vmae_score > 0.5:
-                                # Log non-critical detections but don't save clip or send alert
-                                LOGGER.debug(f"Track {tid}: Non-critical VideoMAE: {vmae_label} ({vmae_score:.2f})")
+                                    LOGGER.error(f"Failed to save clip for track {tid}: {e}", exc_info=True)
                             
                             # Cleanup VideoMAE state
                             self.vmae_results[tid] = (vmae_label, vmae_score)
@@ -431,7 +520,9 @@ class CameraProcessor:
                             # Restore buffer capacity
                             if tid in self.base_max_frames and tid in self.buffers:
                                 try:
-                                    self.buffers[tid].pop_oldest(int(self.extra_sec * self.fps))
+                                    # Use actual FPS for frame count calculation
+                                    buffer_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                                    self.buffers[tid].pop_oldest(int(self.extra_sec * buffer_fps))
                                     self.buffers[tid].set_capacity(self.base_max_frames[tid])
                                 except Exception:
                                     pass
@@ -453,12 +544,27 @@ class CameraProcessor:
                                 vmae_score = vres.get('score', 0.0)
                                 
                                 label_lower = vmae_label.lower()
-                                is_critical = 'shoplifting' in label_lower or 'violence' in label_lower or 'fight' in label_lower
-                                if is_critical and vmae_score > 0.5:
+                                if label_lower != 'normal' and vmae_score > 0.5:
                                     clip_name = f"{self.camera_id}_{tid}_{vmae_label.replace(' ', '_')}_{int(vmae_score*100)}_lost.mp4"
                                     clip_path = self.clip_dir / clip_name
-                                    save_frames_as_video(frames, self.fps, str(clip_path))
-                                    LOGGER.info(f"🎥 Lost track {tid}: Saved {vmae_label} clip: {clip_path.name}")
+                                    
+                                    if not frames or len(frames) == 0:
+                                        LOGGER.warning(f"Lost track {tid}: No frames to save for {vmae_label} clip")
+                                    else:
+                                        try:
+                                            # Use actual processing FPS to ensure correct playback speed
+                                            save_fps = self.actual_fps if self.actual_fps > 0 else self.fps
+                                            clip_duration = len(frames) / save_fps if save_fps > 0 else 0
+                                            LOGGER.info(f"Lost track {tid}: Saving {len(frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
+                                            save_frames_as_video(frames, save_fps, str(clip_path))
+                                            
+                                            # Verify file was actually created
+                                            if clip_path.exists() and clip_path.stat().st_size > 0:
+                                                LOGGER.info(f"🎥 Lost track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
+                                            else:
+                                                LOGGER.error(f"Lost track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
+                                        except Exception as e:
+                                            LOGGER.error(f"Failed to save lost track clip for {tid}: {e}", exc_info=True)
                             except Exception as e:
                                 LOGGER.debug(f"Failed to process lost track {tid}: {e}")
                 
@@ -481,8 +587,8 @@ class CameraProcessor:
         detections = results.get('detections', [])
         people_in_zone = results.get('people_in_zone', 0)
         
-        # Push detections when we have them (or every 10 frames to keep connection alive)
-        if len(detections) > 0 or self.frame_idx % 10 == 0:
+        # Push detections when we have them (or every 5 frames to keep connection alive - reduced from 10 for faster updates)
+        if len(detections) > 0 or self.frame_idx % 5 == 0:
             try:
                 resp = requests.post(
                     f"{self.backend_url}/api/events/detection-update",
@@ -530,7 +636,7 @@ class CameraProcessor:
                                 'count_out': cout,
                                 'ts': now,
                             },
-                            timeout=5
+                            timeout=1  # Reduced from 5s to 1s for faster in/out updates
                         )
                         if resp.status_code == 200:
                             LOGGER.info(f"✅ InOut update: camera={self.camera_id}, IN={cin}, OUT={cout}")
@@ -539,8 +645,9 @@ class CameraProcessor:
                 except Exception as e:
                     LOGGER.error(f"InOut push error: {e}", exc_info=True)
         
-        # Push behavior alerts - ONLY for VideoMAE confirmed shoplifting/violence
-        # MobileNet "suspicious" is just a filter to trigger VideoMAE, not an actual alert
+        # Push behavior alerts - for any VideoMAE-confirmed non-normal behavior
+        # (to match original AI developers' behavior). MobileNet "suspicious" is
+        # still just a filter to trigger VideoMAE.
         pushed_tracks = set()
         
         for behavior in results.get('behaviors', []):
@@ -552,18 +659,12 @@ class CameraProcessor:
             if tid in pushed_tracks:
                 continue
             
-            # Map label to anomaly type - ONLY shoplifting and violence
             label = behavior['label'].lower()
             
-            if 'shoplifting' in label:
-                anomaly_type = 'shoplifting'
-            elif 'violence' in label or 'fight' in label:
-                anomaly_type = 'violence'
-            else:
-                # Skip other labels (loitering, suspicious, normal, etc.)
-                # These don't warrant alerts/notifications
-                LOGGER.debug(f"Skipping non-critical VideoMAE label: {label}")
+            # Treat any non-normal VideoMAE label as an anomaly type.
+            if label == 'normal':
                 continue
+            anomaly_type = label
             
             pushed_tracks.add(tid)
             
@@ -582,7 +683,7 @@ class CameraProcessor:
                         'clip_ref': clip_ref,
                         'ts': now,
                     },
-                    timeout=5
+                    timeout=1  # Reduced from 5s to 1s for faster alert notifications
                 )
                 if resp.status_code == 200:
                     LOGGER.info(f"🚨 Alert pushed: {anomaly_type} ({behavior['confidence']:.2f}) clip={clip_ref}")
@@ -601,7 +702,7 @@ class AIService:
         self,
         backend_url: str = 'http://backend:8000',
         device: str = 'cuda',
-        poll_interval: float = 5.0,
+        poll_interval: float = 1.0,  # Reduced from 5.0 to 1.0 for faster camera discovery
     ):
         self.backend_url = backend_url
         self.device = device
@@ -728,8 +829,8 @@ class AIService:
                 except Exception as e:
                     LOGGER.error(f"Error processing camera {cam_id}: {e}")
             
-            # Small delay between cycles
-            time.sleep(0.05)  # ~20 FPS max per camera
+            # Small delay between cycles - reduced for faster processing
+            time.sleep(0.03)  # ~33 FPS max per camera (reduced from 0.05 for lower latency)
     
     def stop(self):
         """Stop the AI service."""

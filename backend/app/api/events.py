@@ -288,7 +288,7 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
         if event.clip_ref:
             # Extract just the filename from path (e.g., "/app/clips/camera_id_track_id_shoplifting_55.mp4" -> "camera_id_track_id_shoplifting_55.mp4")
             clip_filename = Path(event.clip_ref).name
-        
+
         alert = AlertModel(
             id=str(uuid.uuid4()),
             type="anomaly",

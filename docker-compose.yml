@@ -23,6 +23,7 @@ services:
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
     environment:
+      - TZ=Asia/Bangkok
       - DATABASE_URL=postgresql+psycopg://aips:aips@db:5432/aips
       - CORS_ORIGINS=http://localhost:3000
       - JWT_SECRET=dev-secret-change-me
@@ -68,6 +69,7 @@ services:
     container_name: aips-ai
     restart: unless-stopped
     environment:
+      - TZ=Asia/Bangkok
       - BACKEND_URL=http://backend:8000
       - AI_DEVICE=cuda  # GPU acceleration enabled
       - CLIPS_DIR=/app/clips  # Directory for saving video clips
