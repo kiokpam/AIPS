@@ -146,7 +146,7 @@ export default function AcceptInvitePage() {
               </p>
               {inviteInfo.expires_at && (
                 <p className="text-blue-300 mt-1">
-                  Expires: {new Date(inviteInfo.expires_at).toLocaleDateString()}
+                  Expires: {new Date(inviteInfo.expires_at).toLocaleDateString('en-US', { timeZone: 'Asia/Bangkok' })}
                 </p>
               )}
             </div>

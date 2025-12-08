@@ -9,14 +9,16 @@ FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Add NVIDIA apt repository for cuDNN 9
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Retry apt-get update to handle transient mirror sync issues
+RUN apt-get update || true && \
+    apt-get install -y --no-install-recommends \
     wget \
     ca-certificates \
     gnupg \
     && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && rm cuda-keyring_1.1-1_all.deb \
-    && apt-get update
+    && apt-get update || true
 
 # Install system dependencies including cuDNN 9 for CUDA 12
 RUN apt-get install -y --no-install-recommends \
@@ -50,10 +52,14 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     onnxruntime-gpu \
     deep-sort-realtime \
     ultralytics \
-    requests
+    requests \
+    websockets
 
-# Copy AI code
+# Copy AI code (including requirements.txt)
 COPY . .
+
+# Install any additional dependencies from requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt || true
 
 # Create clips directory
 RUN mkdir -p /app/clips

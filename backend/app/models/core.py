@@ -68,7 +68,7 @@ class Camera(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    source: Mapped[str] = mapped_column(String, nullable=False)  # RTSP URL, file path, or webcam ID
+    source: Mapped[str] = mapped_column(String, nullable=False)  # RTSP URL or file path
     ai_services: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     model_name: Mapped[str] = mapped_column(String, nullable=True, default=None)  # Optional - AI services not implemented yet
     device: Mapped[str] = mapped_column(String, nullable=True, default=None)  # Optional - AI services not implemented yet

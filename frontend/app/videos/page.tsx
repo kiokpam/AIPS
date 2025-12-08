@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { clipsApi, VideoClip } from '@/lib/api';
 import toast from 'react-hot-toast';
@@ -13,8 +13,6 @@ import {
   Calendar,
   Camera,
   AlertTriangle,
-  Search,
-  Filter,
   Clock,
   FileVideo,
   Trash2,
@@ -24,48 +22,32 @@ import {
 
 export default function VideosPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAuthenticated } = useAuth();
   const [videos, setVideos] = useState<VideoClip[]>([]);
-  const [filteredVideos, setFilteredVideos] = useState<VideoClip[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [behaviorFilter, setBehaviorFilter] = useState<string>('all');
   const [selectedVideo, setSelectedVideo] = useState<VideoClip | null>(null);
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/login');
-      return;
-    }
-
-    loadVideos();
-  }, [isAuthenticated, router]);
-
-  useEffect(() => {
-    let filtered = videos;
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(v =>
-        v.filename.toLowerCase().includes(query) ||
-        (v.camera_name?.toLowerCase().includes(query)) ||
-        (v.store_name?.toLowerCase().includes(query)) ||
-        (v.behavior?.toLowerCase().includes(query))
-      );
-    }
-
-    if (behaviorFilter !== 'all') {
-      filtered = filtered.filter(v => v.behavior === behaviorFilter);
-    }
-
-    setFilteredVideos(filtered);
-  }, [videos, searchQuery, behaviorFilter]);
-
-  const loadVideos = async () => {
+  const loadVideos = useCallback(async () => {
     try {
       setIsLoading(true);
       const response = await clipsApi.getClips({ limit: 100 });
       setVideos(response.clips);
+      
+      // Check if there's a clip query parameter and auto-select that video
+      const clipParam = searchParams.get('clip');
+      if (clipParam) {
+        const video = response.clips.find(v => v.filename === clipParam || v.id === clipParam);
+        if (video) {
+          setSelectedVideo(video);
+          // Remove the query parameter from URL after selecting
+          router.replace('/videos', { scroll: false });
+        } else {
+          toast.error('Video not found');
+          // Remove the query parameter if video not found
+          router.replace('/videos', { scroll: false });
+        }
+      }
     } catch (error: any) {
       console.error('Failed to load videos:', error);
       // Don't show error toast if clips directory just doesn't exist yet
@@ -75,7 +57,16 @@ export default function VideosPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [searchParams, router]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      router.push('/login');
+      return;
+    }
+
+    loadVideos();
+  }, [isAuthenticated, router, loadVideos]);
 
   const handleDelete = async (video: VideoClip) => {
     if (!confirm(`Are you sure you want to delete "${video.filename}"?`)) {
@@ -103,7 +94,9 @@ export default function VideosPage() {
   };
 
   const formatDate = (timestamp: string) => {
-    return new Date(timestamp).toLocaleString('en-US', {
+    const date = new Date(timestamp);
+    return date.toLocaleString('en-US', {
+      timeZone: 'Asia/Bangkok',
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -120,8 +113,8 @@ export default function VideosPage() {
   };
 
   const formatTimeAgo = (timestamp: string) => {
-    const now = new Date();
     const date = new Date(timestamp);
+    const now = new Date();
     const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
     if (diff < 60) return `${diff}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -146,8 +139,6 @@ export default function VideosPage() {
     if (confidence >= 0.6) return 'text-yellow-600';
     return 'text-red-600';
   };
-
-  const uniqueBehaviors = Array.from(new Set(videos.map(v => v.behavior).filter(Boolean)));
 
   if (!isAuthenticated) {
     return null;
@@ -176,35 +167,6 @@ export default function VideosPage() {
         </button>
       </div>
 
-      {/* Search and Filters */}
-      <div className="flex gap-3">
-        <div className="flex-1 relative">
-          <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search videos by name, camera, store, or behavior..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="input bg-slate-800 border-slate-700 pl-10 w-full"
-          />
-        </div>
-        <div className="relative">
-          <Filter className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 pointer-events-none" />
-          <select
-            value={behaviorFilter}
-            onChange={(e) => setBehaviorFilter(e.target.value)}
-            className="input bg-slate-800 border-slate-700 pl-10 pr-8"
-          >
-            <option value="all">All Behaviors</option>
-            {uniqueBehaviors.map(behavior => (
-              <option key={behavior} value={behavior} className="capitalize">
-                {behavior}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
       {/* Videos Grid */}
       <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
         {isLoading ? (
@@ -212,11 +174,11 @@ export default function VideosPage() {
             <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
             <p className="text-slate-400 mt-4">Loading videos...</p>
           </div>
-        ) : filteredVideos.length === 0 ? (
+        ) : videos.length === 0 ? (
           <div className="p-12 text-center">
             <FileVideo className="w-16 h-16 text-slate-500 mx-auto mb-4" />
             <p className="text-slate-400 mb-2">
-              {searchQuery || behaviorFilter !== 'all' ? 'No videos match your filters' : 'No videos saved yet'}
+              No videos saved yet
             </p>
             <p className="text-slate-500 text-sm">
               Videos will appear here when AI detects shoplifting or violence behavior
@@ -224,7 +186,7 @@ export default function VideosPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-6">
-            {filteredVideos.map((video) => (
+            {videos.map((video) => (
               <motion.div
                 key={video.id}
                 initial={{ opacity: 0, scale: 0.95 }}
@@ -286,6 +248,9 @@ export default function VideosPage() {
                           <span>{video.store_name}</span>
                         </>
                       )}
+                    </div>
+                    <div className="mt-1.5 text-xs text-slate-500 font-mono truncate" title={`Filename: ${video.filename}`}>
+                      📁 {video.filename}
                     </div>
                   </div>
 
@@ -363,7 +328,7 @@ export default function VideosPage() {
                   key={selectedVideo.filename} // Force re-render when video changes
                   src={clipsApi.getClipUrl(selectedVideo.filename)}
                   controls
-                  preload="metadata"
+                  preload="auto"
                   crossOrigin="anonymous"
                   playsInline
                   className="w-full aspect-video bg-black"
@@ -449,6 +414,13 @@ export default function VideosPage() {
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 col-span-2">
                   <p className="text-xs text-slate-400 mb-1">Recorded At</p>
                   <p className="text-slate-200 font-medium">{formatDate(selectedVideo.timestamp)}</p>
+                </div>
+                <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 col-span-2">
+                  <p className="text-xs text-slate-400 mb-1">Filename Structure</p>
+                  <p className="text-slate-200 font-mono text-sm break-all mb-2">{selectedVideo.filename}</p>
+                  <p className="text-xs text-slate-500">
+                    Format: <code className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300">camera_id_track_id_behavior_confidence.mp4</code>
+                  </p>
                 </div>
               </div>
 

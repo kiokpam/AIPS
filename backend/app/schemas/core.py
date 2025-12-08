@@ -56,7 +56,7 @@ class Camera(BaseModel):
     id: str
     store_id: str
     name: str
-    source: str  # RTSP URL, file path, or webcam ID
+    source: str  # RTSP URL or file path
     ai_services: List[str] = ["people_counting", "behavior_detection"]
     # Model configuration removed - AI services will handle all model settings
     skip_frame: int = 3
@@ -67,7 +67,7 @@ class Camera(BaseModel):
 class CameraCreate(BaseModel):
     store_id: str
     name: str
-    source: str  # RTSP URL only
+    source: str  # RTSP URL or file path
     ai_services: List[str] = ["people_counting", "behavior_detection"]
     # Model configuration removed - AI services will handle all model settings
     skip_frame: int = 3
@@ -75,7 +75,7 @@ class CameraCreate(BaseModel):
 
 class CameraUpdate(BaseModel):
     name: Optional[str] = None
-    source: Optional[str] = None  # RTSP URL only
+    source: Optional[str] = None  # RTSP URL or file path
     ai_services: Optional[List[str]] = None
     # Model configuration removed - AI services will handle all model settings
     skip_frame: Optional[int] = None

@@ -27,6 +27,26 @@ ENV/
 
 # VS Code
 .vscode/
-ai/videomae/best_checkpoint.pt
-ai/videomae/videomae_runner.onnx.data
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Model files (large)
+ai/videomae/videomae_runner.onnx
+models/*.pt
+models/*.onnx
+
+# Data and clips
 clips/
+*.mp4
+*.avi
+*.mov
+coordinate.json
+test_*.json
+
+
+# Metrics and logs
+metrics/
+*.log
+

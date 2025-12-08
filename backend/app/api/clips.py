@@ -211,6 +211,12 @@ def get_video_clip(
 
     if not clip_path.exists():
         raise HTTPException(status_code=404, detail="Clip not found")
+    
+    # Get file size early (before any processing) for faster response
+    try:
+        file_size = clip_path.stat().st_size
+    except OSError:
+        raise HTTPException(status_code=404, detail="Clip not found")
 
     ext = clip_path.suffix.lower()
     media_types = {
@@ -221,8 +227,7 @@ def get_video_clip(
     }
     media_type = media_types.get(ext, 'video/mp4')
 
-    file_size = clip_path.stat().st_size
-
+    # File size already retrieved above
     if range:
         range_header = range.replace('bytes=', '').split('-')
         start = int(range_header[0]) if range_header[0] else 0
@@ -250,6 +255,7 @@ def get_video_clip(
             media_type=media_type,
         )
 
+    # Use FileResponse - FastAPI handles streaming efficiently with range support
     return FileResponse(
         path=clip_path,
         media_type=media_type,

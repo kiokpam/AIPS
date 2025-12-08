@@ -21,7 +21,6 @@ export const vi = {
   video_file: 'Tệp video',
   choose_file: 'Chọn tệp',
   rtsp_url: 'URL RTSP',
-  webcam_id: 'ID Webcam',
   connect_preview: 'Kết nối xem trước',
   disconnect_preview: 'Ngắt xem trước',
   preview_connected: 'Đã kết nối xem trước',

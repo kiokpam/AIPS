@@ -43,6 +43,13 @@ services:
       - "8000:8000"
     volumes:
       - ./clips:/app/clips  # Shared with AI service for anomaly clips
+    # Webcam device access (Linux only - may not work on Windows/WSL)
+    # Uncomment the devices section below to enable webcam access in Docker
+    # On Linux: devices: ["/dev/video0", "/dev/video1"]
+    # On Windows/WSL: Webcam access from Docker is limited. Consider running backend outside Docker.
+    # devices:
+    #   - /dev/video0
+    #   - /dev/video1
     depends_on:
       db:
         condition: service_healthy
@@ -53,6 +60,7 @@ services:
     restart: unless-stopped
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_NOTIFICATION_URL=http://notification:8004
     ports:
       - "3000:3000"
     depends_on:
@@ -61,6 +69,36 @@ services:
       - ./frontend:/app
       - /app/node_modules
       - /app/.next
+
+  # Notification Service - Handles WebSocket, Email, Telegram notifications
+  notification:
+    build: ./notification-service
+    container_name: aips-notification
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Bangkok
+      - BACKEND_URL=http://backend:8000
+      - FRONTEND_URL=http://localhost:3000
+      # Email configuration
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-console}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-noreply@aips.local}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-AIPS}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      # Telegram configuration
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_MAX_RETRIES=${TELEGRAM_MAX_RETRIES:-3}
+      - TELEGRAM_RETRY_DELAY=${TELEGRAM_RETRY_DELAY:-5}
+    ports:
+      - "8004:8004"
+    depends_on:
+      - backend
+    volumes:
+      - ./clips:/app/clips  # Access to video clips for Telegram
 
   # AI Service - GPU Accelerated
   # Requires: NVIDIA GPU + nvidia-docker runtime

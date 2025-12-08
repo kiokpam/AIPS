@@ -1,6 +1,25 @@
 """
 Camera Management Service
-Handles camera registration, stream management, and frame processing
+
+This module provides camera registration, video stream management, and frame processing
+for the AIPS system. It handles multiple concurrent camera streams, manages video
+capture from various sources (RTSP, files), and coordinates with AI services
+for real-time video analytics.
+
+Key Components:
+    - VideoStream: Handles video capture from RTSP or file sources
+    - CameraWorker: Manages a single camera's frame processing and AI integration
+    - CameraManager: Orchestrates multiple cameras and provides API for camera management
+
+Features:
+    - Multi-source support (RTSP streams, video files)
+    - Automatic stream reconnection on failures
+    - Frame rate management and buffering
+    - Integration with AI services for detection overlays
+    - Resource limit management (max concurrent cameras)
+
+Author: AIPS Development Team
+License: See project LICENSE file
 """
 
 import os
@@ -17,7 +36,23 @@ from collections import deque
 os.environ.setdefault('OPENCV_FFMPEG_THREADS', '1')
 
 class VideoStream:
-    """Enhanced video stream handler for RTSP, webcam, and file sources"""
+    """
+    Enhanced video stream handler supporting multiple source types.
+    
+    This class provides a unified interface for video capture from various sources:
+    - RTSP streams (network cameras)
+    - Video files (local filesystem)
+    
+    Features:
+    - Automatic backend selection for optimal stability
+    - Frame rate detection and management
+    - Thread-safe frame access
+    - Automatic reconnection on stream failures
+    - Buffering control for real-time performance
+    
+    The stream runs in a background thread, continuously capturing frames
+    and making the latest frame available via the read() method.
+    """
     
     def __init__(self, src: str):
         self.src = self._normalize_source(src)
@@ -28,7 +63,7 @@ class VideoStream:
         if not self.cap or not self.cap.isOpened():
             raise RuntimeError(self._error_message(self.src))
 
-        # Lấy FPS metadata
+        # Get FPS metadata from video source
         self.video_fps = self.cap.get(cv2.CAP_PROP_FPS) or 0
         if self.video_fps <= 0 or self.video_fps > 60:
             self.video_fps = 30.0  # fallback
@@ -46,14 +81,12 @@ class VideoStream:
         self.frame_times = deque(maxlen=30)
         self.start_time = time.time()  # Track when stream started
 
-        # Log stream creation for debugging
+        # Log stream creation
         logger.info(f"Created VideoStream for source: {self.src}")
 
         threading.Thread(target=self._update, daemon=True, name=f"VideoStream-{id(self)}").start()
     
     def _error_message(self, src):
-        if isinstance(src, int):
-            return f"Cannot open webcam {src}"
         if isinstance(src, str):
             if src.startswith(("rtsp://", "http://")):
                 return f"Cannot open video stream: {src}"
@@ -71,7 +104,6 @@ class VideoStream:
     def _open_capture(self, src):
         """Open cv2.VideoCapture with appropriate backend for stability."""
         try:
-            # Webcam on Windows: prefer CAP_DSHOW to avoid MSMF grab errors
             if isinstance(src, int):
                 if os.name == 'nt':
                     cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
@@ -113,7 +145,8 @@ class VideoStream:
             # File
             return cv2.VideoCapture(src)
         except Exception as e:
-            print(f"Error opening capture for {src}: {e}")
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error opening capture for {src}: {e}")
             return cv2.VideoCapture(src)
     
     def _update(self):
@@ -279,7 +312,7 @@ class VideoStream:
         return None
     
     def stop(self):
-        """Stop the video stream"""
+        """Stop the video stream and release resources."""
         logger = logging.getLogger(__name__)
         self.running = False
         if self.cap:
@@ -294,14 +327,27 @@ class VideoStream:
                 self.cap = None
 
 class CameraWorker:
-    """Camera worker that manages video stream and AI processing"""
+    """
+    Camera worker that manages video stream and AI processing for a single camera.
+    
+    This class handles:
+    - Video stream initialization and management
+    - Frame capture and processing
+    - Integration with AI services for detection overlays
+    - Task configuration (zones, lines) management
+    - Statistics tracking (FPS, frame count, errors)
+    - Camera lifecycle management (start, stop, update config)
+    
+    The worker runs in a background thread, continuously processing frames
+    and making them available via the get_frame() method.
+    """
     
     def __init__(self, camera_id: str, store_id: str, source: str, 
                  name: str, ai_services: List[str] = None,
                  skip_frame: int = 3, shared_stream: Optional[VideoStream] = None):
         self.camera_id = camera_id
         self.store_id = store_id
-        self.source = source  # RTSP URL, file path, or webcam ID
+        self.source = source  # RTSP URL or file path
         self.name = name
         self.ai_services = ai_services or []
         
@@ -417,11 +463,12 @@ class CameraWorker:
             except Exception as e:
                 error_count += 1
                 self.stats["errors"] += 1
+                logger = logging.getLogger(__name__)
                 if error_count % 10 == 0:
-                    print(f"Error in camera {self.camera_id} processing (error #{error_count}): {e}")
+                    logger.error(f"Error in camera {self.camera_id} processing (error #{error_count}): {e}")
                 
                 if error_count >= max_errors:
-                    print(f"Too many errors for camera {self.camera_id}, stopping worker")
+                    logger.error(f"Too many errors for camera {self.camera_id}, stopping worker")
                     self.running = False
                     break
                     
@@ -521,7 +568,8 @@ class CameraManager:
             
             # Check resource limits
             if len(self.cameras) >= self.max_cameras:
-                print(f"Warning: Maximum camera limit ({self.max_cameras}) reached. Cannot add camera {camera_id}")
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Maximum camera limit ({self.max_cameras}) reached. Cannot add camera {camera_id}")
                 return False
             
             # Check if source is already in use - reuse existing VideoStream to avoid RTSP conflicts
@@ -707,38 +755,39 @@ class CameraManager:
             return buffer.tobytes()
         return None
     
-    def update_detections(self, camera_id: str, detections: List[Dict], people_in_zone: int = 0):
+    def update_detections(self, camera_id: str, detections: List[Dict], people_in_zone: int = 0, metrics: Optional[Dict] = None):
         """Update detection data from AI service for overlay visualization"""
         # Only update if we have detections, or if it's been >5s since last update (to clear stale data)
         current_data = self.camera_detections.get(camera_id)
         current_time = time.time()
+        
+        # Prepare update data
+        update_data = {
+            "people_in_zone": people_in_zone,
+            "updated_at": current_time
+        }
+        if metrics:
+            update_data["metrics"] = metrics
         
         # If we have detections, always update
         # If no detections but we have recent data (<5s), keep the old data (don't overwrite with empty)
         # If no detections and data is stale (>5s), clear it
         if len(detections) > 0:
             # Always update when we have detections
-            self.camera_detections[camera_id] = {
-                "detections": detections,
-                "people_in_zone": people_in_zone,
-                "updated_at": current_time
-            }
+            update_data["detections"] = detections
+            self.camera_detections[camera_id] = update_data
         elif current_data and (current_time - current_data.get("updated_at", 0)) < 5.0:
             # Keep existing detections if they're recent (within 5s)
             # This prevents empty updates from clearing valid bounding boxes
-            # Only update the timestamp and people_in_zone
-            self.camera_detections[camera_id] = {
-                "detections": current_data.get("detections", []),
-                "people_in_zone": people_in_zone,
-                "updated_at": current_data.get("updated_at", current_time)
-            }
+            # Only update the timestamp, people_in_zone, and metrics
+            update_data["detections"] = current_data.get("detections", [])
+            if "metrics" in current_data and "metrics" not in update_data:
+                update_data["metrics"] = current_data["metrics"]
+            self.camera_detections[camera_id] = update_data
         else:
             # Clear stale data (>5s old) or initialize new entry
-            self.camera_detections[camera_id] = {
-                "detections": [],
-                "people_in_zone": people_in_zone,
-                "updated_at": current_time
-            }
+            update_data["detections"] = []
+            self.camera_detections[camera_id] = update_data
         
         # Also update the camera worker's current_count for stats API
         camera = self.cameras.get(camera_id)

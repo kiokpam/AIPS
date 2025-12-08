@@ -16,6 +16,7 @@ from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as
 from app.schemas.events import CounterUpdateEvent, InOutUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse, DetectionUpdateEvent
 from app.services.camera_manager import camera_manager
 from app.services.websocket_manager import inout_ws_manager
+import httpx
 
 # Clips directory (shared with AI service)
 CLIPS_DIR = Path(os.environ.get('CLIPS_DIR', '/app/clips'))
@@ -313,6 +314,71 @@ def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(
         db.refresh(alert)
         
         logger.info(f"Anomaly detected: {event.type} at {event.store_id}/{event.camera_id} - severity: {event.severity} (Alert ID: {alert.id})")
+        
+        # Get store and camera names for notification
+        store_name = store.name if store else None
+        camera_name = camera.name if camera else None
+        
+        # Prepare notification data
+        notification_url = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification:8004")
+        clip_path = None
+        if event.clip_ref:
+            # Full path to clip for Telegram
+            clip_path = f"/app/clips/{clip_filename}"
+        
+        alert_data = {
+            "id": alert.id,
+            "type": alert.type,
+            "severity": alert.severity,
+            "message": alert.message,
+            "store_id": alert.store_id,
+            "camera_id": alert.camera_id,
+            "anomaly_type": alert.anomaly_type,
+            "confidence": alert.confidence,
+            "clip_ref": alert.clip_ref,
+            "timestamp": alert.timestamp.isoformat().replace('+00:00', 'Z') if alert.timestamp.tzinfo else alert.timestamp.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "acknowledged": alert.acknowledged,
+            "store_name": store_name,
+            "camera_name": camera_name,
+        }
+        
+        # Send notification via notification service
+        try:
+            notification_payload = {
+                "org_id": store.org_id,
+                "alert_id": alert.id,
+                "type": "alert",
+                "channels": ["websocket", "telegram"],
+                "data": {
+                    "type": "alert_update",
+                    "alert": alert_data,
+                    "video_path": clip_path,  # For Telegram video
+                    "message": f"🚨 Alert: {alert.anomaly_type} detected at {store_name or 'Unknown Store'}"
+                }
+            }
+            
+            # Call notification service asynchronously (non-blocking)
+            try:
+                # Use httpx in a thread to avoid blocking
+                def send_notification():
+                    try:
+                        httpx.post(
+                            f"{notification_url}/notifications/send",
+                            json=notification_payload,
+                            timeout=5.0
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send notification: {e}")
+                
+                import threading
+                thread = threading.Thread(target=send_notification, daemon=True)
+                thread.start()
+            except Exception as e:
+                logger.warning(f"Failed to start notification thread: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to send notification via notification service: {e}")
+            # Continue even if notification fails
+        
         return {"status": "success", "message": "Anomaly event received and stored", "alert_id": alert.id}
     except HTTPException:
         raise

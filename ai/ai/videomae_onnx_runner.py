@@ -50,9 +50,12 @@ class VideoMAEONNXRunner:
             self.label_names = None
         
         # Setup ONNX Runtime session
-        onnx_path = self.model_dir / 'videomae.onnx'
+        # Try videomae_runner.onnx first (from AI developers), fallback to videomae.onnx
+        onnx_path = self.model_dir / 'videomae_runner.onnx'
         if not onnx_path.exists():
-            raise FileNotFoundError(f'ONNX model not found at {onnx_path}')
+            onnx_path = self.model_dir / 'videomae.onnx'
+        if not onnx_path.exists():
+            raise FileNotFoundError(f'ONNX model not found. Expected videomae_runner.onnx or videomae.onnx in {self.model_dir}')
         
         providers = []
         if device == 'cuda' or device == 'gpu':

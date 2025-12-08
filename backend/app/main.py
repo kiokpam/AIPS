@@ -1,3 +1,11 @@
+"""
+AIPS Backend Application
+
+FastAPI backend service for the AI-Powered Store Surveillance System.
+Handles camera management, video streaming, AI integration, and API endpoints.
+"""
+
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -5,6 +13,8 @@ from app.api.routes import router as api_router
 from app.config.settings import get_settings
 from app.models import Base
 from app.db.session import engine
+
+logger = logging.getLogger(__name__)
 
 
 class HealthResponse(BaseModel):
@@ -48,36 +58,19 @@ def on_startup() -> None:
     for attempt in range(max_retries):
         try:
             Base.metadata.create_all(bind=engine)
-            print("✅ Database connection established and tables created")
+            logger.info("Database connection established and tables created")
             break
         except Exception as e:
             if attempt < max_retries - 1:
-                print(f"⚠️ Database not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                logger.warning(f"Database not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
                 time.sleep(retry_delay)
             else:
-                print(f"❌ Failed to connect to database after {max_retries} attempts: {e}")
+                logger.error(f"Failed to connect to database after {max_retries} attempts: {e}")
                 # Don't raise - let the app start and retry on first request
-                print("⚠️ Application will start but database operations may fail until connection is established")
+                logger.warning("Application will start but database operations may fail until connection is established")
 
-    # Initialize email service
-    try:
-        from app.services.email_service import email_service
-        email_service.initialize(
-            provider=settings.email_provider,
-            frontend_url=settings.frontend_url,
-            smtp_host=settings.smtp_host,
-            smtp_port=settings.smtp_port,
-            smtp_username=settings.smtp_username,
-            smtp_password=settings.smtp_password,
-            smtp_use_tls=settings.smtp_use_tls,
-            sendgrid_api_key=settings.sendgrid_api_key,
-            from_email=settings.email_from_address,
-            from_name=settings.email_from_name,
-        )
-        print(f"✅ Email service initialized (provider: {settings.email_provider})")
-    except Exception as e:
-        print(f"⚠️ Email service initialization failed: {e}")
-        print("⚠️ Password reset emails will not be sent")
+    # Email service is now handled by notification service
+    logger.info("Email notifications are handled by notification service")
     
     # Auto-restore active cameras from database
     try:
@@ -91,7 +84,7 @@ def on_startup() -> None:
             active_cameras = db.query(CameraModel).filter(CameraModel.is_active == True).all()
             
             if active_cameras:
-                print(f"🎥 Restoring {len(active_cameras)} active camera(s)...")
+                logger.info(f"Restoring {len(active_cameras)} active camera(s)...")
                 
                 restored = 0
                 failed = 0
@@ -112,26 +105,26 @@ def on_startup() -> None:
                         
                         if success:
                             restored += 1
-                            print(f"   ✅ Camera '{camera.name}' restored")
+                            logger.info(f"Camera '{camera.name}' restored")
                         else:
                             # Mark as inactive if can't restore
                             camera.is_active = False
                             db.commit()
                             failed += 1
-                            print(f"   ⚠️ Camera '{camera.name}' failed to restore (marked inactive)")
+                            logger.warning(f"Camera '{camera.name}' failed to restore (marked inactive)")
                     except Exception as cam_err:
                         camera.is_active = False
                         db.commit()
                         failed += 1
-                        print(f"   ⚠️ Camera '{camera.name}' error: {cam_err}")
+                        logger.error(f"Camera '{camera.name}' error: {cam_err}")
                 
-                print(f"🎥 Camera restore complete: {restored} restored, {failed} failed")
+                logger.info(f"Camera restore complete: {restored} restored, {failed} failed")
             else:
-                print("🎥 No active cameras to restore")
+                logger.info("No active cameras to restore")
         finally:
             db.close()
     except Exception as e:
-        print(f"⚠️ Camera auto-restore failed: {e}")
-        print("⚠️ Cameras can be started manually from the UI")
+        logger.error(f"Camera auto-restore failed: {e}")
+        logger.warning("Cameras can be started manually from the UI")
 
 

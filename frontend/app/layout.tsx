@@ -1,19 +1,20 @@
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Toaster } from 'react-hot-toast';
 import AppLayout from './app-layout';
 import { I18nProvider } from '@/src/contexts/I18nContext';
 import { AuthProvider } from '@/src/contexts/AuthContext';
+import { DataProvider } from '@/src/contexts/DataContext';
 
-const inter = Inter({ subsets: ['latin'] });
+// Get base URL from environment or use default
+const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3000';
 
 export const metadata: Metadata = {
+  metadataBase: new URL(baseUrl),
   title: 'AIPS - AI-Powered Store Surveillance System',
   description: 'Advanced AI-powered surveillance system for retail security, customer analytics, and loss prevention.',
   keywords: 'AI, surveillance, retail, security, analytics, computer vision, machine learning',
   authors: [{ name: 'AIPS Team' }],
-  viewport: 'width=device-width, initial-scale=1',
   robots: 'index, follow',
   openGraph: {
     title: 'AIPS - AI-Powered Store Surveillance System',
@@ -28,6 +29,11 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+};
+
 export default function RootLayout({
   children,
 }: {
@@ -35,12 +41,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="h-full">
-      <body className={`${inter.className} h-full antialiased dark-blue`}>
+      <body className="h-full antialiased dark-blue">
         <I18nProvider>
           <AuthProvider>
-            <AppLayout>
-              {children}
-            </AppLayout>
+            <DataProvider>
+              <AppLayout>
+                {children}
+              </AppLayout>
+            </DataProvider>
           </AuthProvider>
         </I18nProvider>
         <Toaster

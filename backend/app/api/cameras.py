@@ -1,3 +1,20 @@
+"""
+Camera Management API
+
+REST API endpoints for camera management, including:
+- Camera CRUD operations (create, read, update, delete)
+- Camera start/stop control
+- Real-time video streaming
+- Camera statistics and health monitoring
+- Task configuration (zones, lines)
+
+This module provides the HTTP interface for camera management operations,
+integrating with the camera_manager service for actual video processing.
+
+Author: AIPS Development Team
+License: See project LICENSE file
+"""
+
 import logging
 import uuid
 from typing import Any, Dict, List

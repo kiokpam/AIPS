@@ -19,7 +19,7 @@ router = APIRouter(prefix="/preview", tags=["preview"])
 @router.get("/stream")
 def preview_stream(
     request: Request,
-    source: str = Query(..., description="Video source (RTSP URL, file path, or webcam ID)"),
+    source: str = Query(..., description="Video source (RTSP URL or file path)"),
     current: CurrentMembership = Depends(get_current_membership_optional),
     db: Session = Depends(get_db),
 ):
@@ -62,11 +62,18 @@ def test_source(
         def test_connection():
             cap = None
             try:
+                # Normalize source
+                normalized_source = source
+                if isinstance(source, str) and not source.startswith(("rtsp://", "http://", "/")):
+                    # Try to treat as file path
+                    import os
+                    normalized_source = os.path.abspath(source)
+                
                 # Try opening with retry (some sources need a moment between connections)
                 max_retries = 2
                 for attempt in range(max_retries):
                     try:
-                        cap = cv2.VideoCapture(source)
+                        cap = cv2.VideoCapture(normalized_source)
                         # Set timeout for opening (some RTSP sources take time)
                         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
                         if cap.isOpened():

@@ -179,7 +179,7 @@ export default function OrganizationsPage() {
                       <div className="flex items-center gap-2 mt-1">
                         <Calendar className="w-3 h-3 text-slate-500" />
                         <p className="text-xs text-slate-400">
-                          Created {new Date(org.created_at).toLocaleDateString()}
+                          Created {new Date(org.created_at).toLocaleDateString('en-US', { timeZone: 'Asia/Bangkok' })}
                         </p>
                       </div>
                     </div>

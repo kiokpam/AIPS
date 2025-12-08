@@ -80,7 +80,7 @@ docker-compose.yml      # Orchestrates services
 ## Core User Flows
 
 1) Add a camera
-- Frontend calls `POST /api/cameras/` with name, source (RTSP/file/webcam), model params.
+- Frontend calls `POST /api/cameras/` with name, source (RTSP/file), model params.
 - Backend persists a `Camera`, the worker can be started via `POST /api/cameras/{id}/start`.
 - UI marks camera as active optimistically and polls stats.
 

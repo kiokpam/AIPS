@@ -15,3 +15,4 @@ ultralytics
 
 # API communication
 requests
+websockets

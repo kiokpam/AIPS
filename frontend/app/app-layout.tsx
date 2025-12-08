@@ -43,7 +43,7 @@ const navigation = [
     current: false,
     children: [
       {
-        name: 'In/Out Analytics',
+        name: 'Counting Analytics',
         href: '/dashboard/in-out',
         icon: TrendingUp
       },

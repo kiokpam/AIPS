@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
 import { useAuth } from '@/src/contexts/AuthContext';
-import { authApi, eventsApi, storeApi, cameraApi, clipsApi, type Alert, type Store, type Camera } from '@/lib/api';
+import { useData } from '@/src/contexts/DataContext';
+import { authApi, eventsApi, clipsApi, type Alert, type Store, type Camera, buildWsUrl } from '@/lib/api';
+import { wsManager } from '@/lib/websocket-manager';
 import DashboardFilters from '@/components/DashboardFilters';
 import { 
   Shield, 
@@ -33,10 +35,9 @@ export default function BehaviorDashboardPage() {
   const { t, lang } = useI18n();
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
+  const { stores: storeList, cameras: cameraList } = useData();
   const [isLoading, setIsLoading] = useState(true);
   const [hasAccess, setHasAccess] = useState<boolean | null>(null);
-  const [storeList, setStoreList] = useState<Store[]>([]);
-  const [cameraList, setCameraList] = useState<Camera[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -44,6 +45,7 @@ export default function BehaviorDashboardPage() {
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
   const [alertTypeFilter, setAlertTypeFilter] = useState<string>('all');
+  const fetchDataLoadingRef = useRef(false);
 
   // Filter alerts based on selections
   const filteredAlerts = useMemo(() => {
@@ -91,24 +93,31 @@ export default function BehaviorDashboardPage() {
     return counts;
   }, [filteredAlerts]);
 
-  // Fetch data
+  // Fetch data (only alerts, stores and cameras come from DataContext)
   const fetchData = useCallback(async () => {
+    // Prevent overlapping requests
+    if (fetchDataLoadingRef.current) {
+      return;
+    }
+    fetchDataLoadingRef.current = true;
+    
     try {
       setError(null);
       
-      const [storesData, camerasData, alertsData] = await Promise.all([
-        storeApi.getStores(),
-        cameraApi.getCameras(),
-        eventsApi.getAlerts({ limit: 100 }),
-      ]);
+      // Only fetch alerts - stores and cameras come from DataContext
+      const alertsData = await eventsApi.getAlerts({ limit: 100 });
       
-      setStoreList(storesData);
-      setCameraList(camerasData);
       setAlerts(alertsData.alerts);
       setUnreadCount(alertsData.unread_count);
     } catch (err: any) {
+      // Ignore network errors from aborted/cancelled requests
+      if (err.code === 'ERR_CANCELED' || err.name === 'AbortError' || err.code === 'ERR_NETWORK') {
+        return;
+      }
       console.error('Failed to fetch behavior data:', err);
       setError(err.message || 'Failed to load data');
+    } finally {
+      fetchDataLoadingRef.current = false;
     }
   }, []);
 
@@ -148,7 +157,8 @@ export default function BehaviorDashboardPage() {
       if (user.active_membership.role === 'manager') {
         setHasAccess(true);
         await fetchData();
-        interval = setInterval(fetchData, 2000);  // Reduced from 10000ms to 2000ms for faster updates
+        // Reduced polling interval since we have WebSocket for real-time updates
+        interval = setInterval(fetchData, 30000);  // Poll every 30 seconds as backup
         setIsLoading(false);
         return;
       }
@@ -161,7 +171,8 @@ export default function BehaviorDashboardPage() {
         setHasAccess(permissions.can_access_dashboard);
         if (permissions.can_access_dashboard) {
           await fetchData();
-          interval = setInterval(fetchData, 2000);  // Reduced from 10000ms to 2000ms for faster updates
+          // Reduced polling interval since we have WebSocket for real-time updates
+          interval = setInterval(fetchData, 30000);  // Poll every 30 seconds as backup
         }
       } catch (error: any) {
         setHasAccess(false);
@@ -176,6 +187,50 @@ export default function BehaviorDashboardPage() {
       if (interval) clearInterval(interval);
     };
   }, [isAuthenticated, user, fetchData]);
+
+  // WebSocket connection for real-time alert updates
+  useEffect(() => {
+    if (!hasAccess || !isAuthenticated || typeof window === 'undefined' || !user) return;
+
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+
+    const alertsWsUrl = buildWsUrl(
+      `/ws/alerts?token=${encodeURIComponent(token)}`,
+      true
+    ); // Use notification service
+
+    const handleAlertMessage = (data: any) => {
+      if (data.type === 'alert_update' && data.alert) {
+        const newAlert = data.alert as Alert;
+        
+        // Add new alert to the list (prepend to show newest first)
+        setAlerts(prev => {
+          // Check if alert already exists (avoid duplicates)
+          if (prev.some(a => a.id === newAlert.id)) {
+            return prev;
+          }
+          return [newAlert, ...prev];
+        });
+        
+        // Update unread count
+        if (!newAlert.acknowledged) {
+          setUnreadCount(prev => prev + 1);
+        }
+      }
+    };
+
+    const ws = wsManager.getConnection({
+      url: alertsWsUrl,
+      onMessage: handleAlertMessage,
+      reconnect: true,
+      reconnectDelay: 5000,
+    });
+
+    return () => {
+      wsManager.removeListener(alertsWsUrl, handleAlertMessage);
+    };
+  }, [hasAccess, isAuthenticated, user]);
 
   if (isLoading || hasAccess === null) {
     return (
@@ -211,7 +266,14 @@ export default function BehaviorDashboardPage() {
     if (diff < 60) return lang === 'vi' ? `${diff}s trước` : `${diff}s ago`;
     if (diff < 3600) return lang === 'vi' ? `${Math.floor(diff / 60)}m trước` : `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return lang === 'vi' ? `${Math.floor(diff / 3600)}h trước` : `${Math.floor(diff / 3600)}h ago`;
-    return date.toLocaleDateString();
+    // Show date/time in the viewer's local timezone
+    return date.toLocaleString(lang === 'vi' ? 'vi-VN' : 'en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   const getBehaviorStyles = (type: string) => {
@@ -526,19 +588,19 @@ export default function BehaviorDashboardPage() {
                               </div>
                               
                               {alert.clip_ref && (
-                                <a
-                                  href={clipsApi.getClipUrl(alert.clip_ref)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-lg transition-colors"
-                                  title={lang === 'vi' ? 'Xem video' : 'View video'}
+                                <button
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    if (alert.clip_ref) {
+                                      router.push(`/videos?clip=${encodeURIComponent(alert.clip_ref)}`);
+                                    }
                                   }}
+                                  className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-lg transition-colors"
+                                  title={lang === 'vi' ? 'Xem video' : 'View video'}
                                 >
                                   <Play className="w-3 h-3" />
                                   <span>{lang === 'vi' ? 'Xem video' : 'View Video'}</span>
-                                </a>
+                                </button>
                               )}
                             </div>
                           </div>

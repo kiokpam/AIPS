@@ -406,7 +406,7 @@ export default function HomePage() {
 
           {/* Demo Images Grid */}
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-            {/* Dashboard Screenshot */}
+            {/* Cameras Page Screenshot */}
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               whileInView={{ opacity: 1, scale: 1 }}
@@ -416,8 +416,8 @@ export default function HomePage() {
             >
               <div className="aspect-video relative bg-slate-900">
                 <Image
-                  src="/demos/dashboard.png"
-                  alt={lang === 'vi' ? 'Bảng điều khiển' : 'Dashboard'}
+                  src="/demos/cameras.png"
+                  alt={lang === 'vi' ? 'Trang Camera' : 'Cameras Page'}
                   fill
                   className="object-cover group-hover:scale-105 transition-transform duration-300"
                   unoptimized
@@ -428,10 +428,10 @@ export default function HomePage() {
               </div>
               <div className="p-4">
                 <h3 className="text-lg font-semibold text-white mb-1">
-                  {lang === 'vi' ? 'Bảng Điều Khiển' : 'Dashboard'}
+                  {lang === 'vi' ? 'Quản Lý Camera' : 'Camera Management'}
                 </h3>
                 <p className="text-sm text-slate-400">
-                  {lang === 'vi' ? 'Theo dõi camera và cảnh báo thời gian thực' : 'Real-time camera monitoring and alerts'}
+                  {lang === 'vi' ? 'Cấu hình và quản lý camera với vùng đếm và đường đếm' : 'Configure and manage cameras with counting zones and lines'}
                 </p>
               </div>
             </motion.div>

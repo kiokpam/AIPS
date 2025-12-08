@@ -20,6 +20,7 @@ import {
   Copy
 } from 'lucide-react';
 import { useAuth } from '@/src/contexts/AuthContext';
+import { useData } from '@/src/contexts/DataContext';
 import { authApi, storeApi, cameraApi, Store as StoreType, Camera, MemberPermissionRequest, StoreMemberAccountSummary } from '@/lib/api';
 import toast from 'react-hot-toast';
 
@@ -34,6 +35,7 @@ interface StoreWithAccess extends StoreType {
 
 export default function ManagersPage() {
   const { user, isAuthenticated } = useAuth();
+  const { stores: storesFromContext, cameras: camerasFromContext, isLoading: dataLoading, refreshAll } = useData();
   const [stores, setStores] = useState<StoreWithAccess[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddStoreModal, setShowAddStoreModal] = useState(false);
@@ -58,38 +60,31 @@ export default function ManagersPage() {
   });
   const [errors, setErrors] = useState<{[key: string]: string}>({});
 
+  // Use data from DataContext instead of making redundant API calls
   useEffect(() => {
     if (isAuthenticated && user?.active_membership.role === 'manager') {
-      loadStores();
-    }
-  }, [isAuthenticated, user]);
-
-  const loadStores = async () => {
-    if (!user?.active_membership.organization.id) return;
-    try {
-      setIsLoading(true);
-      const storesList = await storeApi.getStores();
-      const camerasList = await cameraApi.getCameras();
-      
-      // Get member permissions for each store
-      const storesWithAccess: StoreWithAccess[] = storesList.map((store) => {
-        const storeCameras = camerasList.filter(c => c.store_id === store.id);
+      if (storesFromContext.length > 0 || !dataLoading) {
+        // Data is already loaded from DataContext
+        const storesWithAccess: StoreWithAccess[] = storesFromContext.map((store) => {
+          const storeCameras = camerasFromContext.filter(c => c.store_id === store.id);
+          
+          return {
+            ...store,
+            hasMemberAccess: false, // Will be determined when checking permissions
+            cameraCount: storeCameras.length,
+            memberPermissions: undefined // Will be loaded when opening modal
+          };
+        });
         
-        return {
-          ...store,
-          hasMemberAccess: false, // Will be determined when checking permissions
-          cameraCount: storeCameras.length,
-          memberPermissions: undefined // Will be loaded when opening modal
-        };
-      });
-      
-      setStores(storesWithAccess);
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to load stores');
-    } finally {
-      setIsLoading(false);
+        setStores(storesWithAccess);
+        setCameras(camerasFromContext);
+        setIsLoading(false);
+      } else {
+        // Still loading from DataContext
+        setIsLoading(true);
+      }
     }
-  };
+  }, [isAuthenticated, user, storesFromContext, camerasFromContext, dataLoading]);
 
   const loadStoreMembers = async (storeId: string, silent = false) => {
     setStoreMembersLoading(prev => ({ ...prev, [storeId]: true }));
@@ -125,7 +120,8 @@ export default function ManagersPage() {
       setShowAddStoreModal(false);
       setNewStoreName('');
       setErrors({});
-      loadStores();
+      // Refresh data from DataContext instead of calling loadStores
+      await refreshAll();
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Failed to create store');
     }
@@ -135,30 +131,25 @@ export default function ManagersPage() {
     setSelectedStore(store);
     setEditingMember(null);
     
-    // Load cameras for this store
-    try {
-      const allCameras = await cameraApi.getCameras();
-      const storeCameras = allCameras.filter(c => c.store_id === store.id);
-      setCameras(storeCameras);
-      
-      // Load existing permissions if any
-      // For now, we'll start fresh - in production, load from API
-      setPermissionFormData({
-        camera_ids: [],
-        can_access_dashboard: true
-      });
-      setMemberUsername('');
-      setMemberPassword('');
-      setConfirmPassword('');
-      setCreatedAccount(null);
-      setErrors({});
-      setStoreMembers(prev => ({ ...prev, [store.id]: prev[store.id] ?? [] }));
-      loadStoreMembers(store.id, true);
-      
-      setShowMemberAccessModal(true);
-    } catch (error: any) {
-      toast.error('Failed to load cameras');
-    }
+    // Load cameras for this store (use DataContext)
+    const storeCameras = camerasFromContext.filter(c => c.store_id === store.id);
+    setCameras(storeCameras);
+    
+    // Load existing permissions if any
+    // For now, we'll start fresh - in production, load from API
+    setPermissionFormData({
+      camera_ids: [],
+      can_access_dashboard: true
+    });
+    setMemberUsername('');
+    setMemberPassword('');
+    setConfirmPassword('');
+    setCreatedAccount(null);
+    setErrors({});
+    setStoreMembers(prev => ({ ...prev, [store.id]: prev[store.id] ?? [] }));
+    loadStoreMembers(store.id, true);
+    
+    setShowMemberAccessModal(true);
   };
 
   const handleEditMember = async (member: StoreMemberAccountSummary) => {
@@ -181,16 +172,11 @@ export default function ManagersPage() {
     setErrors({});
     setCreatedAccount(null);
     
-    // Load cameras for this store
-    try {
-      const allCameras = await cameraApi.getCameras();
-      const storeCameras = allCameras.filter(c => c.store_id === memberStore.id);
-      setCameras(storeCameras);
-      setShowMemberAccessModal(true);
-      toast(`Editing access for ${member.username}`, { icon: '✏️' });
-    } catch (error: any) {
-      toast.error('Failed to load cameras');
-    }
+    // Load cameras for this store (use DataContext)
+    const storeCameras = camerasFromContext.filter(c => c.store_id === memberStore.id);
+    setCameras(storeCameras);
+    setShowMemberAccessModal(true);
+    toast(`Editing access for ${member.username}`, { icon: '✏️' });
   };
 
   const handleSaveMemberAccess = async () => {
@@ -282,7 +268,7 @@ export default function ManagersPage() {
         
         toast.success(`Member account created for ${selectedStore.name}`);
         await loadStoreMembers(selectedStore.id, true);
-        loadStores();
+        await refreshAll();
       }
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Failed to create member account');
@@ -789,7 +775,7 @@ export default function ManagersPage() {
                             <p className="text-slate-100 font-semibold">{member.username}</p>
                             <p className="text-xs text-slate-400">{member.email}</p>
                             <p className="text-[11px] text-slate-500 mt-1">
-                              Created {new Date(member.created_at).toLocaleString()}
+                              Created {new Date(member.created_at).toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}
                             </p>
                           </div>
                           <div className="flex items-center gap-2">

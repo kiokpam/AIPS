@@ -56,7 +56,15 @@ export default function StoreAnalyticsCard({
     if (diff < 60) return lang === 'vi' ? `${diff} giây trước` : `${diff}s ago`;
     if (diff < 3600) return lang === 'vi' ? `${Math.floor(diff / 60)} phút trước` : `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return lang === 'vi' ? `${Math.floor(diff / 3600)} giờ trước` : `${Math.floor(diff / 3600)}h ago`;
-    return date.toLocaleDateString();
+    // Show date/time in UTC+7
+    return date.toLocaleString(lang === 'vi' ? 'vi-VN' : 'en-US', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   // Calculate conversion rate (out/in ratio)

@@ -4,10 +4,8 @@ FROM node:18-alpine AS base
 # Install dependencies only when needed
 FROM base AS deps
 # Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine to understand why libc6-compat might be needed.
-# Added retry logic for network resilience
-RUN apk add --no-cache libc6-compat || \
-    (sleep 5 && apk add --no-cache libc6-compat) || \
-    (sleep 10 && apk add --no-cache libc6-compat)
+# For Alpine 3.21+, libc6-compat is not available and is usually not needed for Next.js 18.
+# If you encounter issues with native modules, you may need to install gcompat or use a different base image.
 WORKDIR /app
 
 # Install dependencies based on the preferred package manager

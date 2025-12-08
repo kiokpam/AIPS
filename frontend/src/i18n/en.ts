@@ -21,7 +21,6 @@ export const en = {
   video_file: 'Video File',
   choose_file: 'Choose File',
   rtsp_url: 'RTSP URL',
-  webcam_id: 'Webcam ID',
   connect_preview: 'Connect Preview',
   disconnect_preview: 'Disconnect Preview',
   preview_connected: 'Preview connected',

@@ -123,14 +123,37 @@ def get_camera_config_for_ai(
     ).all()
     
     # Format zones for AI (polygon as [[x,y], ...])
-    zones = [
-        {
+    # Zones are stored in pixel coordinates, but we need to normalize them based on frame size
+    # Get frame dimensions to normalize coordinates
+    frame = camera_manager.get_camera_frame(camera_id)
+    frame_w = frame.shape[1] if frame is not None else 1920  # Default fallback
+    frame_h = frame.shape[0] if frame is not None else 1080  # Default fallback
+    
+    zones = []
+    for zone in db_zones:
+        polygon = zone.polygon
+        # Check if coordinates are already normalized (0-1) or in pixels
+        # If any coordinate > 1.0, assume pixels and normalize
+        is_normalized = all(
+            len(p) >= 2 and 0.0 <= float(p[0]) <= 1.0 and 0.0 <= float(p[1]) <= 1.0
+            for p in polygon
+        ) if polygon else True
+        
+        if not is_normalized and frame_w > 0 and frame_h > 0:
+            # Normalize pixel coordinates to [0,1] range
+            normalized_polygon = [
+                [float(p[0]) / frame_w, float(p[1]) / frame_h]
+                for p in polygon if len(p) >= 2
+            ]
+        else:
+            # Already normalized or empty
+            normalized_polygon = polygon
+        
+        zones.append({
             "id": zone.id,
             "name": zone.name,
-            "polygon": zone.polygon,  # Already stored as [[x,y], ...]
-        }
-        for zone in db_zones
-    ]
+            "polygon": normalized_polygon,  # Normalized coordinates [0,1]
+        })
     
     # Query lines from database
     db_lines = db.query(CountingLine).filter(
@@ -219,6 +242,38 @@ def get_camera_health_for_ai(
         "fps": stats.get("fps", 0),
         "frame_count": stats.get("frame_count", 0),
         "errors": stats.get("errors", 0),
+    }
+
+@router.get("/cameras/{camera_id}/metrics")
+def get_camera_metrics_for_ai(
+    camera_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Get AI processing metrics for a camera.
+    Returns FPS and model inference times.
+    """
+    camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    # Get metrics from AI service detection data
+    detection_data = camera_manager.get_detection_data(camera_id)
+    if detection_data and 'metrics' in detection_data:
+        return detection_data['metrics']
+    
+    # Return empty metrics if not available
+    return {
+        'processing_fps': 0,
+        'actual_fps': 0,
+        'camera_fps': 0,
+        'model_times_ms': {
+            'yolo': 0,
+            'deepsort': 0,
+            'mobilenet': 0,
+            'videomae': 0,
+        },
+        'total_frame_time_ms': 0,
     }
 
 

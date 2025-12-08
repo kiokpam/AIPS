@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera,
@@ -17,7 +17,6 @@ import {
   Wifi,
   WifiOff,
   Video,
-  VideoOff,
   X,
   Undo,
   Trash2,
@@ -28,11 +27,15 @@ import {
   BarChart3,
   Activity,
   Users,
-  MapPin
+  MapPin,
+  HelpCircle,
+  Info
 } from 'lucide-react';
-import { cameraApi, storeApi, eventsApi, buildWsUrl, type Camera as CameraType } from '@/lib/api';
+import { cameraApi, storeApi, eventsApi, systemApi, buildWsUrl, type Camera as CameraType } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
+import { useData } from '@/src/contexts/DataContext';
+import { wsManager } from '@/lib/websocket-manager';
 import toast from 'react-hot-toast';
 
 // Simple drawing canvas component used for overlaying zones/lines on top of the preview image.
@@ -273,7 +276,7 @@ const tasksApi = {
 };
 
 
-const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
+const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
   camera: CameraType;
   onEdit: (camera: CameraType) => void;
   onDelete: (id: string) => void;
@@ -287,6 +290,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
   const [showMenu, setShowMenu] = useState(false);
   const [currentCount, setCurrentCount] = useState<number | null>(null);
   const [showAIDetails, setShowAIDetails] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   // Model configuration removed - AI services will handle all model settings
   const [taskInfo, setTaskInfo] = useState<{ zones: any[]; lines: any[] } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -324,6 +328,25 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null);
   const [streamNonce, setStreamNonce] = useState<number>(Date.now());
+  const [detections, setDetections] = useState<Array<{
+    track_id: number;
+    bbox: number[];
+    label: string;
+    confidence: number;
+    in_zone: boolean;
+  }>>([]);
+  const [aiMetrics, setAiMetrics] = useState<{
+    processing_fps?: number;
+    actual_fps?: number;
+    camera_fps?: number;
+    model_times_ms?: {
+      yolo?: number;
+      deepsort?: number;
+      mobilenet?: number;
+      videomae?: number;
+    };
+    total_frame_time_ms?: number;
+  } | null>(null);
 
   // When backend reports active, automatically try to show the stream
   useEffect(() => {
@@ -567,6 +590,37 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
           }
         }
       });
+
+      // Draw detection bounding boxes
+      detections.forEach((det) => {
+        if (!det.bbox || det.bbox.length !== 4) return;
+        const [x1, y1, x2, y2] = det.bbox;
+        
+        // Map bounding box coordinates to canvas
+        const topLeft = mapPoint([x1, y1]);
+        const bottomRight = mapPoint([x2, y2]);
+        const width = bottomRight[0] - topLeft[0];
+        const height = bottomRight[1] - topLeft[1];
+        
+        // Draw bounding box - no labels, just different colors for behavior detection
+        // Behavior detection: use orange/red colors for suspicious, green for normal
+        // In/Out counting: use blue/green colors
+        if (hasBehaviorDetection) {
+          // Behavior detection: check if suspicious based on label
+          const isSuspicious = det.label && det.label !== 'person' && det.label !== 'normal' && (det.confidence || 0) > 0.5;
+          if (isSuspicious) {
+            ctx.strokeStyle = det.in_zone ? '#ef4444' : '#f97316'; // Red if in zone, orange otherwise
+          } else {
+            ctx.strokeStyle = det.in_zone ? '#10b981' : '#3b82f6'; // Green if in zone, blue otherwise
+          }
+        } else {
+          // In/Out counting: use blue/green colors
+          ctx.strokeStyle = det.in_zone ? '#10b981' : '#3b82f6'; // Green if in zone, blue otherwise
+        }
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.strokeRect(topLeft[0], topLeft[1], width, height);
+      });
     };
 
     // Throttle resize events to prevent excessive redraws
@@ -574,7 +628,7 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
     const throttledResize = () => {
       if (rafId) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
-    resizeAndDraw();
+        resizeAndDraw();
         rafId = null;
       });
     };
@@ -589,12 +643,8 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
       window.removeEventListener('resize', throttledResize);
       ro.disconnect();
     };
-  }, [taskInfo, frameSize, isStreaming]);
+  }, [taskInfo, frameSize, isStreaming, detections, hasBehaviorDetection]);
 
-  const handleStreamToggle = () => {
-    setIsStreaming(!isStreaming);
-    toast.success(isStreaming ? t('camera_stopped') : t('camera_started'));
-  };
 
   // Poll camera stats to get current people count
   useEffect(() => {
@@ -691,8 +741,13 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
   // Fetch today's stats and recent behaviors
   useEffect(() => {
     let isMounted = true;
+    let isLoading = false;
     
     const fetchStats = async () => {
+      // Prevent overlapping requests
+      if (isLoading) return;
+      isLoading = true;
+      
       try {
         // Fetch today's in/out stats if camera has in_out_counting
         if (hasInOutCounting) {
@@ -707,15 +762,21 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
         } else {
           if (isMounted) setRecentBehaviors([]);
         }
-      } catch (error) {
+      } catch (error: any) {
+        // Ignore network errors from aborted/cancelled requests
+        if (error.code === 'ERR_CANCELED' || error.name === 'AbortError') {
+          return;
+        }
         // Silently fail - stats are optional
         console.warn('Failed to fetch camera stats:', error);
+      } finally {
+        isLoading = false;
       }
     };
 
     fetchStats();
-    // Refresh every 30 seconds
-    const timer = setInterval(fetchStats, 30000);
+    // Refresh every 60 seconds (reduced frequency to prevent resource exhaustion)
+    const timer = setInterval(fetchStats, 60000);
     
     return () => {
       isMounted = false;
@@ -760,6 +821,55 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
     loadTasks();
     return () => { mounted = false; if (timer) clearTimeout(timer); };
   }, [camera.id]);
+
+  // WebSocket connection for detection updates (bounding boxes)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isStreaming) return;
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+
+    // Use a unique WebSocket URL per camera to avoid handler overwrite when multiple cameras render
+    const wsUrl = buildWsUrl(`/ws/detections?token=${encodeURIComponent(token)}&camera=${camera.id}`);
+
+    const ws = wsManager.getConnection({
+      url: wsUrl,
+      reconnect: isStreaming,
+      reconnectDelay: 3000,
+      onMessage: (data) => {
+        if (data.type === 'detection_update' && data.camera_id === camera.id) {
+          setDetections(data.detections || []);
+          if (data.metrics) {
+            setAiMetrics(data.metrics);
+          }
+        }
+      },
+      onError: (err) => {
+        console.error('Detection websocket error:', err);
+      },
+      onClose: () => {
+        // Reconnection handled by manager
+      },
+    });
+
+    // Update handlers if connection already exists
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      wsManager.updateHandlers(wsUrl, {
+        onMessage: (data) => {
+          if (data.type === 'detection_update' && data.camera_id === camera.id) {
+            setDetections(data.detections || []);
+            if (data.metrics) {
+              setAiMetrics(data.metrics);
+            }
+          }
+        },
+      });
+    }
+
+    // Don't close connection on unmount - let manager handle it
+    return () => {
+      // Connection persists across navigations
+    };
+  }, [camera.id, isStreaming]);
 
   return (
     <motion.div
@@ -842,38 +952,37 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
               <span className="text-xs text-white bg-blue-600/70 px-2 py-1 rounded">
                 OUT: {inOutCounts.count_out}
               </span>
-              <span className="text-xs text-white bg-purple-600/70 px-2 py-1 rounded">
-                Net: {inOutCounts.cumulative}
-              </span>
             </div>
           )}
         </div>
 
-        {/* Stream Toggle */}
-        <button
-          onClick={handleStreamToggle}
-          className="absolute top-3 right-3 p-2 bg-black/50 text-white rounded-lg hover:bg-black/70 transition-colors"
-        >
-          {isStreaming ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
-        </button>
-
         {/* Menu Button */}
-        <div className="absolute top-3 right-12 relative">
+        <div className="absolute top-3 right-3 relative">
           <button
             onClick={() => setShowMenu(!showMenu)}
             className="p-2 bg-black/50 text-white rounded-lg hover:bg-black/70 transition-colors"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
-          
+        
           <AnimatePresence>
             {showMenu && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                 className="absolute right-0 mt-2 w-48 bg-white text-slate-900 rounded-lg shadow-lg border border-slate-200 py-1 z-10"
+                 className="absolute right-0 mt-2 w-56 bg-white text-slate-900 rounded-lg shadow-lg border border-slate-200 py-1 z-10"
               >
+                <button
+                  onClick={() => {
+                    setShowHelp(true);
+                    setShowMenu(false);
+                  }}
+                  className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <HelpCircle className="w-4 h-4 mr-3" />
+                  Camera Usage Instructions
+                </button>
                 <button
                   onClick={() => {
                     onEdit(camera);
@@ -884,102 +993,164 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
                   <Settings className="w-4 h-4 mr-3" />
                   {t('configure')}
                 </button>
-                <button
-                  onClick={() => {
-                    setShowAIDetails(true);
-                    setShowMenu(false);
-                  }}
-                  className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                >
-                  <Brain className="w-4 h-4 mr-3" />
-                  {t('ai_details')}
-                </button>
-                {hasInOutCounting && (
-                  <>
-                    {!isInOutRegistered ? (
-                      <button
-                        onClick={async () => {
-                          try {
-                            setIsRegisteringInOut(true);
-                            await inOutApi.registerCamera(camera.id);
-                            setIsInOutRegistered(true);
-                            toast.success('Camera registered for in/out counting');
-                            setShowMenu(false);
-                          } catch (error: any) {
-                            toast.error(error.response?.data?.detail || 'Failed to register camera');
-                          } finally {
-                            setIsRegisteringInOut(false);
-                          }
-                        }}
-                        disabled={isRegisteringInOut}
-                        className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
-                      >
-                        <TrendingUp className="w-4 h-4 mr-3" />
-                        {isRegisteringInOut ? 'Registering...' : 'Enable In/Out Counting'}
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          onClick={async () => {
-                            try {
-                              await inOutApi.resetCounts(camera.id);
-                              toast.success('Counts reset');
-                              setShowMenu(false);
-                            } catch (error: any) {
-                              toast.error(error.response?.data?.detail || 'Failed to reset counts');
-                            }
-                          }}
-                          className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                        >
-                          <Undo className="w-4 h-4 mr-3" />
-                          Reset Counts
-                        </button>
-                        <button
-                          onClick={async () => {
-                            try {
-                              await inOutApi.unregisterCamera(camera.id);
-                              setIsInOutRegistered(false);
-                              setInOutCounts(null);
-                              toast.success('Camera unregistered from in/out counting');
-                              setShowMenu(false);
-                            } catch (error: any) {
-                              toast.error(error.response?.data?.detail || 'Failed to unregister camera');
-                            }
-                          }}
-                          className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                        >
-                          <X className="w-4 h-4 mr-3" />
-                          Disable In/Out Counting
-                        </button>
-                      </>
-                    )}
-                  </>
-                )}
-                <button
-                  onClick={() => {
-                    onToggle(camera.id, !camera.is_active);
-                    setShowMenu(false);
-                  }}
-                  className="flex items-center w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                >
-                  {camera.is_active ? <Pause className="w-4 h-4 mr-3" /> : <Play className="w-4 h-4 mr-3" />}
-                  {camera.is_active ? t('stop') : t('start')}
-                </button>
-                <button
-                  onClick={() => {
-                    onDelete(camera.id);
-                    setShowMenu(false);
-                  }}
-                  className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                >
-                  <AlertCircle className="w-4 h-4 mr-3" />
-                  {t('delete')}
-                </button>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
+
+        {/* Help Instructions Panel */}
+        <AnimatePresence>
+          {showHelp && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="absolute top-14 right-3 w-80 bg-white rounded-lg shadow-xl border border-slate-200 p-4 z-20 max-h-[80vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                  <Info className="w-4 h-4 text-blue-600" />
+                  Camera Usage Instructions
+                </h3>
+                <button
+                  onClick={() => setShowHelp(false)}
+                  className="text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              
+              <div className="space-y-4 text-xs text-slate-700">
+                {/* In/Out Counting Lines */}
+                {hasInOutCounting && (
+                  <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                    <h4 className="font-semibold text-blue-900 mb-2 flex items-center gap-1">
+                      <TrendingUp className="w-3.5 h-3.5" />
+                      In/Out Counting Lines
+                    </h4>
+                    <div className="space-y-2 text-blue-800">
+                      <p className="font-medium">How it works:</p>
+                      <div className="bg-white/60 rounded-lg p-2 border border-blue-200 text-xs">
+                        <p className="mb-1.5"><strong>Detection Method:</strong></p>
+                        <ol className="ml-3 space-y-1 list-decimal text-blue-700">
+                          <li>AI detects the <strong>center point</strong> of each person's bounding box</li>
+                          <li>After each frame, it <strong>connects</strong> the previous center to the current center (creating a trajectory line)</li>
+                          <li>If this trajectory line <strong>intersects Line A or Line B</strong>, it registers a touch</li>
+                          <li>When <strong>both lines are crossed</strong> (2 touches), it counts the person</li>
+                          <li>The <strong>direction</strong> of crossing determines IN or OUT</li>
+                        </ol>
+                      </div>
+                      <ul className="space-y-1.5 ml-2">
+                        <li className="flex items-start gap-2">
+                          <span className="font-semibold text-red-600 mt-0.5">Line A (Red):</span>
+                          <span>First line you draw (points 1-2)</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <span className="font-semibold text-blue-600 mt-0.5">Line B (Blue):</span>
+                          <span>Second line you draw (points 3-4)</span>
+                        </li>
+                      </ul>
+                      <div className="mt-2 pt-2 border-t border-blue-300">
+                        <p className="font-medium mb-1">Direction Rules:</p>
+                        <div className="bg-white/60 rounded-lg p-2 border border-blue-200 text-xs">
+                          <p className="mb-1.5"><strong>When trajectory crosses both lines:</strong></p>
+                          <ul className="space-y-1 ml-2">
+                            <li className="flex items-center gap-2">
+                              <span className="text-green-700 font-semibold">→ IN:</span>
+                              <span>Trajectory crosses <strong className="text-blue-600">Line B</strong> first, then <strong className="text-red-600">Line A</strong> (B→A)</span>
+                            </li>
+                            <li className="flex items-center gap-2">
+                              <span className="text-red-700 font-semibold">→ OUT:</span>
+                              <span>Trajectory crosses <strong className="text-red-600">Line A</strong> first, then <strong className="text-blue-600">Line B</strong> (A→B)</span>
+                            </li>
+                          </ul>
+                        </div>
+                      </div>
+                      <div className="mt-2 pt-2 border-t border-blue-300">
+                        <p className="font-medium">How to draw:</p>
+                        <ol className="ml-2 mt-1 space-y-1 list-decimal list-inside">
+                          <li>Click "Draw Line" button in camera settings</li>
+                          <li>Click 4 points on the preview: Point 1-2 for Line A (red), Point 3-4 for Line B (blue)</li>
+                          <li>Lines should be parallel and perpendicular to the direction of movement</li>
+                          <li>Save the configuration</li>
+                        </ol>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Behavior Detection Zones */}
+                {hasBehaviorDetection && (
+                  <div className="bg-green-50 rounded-lg p-3 border border-green-200">
+                    <h4 className="font-semibold text-green-900 mb-2 flex items-center gap-1">
+                      <Activity className="w-3.5 h-3.5" />
+                      Behavior Detection Zones
+                    </h4>
+                    <div className="space-y-2 text-green-800">
+                      <p className="font-medium">How it works:</p>
+                      <ul className="space-y-1 ml-2">
+                        <li>• Draw zones (polygons) around areas where you want to monitor behavior</li>
+                        <li>• AI detects suspicious activities like shoplifting and violence inside these zones</li>
+                        <li>• Alerts appear in real-time when behaviors are detected</li>
+                      </ul>
+                      <div className="mt-2 pt-2 border-t border-green-300">
+                        <p className="font-medium">How to draw:</p>
+                        <ol className="ml-2 mt-1 space-y-1 list-decimal list-inside">
+                          <li>Click "Draw Zone" button in camera settings</li>
+                          <li>Click multiple points (minimum 3) to create a polygon</li>
+                          <li>Click "Finish Zone" when done</li>
+                          <li>Save the configuration</li>
+                        </ol>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* General Usage */}
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <h4 className="font-semibold text-slate-900 mb-2">General Usage</h4>
+                  <ul className="space-y-1.5 text-slate-700">
+                    <li>• <strong>Start/Stop:</strong> Use the menu button (⋮) to start or stop camera processing</li>
+                    <li>• <strong>Configure:</strong> Click "Configure" in the menu to set up zones and lines</li>
+                    <li>• <strong>View Analytics:</strong> Check the dashboard buttons for detailed statistics</li>
+                    <li>• <strong>Real-time Updates:</strong> Counts and alerts update automatically via WebSocket</li>
+                  </ul>
+                </div>
+
+                {/* Tips */}
+                <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
+                  <h4 className="font-semibold text-amber-900 mb-2">💡 Tips</h4>
+                  <ul className="space-y-1 text-amber-800">
+                    <li>• Place counting lines perpendicular to the main direction of movement</li>
+                    <li>• Ensure lines are clearly visible in the camera view</li>
+                    <li>• Zones should cover the entire area you want to monitor</li>
+                    <li>• Save your configuration after drawing to activate AI features</li>
+                  </ul>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
+
+      {/* AI Performance Metrics - Below Camera Stream */}
+      {aiMetrics && (
+        <div className="mt-2 bg-slate-800/90 backdrop-blur-sm text-white text-xs px-3 py-2 rounded-lg border border-slate-700 space-y-1">
+          <div className="font-semibold text-slate-200">AI Performance:</div>
+          <div className="text-slate-300">FPS: {aiMetrics.processing_fps?.toFixed(1) || 'N/A'} (cam: {aiMetrics.camera_fps?.toFixed(1) || 'N/A'})</div>
+          {aiMetrics.model_times_ms && (
+            <div className="text-[10px] space-y-0.5 pt-1 border-t border-slate-700">
+              <div className="text-slate-400">YOLO: {aiMetrics.model_times_ms.yolo?.toFixed(1) || '0'}ms</div>
+              <div className="text-slate-400">DeepSORT: {aiMetrics.model_times_ms.deepsort?.toFixed(1) || '0'}ms</div>
+              <div className="text-slate-400">MobileNet: {aiMetrics.model_times_ms.mobilenet?.toFixed(1) || '0'}ms</div>
+              {aiMetrics.model_times_ms.videomae && aiMetrics.model_times_ms.videomae > 0 && (
+                <div className="text-slate-400">VideoMAE: {aiMetrics.model_times_ms.videomae.toFixed(1)}ms</div>
+              )}
+              <div className="text-slate-300 font-medium">Total: {aiMetrics.total_frame_time_ms?.toFixed(1) || '0'}ms</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Camera Info */}
       <div className="camera-info">
@@ -1217,10 +1388,6 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
                         <div className="text-xl font-bold text-blue-700">{inOutCounts.count_out}</div>
                         <div className="text-xs text-blue-600 mt-1">OUT</div>
               </div>
-                      <div className="bg-white/60 rounded-lg p-3 text-center">
-                        <div className="text-xl font-bold text-purple-700">{inOutCounts.cumulative}</div>
-                        <div className="text-xs text-purple-600 mt-1">NET</div>
-                    </div>
                   </div>
                     </div>
                 ) : hasInOutCounting ? (
@@ -1361,7 +1528,17 @@ const CameraCard = ({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
       </AnimatePresence>
     </motion.div>
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison to prevent unnecessary re-renders
+  return (
+    prevProps.camera.id === nextProps.camera.id &&
+    prevProps.camera.is_active === nextProps.camera.is_active &&
+    prevProps.camera.name === nextProps.camera.name &&
+    prevProps.realtimeCount?.count_in === nextProps.realtimeCount?.count_in &&
+    prevProps.realtimeCount?.count_out === nextProps.realtimeCount?.count_out &&
+    prevProps.realtimeCount?.ts === nextProps.realtimeCount?.ts
+  );
+});
 
 const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   isOpen: boolean;
@@ -1371,7 +1548,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const { t } = useI18n();
   const [formData, setFormData] = useState({
     name: '',
-    source: '', // RTSP URL only
+    source: '', // RTSP URL
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isPreviewConnected, setIsPreviewConnected] = useState(false);
@@ -1385,6 +1562,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const [currentDrawing, setCurrentDrawing] = useState<any>(null);
   const [drawingMode, setDrawingMode] = useState<'zone' | 'line' | null>(null);
   const [drawSize, setDrawSize] = useState<{ w: number; h: number } | null>(null);
+  const [showPreviewHelp, setShowPreviewHelp] = useState(false);
   const [contentBox, setContentBox] = useState<{
     displayW: number; displayH: number; offsetX: number; offsetY: number; naturalW: number; naturalH: number
   } | null>(null);
@@ -1672,15 +1850,15 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
         throw new Error('Authentication required. Please log in again.');
       }
 
-      // Use backend preview endpoint for RTSP with cache-busting nonce
-      const encodedSource = encodeURIComponent(formData.source);
+      // Use backend preview endpoint with cache-busting nonce
+      const sourceParam = encodeURIComponent(formData.source);  // RTSP URL
       const nonce = Date.now();
       setPreviewNonce(nonce);
-      const sourceUrl = `${baseUrl}/preview/stream?source=${encodedSource}&token=${encodeURIComponent(token)}&t=${nonce}`;
+      const sourceUrl = `${baseUrl}/preview/stream?source=${sourceParam}&token=${encodeURIComponent(token)}&t=${nonce}`;
       
       // Test the source first with timeout and retry
       try {
-        const testUrl = `${baseUrl}/preview/test?source=${encodedSource}&token=${encodeURIComponent(token)}`;
+        const testUrl = `${baseUrl}/preview/test?source=${sourceParam}&token=${encodeURIComponent(token)}`;
         const testResponse = await Promise.race([
           fetch(testUrl, {
             headers: {
@@ -1899,6 +2077,18 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
     setCurrentDrawing(null);
   };
 
+  // Reset form when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setFormData({ name: '', source: '' });
+      setDrawnAreas([]);
+      setCurrentDrawing(null);
+      setPreviewUrl('');
+      setIsPreviewConnected(false);
+      setPreviewError('');
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -1938,19 +2128,19 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               />
             </div>
 
-              {/* RTSP Source Input */}
+              {/* Source Input */}
             <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     RTSP URL *
                   </label>
-              <input
-                type="text"
-                value={formData.source}
-                onChange={(e) => setFormData({...formData, source: e.target.value})}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="rtsp://..."
-                required
-              />
+                <input
+                  type="text"
+                  value={formData.source}
+                  onChange={(e) => setFormData({...formData, source: e.target.value})}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="rtsp://..."
+                  required
+                />
             </div>
 
               {/* Connect Preview Button */}
@@ -2188,8 +2378,17 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                     </div>
                   )}
                   
-                  {/* Retry Preview Button - for when stream shows black */}
-                  <div className="absolute top-2 right-2 flex gap-2">
+                  {/* Help and Retry Preview Buttons - Overlay on preview */}
+                  <div className="absolute top-2 right-2 flex gap-2 z-30">
+                    <button
+                      type="button"
+                      onClick={() => setShowPreviewHelp(!showPreviewHelp)}
+                      className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1 shadow-lg"
+                      title="Show drawing instructions"
+                    >
+                      <HelpCircle className="w-3 h-3" />
+                      Help
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -2213,6 +2412,138 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
                       Retry Preview
                     </button>
                   </div>
+                  
+                  {/* Preview Help Instructions Panel */}
+                  <AnimatePresence>
+                    {showPreviewHelp && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="absolute top-12 right-2 w-80 bg-white rounded-lg shadow-xl border border-slate-200 p-4 z-30 max-h-[70vh] overflow-y-auto"
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                            <Info className="w-4 h-4 text-blue-600" />
+                            Drawing Instructions
+                          </h3>
+                          <button
+                            onClick={() => setShowPreviewHelp(false)}
+                            className="text-slate-400 hover:text-slate-600 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="space-y-3 text-xs text-slate-700">
+                          {/* In/Out Counting Instructions */}
+                          <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200">
+                            <div className="flex items-center gap-2 mb-3">
+                              <TrendingUp className="w-4 h-4 text-blue-600" />
+                              <p className="text-sm font-semibold text-blue-900">
+                                In/Out Counting Lines - Step by Step
+                              </p>
+                            </div>
+                            <div className="space-y-3 text-sm text-blue-800">
+                              <div>
+                                <p className="font-medium mb-2">What are the lines for?</p>
+                                <p className="text-xs text-blue-700 mb-2">
+                                  Two parallel lines are used to detect when people enter (IN) or exit (OUT) an area. 
+                                  The system tracks the trajectory of each person's movement to determine direction.
+                                </p>
+                              </div>
+                              <div className="bg-white/60 rounded-lg p-3 border border-blue-200">
+                                <p className="font-semibold text-blue-900 mb-2">How Detection Works:</p>
+                                <ol className="text-xs text-blue-700 ml-4 space-y-1.5 list-decimal">
+                                  <li>AI detects the <strong>center point</strong> of each person's bounding box in every frame</li>
+                                  <li>After each frame, it <strong>connects</strong> the previous center to the current center (creating a trajectory line)</li>
+                                  <li>If this trajectory line <strong>intersects/cuts Line A or Line B</strong>, it registers a touch</li>
+                                  <li>When <strong>both lines are cut</strong> (2 touches detected), it counts the person</li>
+                                  <li>The <strong>order of line crossings</strong> determines IN or OUT direction</li>
+                                </ol>
+                              </div>
+                              <div className="bg-white/60 rounded-lg p-3 border border-blue-200">
+                                <p className="font-semibold text-blue-900 mb-2">Line Identification:</p>
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-1 bg-red-500 rounded"></div>
+                                    <span className="text-xs"><strong className="text-red-600">Line A (Red):</strong> First line you draw (Points 1-2)</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-1 bg-blue-500 rounded"></div>
+                                    <span className="text-xs"><strong className="text-blue-600">Line B (Blue):</strong> Second line you draw (Points 3-4)</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="bg-white/60 rounded-lg p-3 border border-blue-200">
+                                <p className="font-semibold text-blue-900 mb-2">Direction Rules:</p>
+                                <p className="text-xs text-blue-700 mb-2">When trajectory cuts both lines:</p>
+                                <div className="space-y-1.5 text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-16 text-green-700 font-semibold">→ IN:</span>
+                                    <span>Trajectory cuts <strong className="text-blue-600">Line B</strong> first, then <strong className="text-red-600">Line A</strong> (B→A)</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-16 text-red-700 font-semibold">→ OUT:</span>
+                                    <span>Trajectory cuts <strong className="text-red-600">Line A</strong> first, then <strong className="text-blue-600">Line B</strong> (A→B)</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div>
+                                <p className="font-medium mb-1">How to Draw:</p>
+                                <ol className="text-xs text-blue-700 ml-4 space-y-1 list-decimal">
+                                  <li>Click the <strong>"Draw Line (IN/OUT)"</strong> button</li>
+                                  <li>Click <strong>Point 1</strong> on the preview (start of Line A - red)</li>
+                                  <li>Click <strong>Point 2</strong> on the preview (end of Line A - red)</li>
+                                  <li>Click <strong>Point 3</strong> on the preview (start of Line B - blue)</li>
+                                  <li>Click <strong>Point 4</strong> on the preview (end of Line B - blue)</li>
+                                  <li>Lines should be <strong>parallel</strong> and <strong>perpendicular</strong> to movement direction</li>
+                                  <li>Click <strong>"Save"</strong> to activate counting</li>
+                                </ol>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Zone Instructions */}
+                          <div className="p-4 bg-gradient-to-br from-green-50 to-emerald-50 rounded-lg border-2 border-green-200">
+                            <div className="flex items-center gap-2 mb-3">
+                              <Activity className="w-4 h-4 text-green-600" />
+                              <p className="text-sm font-semibold text-green-900">
+                                Behavior Detection Zones
+                              </p>
+                            </div>
+                            <div className="space-y-2 text-sm text-green-800">
+                              <p className="text-xs text-green-700 mb-2">
+                                Draw zones (polygons) around areas where you want to monitor for suspicious behaviors like shoplifting or violence.
+                              </p>
+                              <div>
+                                <p className="font-medium mb-1">How to Draw:</p>
+                                <ol className="text-xs text-green-700 ml-4 space-y-1 list-decimal">
+                                  <li>Click the <strong>"Draw Zone"</strong> button</li>
+                                  <li>Click multiple points (minimum 3) to create a polygon</li>
+                                  <li>Click <strong>"Finish Zone"</strong> when done</li>
+                                  <li>Click <strong>"Save"</strong> to activate behavior detection</li>
+                                </ol>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* General Tips */}
+                          <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                            <p className="text-xs font-semibold text-amber-900 mb-1.5 flex items-center gap-1">
+                              <Info className="w-3.5 h-3.5" />
+                              Quick Tips
+                            </p>
+                            <ul className="text-xs text-amber-800 space-y-1">
+                              <li>• Use <strong>Undo</strong> to remove the last drawn area</li>
+                              <li>• Use <strong>Clear</strong> to remove all drawn areas</li>
+                              <li>• Make sure lines/zones are clearly visible in the preview</li>
+                              <li>• Save your configuration to activate AI features</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               ) : (
                 <div className="text-center">
@@ -2227,23 +2558,114 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               )}
             </div>
 
-            {/* Drawing Instructions */}
+            {/* Enhanced Drawing Instructions */}
             {isPreviewConnected && (
-              <div className="mt-4 p-3 bg-blue-50 rounded-lg flex-shrink-0">
-                <p className="text-sm text-blue-800">
-                  <strong>Drawing Instructions:</strong>
-                </p>
-                <ul className="text-sm text-blue-700 mt-1 space-y-1">
-                  <li>• <strong>Zone:</strong> Click multiple points to create a polygon (minimum 3 points), then click "Finish Zone"</li>
-                  <li>• <strong>In/Out Line:</strong> Click 4 points to create two parallel lines:
-                    <ul className="ml-4 text-xs text-blue-600 mt-0.5">
-                      <li>- Points 1-2: <span className="text-red-600 font-medium">Line A</span> (red)</li>
-                      <li>- Points 3-4: <span className="text-blue-600 font-medium">Line B</span> (blue)</li>
-                      <li>- Crossing A→B = OUT, B→A = IN</li>
-                    </ul>
-                  </li>
-                  <li>• Use Undo/Clear buttons to manage drawn areas</li>
-                </ul>
+              <div className="mt-4 space-y-3 flex-shrink-0">
+                {/* In/Out Counting Instructions */}
+                <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <TrendingUp className="w-4 h-4 text-blue-600" />
+                    <p className="text-sm font-semibold text-blue-900">
+                      In/Out Counting Lines - Step by Step
+                    </p>
+                  </div>
+                  <div className="space-y-3 text-sm text-blue-800">
+                    <div>
+                      <p className="font-medium mb-2">What are the lines for?</p>
+                      <p className="text-xs text-blue-700 mb-2">
+                        Two parallel lines are used to detect when people enter (IN) or exit (OUT) an area. 
+                        The system tracks the trajectory of each person's movement to determine direction.
+                      </p>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-3 border border-blue-200">
+                      <p className="font-semibold text-blue-900 mb-2">How Detection Works:</p>
+                      <ol className="text-xs text-blue-700 ml-4 space-y-1.5 list-decimal">
+                        <li>AI detects the <strong>center point</strong> of each person's bounding box in every frame</li>
+                        <li>After each frame, it <strong>connects</strong> the previous center to the current center (creating a trajectory line)</li>
+                        <li>If this trajectory line <strong>intersects/cuts Line A or Line B</strong>, it registers a touch</li>
+                        <li>When <strong>both lines are cut</strong> (2 touches detected), it counts the person</li>
+                        <li>The <strong>order of line crossings</strong> determines IN or OUT direction</li>
+                      </ol>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-3 border border-blue-200">
+                      <p className="font-semibold text-blue-900 mb-2">Line Identification:</p>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-1 bg-red-500 rounded"></div>
+                          <span className="text-xs"><strong className="text-red-600">Line A (Red):</strong> First line you draw (Points 1-2)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-1 bg-blue-500 rounded"></div>
+                          <span className="text-xs"><strong className="text-blue-600">Line B (Blue):</strong> Second line you draw (Points 3-4)</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-3 border border-blue-200">
+                      <p className="font-semibold text-blue-900 mb-2">Direction Rules:</p>
+                      <p className="text-xs text-blue-700 mb-2">When trajectory cuts both lines:</p>
+                      <div className="space-y-1.5 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="w-16 text-green-700 font-semibold">→ IN:</span>
+                          <span>Trajectory cuts <strong className="text-blue-600">Line B</strong> first, then <strong className="text-red-600">Line A</strong> (B→A)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-16 text-red-700 font-semibold">→ OUT:</span>
+                          <span>Trajectory cuts <strong className="text-red-600">Line A</strong> first, then <strong className="text-blue-600">Line B</strong> (A→B)</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="font-medium mb-1">How to Draw:</p>
+                      <ol className="text-xs text-blue-700 ml-4 space-y-1 list-decimal">
+                        <li>Click the <strong>"Draw Line (IN/OUT)"</strong> button</li>
+                        <li>Click <strong>Point 1</strong> on the preview (start of Line A - red)</li>
+                        <li>Click <strong>Point 2</strong> on the preview (end of Line A - red)</li>
+                        <li>Click <strong>Point 3</strong> on the preview (start of Line B - blue)</li>
+                        <li>Click <strong>Point 4</strong> on the preview (end of Line B - blue)</li>
+                        <li>Lines should be <strong>parallel</strong> and <strong>perpendicular</strong> to movement direction</li>
+                        <li>Click <strong>"Save"</strong> to activate counting</li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Zone Instructions */}
+                <div className="p-4 bg-gradient-to-br from-green-50 to-emerald-50 rounded-lg border-2 border-green-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Activity className="w-4 h-4 text-green-600" />
+                    <p className="text-sm font-semibold text-green-900">
+                      Behavior Detection Zones
+                    </p>
+                  </div>
+                  <div className="space-y-2 text-sm text-green-800">
+                    <p className="text-xs text-green-700 mb-2">
+                      Draw zones (polygons) around areas where you want to monitor for suspicious behaviors like shoplifting or violence.
+                    </p>
+                    <div>
+                      <p className="font-medium mb-1">How to Draw:</p>
+                      <ol className="text-xs text-green-700 ml-4 space-y-1 list-decimal">
+                        <li>Click the <strong>"Draw Zone"</strong> button</li>
+                        <li>Click multiple points (minimum 3) to create a polygon</li>
+                        <li>Click <strong>"Finish Zone"</strong> when done</li>
+                        <li>Click <strong>"Save"</strong> to activate behavior detection</li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
+
+                {/* General Tips */}
+                <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                  <p className="text-xs font-semibold text-amber-900 mb-1.5 flex items-center gap-1">
+                    <Info className="w-3.5 h-3.5" />
+                    Quick Tips
+                  </p>
+                  <ul className="text-xs text-amber-800 space-y-1">
+                    <li>• Use <strong>Undo</strong> to remove the last drawn area</li>
+                    <li>• Use <strong>Clear</strong> to remove all drawn areas</li>
+                    <li>• Make sure lines/zones are clearly visible in the preview</li>
+                    <li>• Save your configuration to activate AI features</li>
+                  </ul>
+                </div>
               </div>
             )}
           </div>
@@ -2273,26 +2695,50 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 };
 
 export default function CamerasPage() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
+  const { cameras: camerasFromContext, refreshCameras, isLoading: dataLoading } = useData();
   const [cameras, setCameras] = useState<CameraType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingCamera, setEditingCamera] = useState<CameraType | null>(null);
   const isInitialLoadRef = useRef(true);
   const [realtimeCounts, setRealtimeCounts] = useState<Record<string, { count_in: number; count_out: number; ts: string }>>({});
+  const [totalPeople, setTotalPeople] = useState<number>(0);
 
+  // Sync cameras from context
   useEffect(() => {
-    loadCameras();
+    if (camerasFromContext.length > 0 || (!dataLoading && camerasFromContext.length === 0)) {
+      setCameras(camerasFromContext);
+      if (isInitialLoadRef.current && !dataLoading) {
+        setIsLoading(false);
+        isInitialLoadRef.current = false;
+      }
+    }
+  }, [camerasFromContext, dataLoading]);
+
+  const loadTotalPeople = useCallback(async () => {
+    try {
+      const stats = await systemApi.getStatsSummary();
+      setTotalPeople(stats.total_people);
+    } catch (error) {
+      console.error('Failed to load total people count:', error);
+    }
   }, []);
 
-  const loadCameras = async (showSpinner = false) => {
+  useEffect(() => {
+    loadTotalPeople();
+    // Refresh total people every 5 seconds
+    const interval = setInterval(loadTotalPeople, 5000);
+    return () => clearInterval(interval);
+  }, [loadTotalPeople]);
+
+  const loadCameras = useCallback(async (showSpinner = false) => {
     try {
       // Only show loading spinner on initial load, not on refresh
       if (isInitialLoadRef.current || showSpinner) {
-      setIsLoading(true);
+        setIsLoading(true);
       }
-      const list = await cameraApi.getCameras();
-      setCameras(list);
+      await refreshCameras();
       isInitialLoadRef.current = false;
     } catch (error) {
       console.error('Failed to load cameras:', error);
@@ -2300,9 +2746,9 @@ export default function CamerasPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [refreshCameras, t]);
 
-  const handleAddCamera = async (cameraData: any) => {
+  const handleAddCamera = useCallback(async (cameraData: any) => {
     try {
       // Extract zones and lines for future config API (optional)
       const { zones, lines, ...cameraConfig } = cameraData;
@@ -2349,7 +2795,10 @@ export default function CamerasPage() {
       const created = await cameraApi.createCamera(payload);
 
       // Optimistically add as active while backend starts the worker
-      setCameras(prev => [...prev, { ...created, is_active: true }]);
+      const newCamera = { ...created, is_active: true };
+      setCameras(prev => [...prev, newCamera]);
+      // Also update context
+      refreshCameras();
       toast('Starting camera...', { icon: '⏳' });
 
       // Auto-start camera immediately after creation (requested behavior)
@@ -2380,11 +2829,13 @@ export default function CamerasPage() {
         setCameras(prev => prev.map(c => 
           c.id === created.id ? { ...c, is_active: true } : c
         ));
+        refreshCameras(); // Sync with context
         toast.success('Camera started successfully');
       } else {
         setCameras(prev => prev.map(c => 
           c.id === created.id ? { ...c, is_active: false } : c
         ));
+        refreshCameras(); // Sync with context
         toast.error('Camera created but failed to start. Check RTSP stream accessibility.', { duration: 5000 });
       }
 
@@ -2609,18 +3060,21 @@ export default function CamerasPage() {
       toast.error(`Error adding camera: ${errorMessage}`);
       throw error;
     }
-  };
+  }, [refreshCameras, t]);
 
+  // WebSocket connection for in/out updates (shared across all cameras)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const token = localStorage.getItem('auth_token');
     if (!token) return;
 
-    const ws = new WebSocket(buildWsUrl(`/ws/inout?token=${encodeURIComponent(token)}`));
+    const wsUrl = buildWsUrl(`/ws/inout?token=${encodeURIComponent(token)}`);
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
+    const ws = wsManager.getConnection({
+      url: wsUrl,
+      reconnect: true,
+      reconnectDelay: 3000,
+      onMessage: (data) => {
         if (data.type !== 'inout_update') return;
         setRealtimeCounts((prev) => ({
           ...prev,
@@ -2630,21 +3084,19 @@ export default function CamerasPage() {
             ts: data.ts,
           },
         }));
-      } catch (err) {
-        console.error('Failed to parse in/out websocket message:', err);
-      }
-    };
+      },
+      onError: (err) => {
+        console.error('In/Out websocket error:', err);
+      },
+    });
 
-    ws.onerror = (err) => {
-      console.error('In/Out websocket error:', err);
-    };
-
+    // Connection persists across navigations
     return () => {
-      ws.close();
+      // Don't close - let manager handle it
     };
   }, []);
 
-  const handleToggleCamera = async (id: string, isActive: boolean) => {
+  const handleToggleCamera = useCallback(async (id: string, isActive: boolean) => {
     try {
       // Find the camera to get its current state
       const camera = cameras.find(c => c.id === id);
@@ -2680,6 +3132,8 @@ export default function CamerasPage() {
       
       // Always refresh list to reflect real backend state
       await loadCameras();
+      // Also refresh context
+      refreshCameras();
     } catch (error: any) {
       console.error('Failed to toggle camera', error);
       const errorMessage = error.response?.data?.detail || error.message || t('failed_toggle_camera');
@@ -2691,13 +3145,14 @@ export default function CamerasPage() {
         console.error('Failed to refresh cameras after toggle error:', e);
       }
     }
-  };
+  }, [cameras, loadCameras, refreshCameras, t]);
 
-  const handleDeleteCamera = async (id: string) => {
+  const handleDeleteCamera = useCallback(async (id: string) => {
     if (confirm('Are you sure you want to delete this camera?')) {
       try {
         await cameraApi.deleteCamera(id);
         await loadCameras();
+        refreshCameras(); // Sync with context
         toast.success(t('camera_deleted'));
       } catch (error: any) {
         console.error('Failed to delete camera:', error);
@@ -2707,13 +3162,13 @@ export default function CamerasPage() {
         // Don't reload cameras on error - keep the list as is
       }
     }
-  };
+  }, [loadCameras, refreshCameras, t]);
 
-  const handleEditCamera = (camera: CameraType) => {
+  const handleEditCamera = useCallback((camera: CameraType) => {
     setEditingCamera(camera);
     // Open edit modal or navigate to edit page
     toast('Edit functionality coming soon');
-  };
+  }, []);
 
   if (isLoading) {
     return (
@@ -2745,7 +3200,7 @@ export default function CamerasPage() {
         <div className="stat-card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="stat-label">Total Cameras</p>
+              <p className="stat-label">{lang === 'vi' ? 'Tổng Camera' : 'Total Cameras'}</p>
               <p className="stat-value">{cameras.length}</p>
             </div>
             <Camera className="w-8 h-8 text-blue-600" />
@@ -2755,7 +3210,7 @@ export default function CamerasPage() {
         <div className="stat-card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="stat-label">Active</p>
+              <p className="stat-label">{lang === 'vi' ? 'Đang hoạt động' : 'Active'}</p>
               <p className="stat-value">{cameras.filter(c => c.is_active).length}</p>
             </div>
             <CheckCircle className="w-8 h-8 text-green-600" />
@@ -2765,7 +3220,17 @@ export default function CamerasPage() {
         <div className="stat-card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="stat-label">Offline</p>
+              <p className="stat-label">{lang === 'vi' ? 'Tổng người trong khu vực' : 'People in Zones'}</p>
+              <p className="stat-value">{totalPeople}</p>
+            </div>
+            <Users className="w-8 h-8 text-purple-600" />
+          </div>
+        </div>
+        
+        <div className="stat-card">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="stat-label">{lang === 'vi' ? 'Offline' : 'Offline'}</p>
               <p className="stat-value">{cameras.filter(c => !c.is_active).length}</p>
             </div>
             <Clock className="w-8 h-8 text-slate-400" />

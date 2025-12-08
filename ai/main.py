@@ -1,8 +1,31 @@
 #!/usr/bin/env python3
-"""Main CLI orchestrator for person detection -> tracking -> buffering -> AI pipeline.
+"""
+CoreAI - Standalone Video Analytics Application
 
-Modified: mobilenet inference and saving clips are offloaded to a ThreadPoolExecutor
-to avoid blocking the real-time display thread.
+Main CLI application for real-time person detection, tracking, and behavior analysis.
+This is a standalone version that can process video files or RTSP streams directly,
+without requiring the AIPS backend system.
+
+Processing Pipeline:
+    1. Video Source (RTSP stream or video file)
+    2. YOLO Detection → Person detection
+    3. DeepSORT Tracking → Multi-object tracking
+    4. Person Buffering → Frame buffer per tracked person
+    5. MobileNet Screening → Fast behavior classification
+    6. VideoMAE Analysis → Detailed anomaly detection (for suspicious cases)
+    7. Video Clip Saving → Save clips of detected anomalies
+
+Performance Optimizations:
+    - MobileNet inference and clip saving are offloaded to ThreadPoolExecutor
+      to avoid blocking the real-time display thread
+    - VideoMAE processing runs in background worker thread
+    - Frame skipping can be configured to reduce processing load
+
+Usage:
+    python main.py --source <rtsp_url_or_file> [options]
+
+Author: AIPS Development Team
+License: See project LICENSE file
 """
 import argparse
 import time
@@ -12,9 +35,11 @@ from typing import List, Tuple, Optional, Dict, Any
 import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor, Future
+import json
 
 import cv2
 import numpy as np
+import numpy as _np
 
 from detectors.yolo_onnx_detector import YOLOONNXDetector
 from detectors.deepsort_tracker import DeepSortTracker
@@ -75,11 +100,13 @@ def videomae_worker(task_queue: queue.Queue, result_queue: queue.Queue, vmae: Vi
             
             # Process VideoMAE with progress logging
             LOGGER.info('Processing track %s with VideoMAE (%d frames)...', tid, len(frames_buf))
+            vmae_start = time.time()
             vres = vmae.predict_buffer(frames_buf, num_frames=16, fps=fps)
-            LOGGER.info('Track %s processed: %s (%.2f)', tid, vres.get('label'), vres.get('score', 0.0))
+            vmae_time = (time.time() - vmae_start) * 1000  # Convert to ms
+            LOGGER.info('Track %s processed: %s (%.2f) in %.1fms', tid, vres.get('label'), vres.get('score', 0.0), vmae_time)
             
-            # Put result in queue
-            result_queue.put((tid, vres, frames_buf, extra_sec))
+            # Put result in queue with timing
+            result_queue.put((tid, vres, frames_buf, extra_sec, vmae_time))
             
             task_queue.task_done()
             
@@ -109,7 +136,7 @@ def parse_args():
     p.add_argument('--extra-sec', type=float, default=1.0)
     p.add_argument('--mobilenet', default='models/mobilenet.onnx')
     p.add_argument('--videomae-dir', default='videomae')
-    p.add_argument('--yolo', default='models/yolov8n.onnx', help='YOLO model path (default: ONNX for better performance)')
+    p.add_argument('--yolo', default='models/8n_aug.onnx', help='YOLO model path (default: ONNX for better performance)')
     p.add_argument('--use-pytorch-yolo', action='store_true', help='Use PyTorch YOLO instead of ONNX')
     p.add_argument('--use-pytorch-videomae', action='store_true', help='Use PyTorch VideoMAE instead of ONNX')
     p.add_argument('--device', default='cuda', help='Device for inference: cuda or cpu (default: cuda)')
@@ -117,7 +144,7 @@ def parse_args():
     p.add_argument('--deepsort-half', action='store_true', default=True, help='Use FP16 for DeepSORT GPU (default: True)')
     p.add_argument('--no-deepsort-gpu', action='store_true', help='Disable GPU for DeepSORT (use CPU)')
     p.add_argument('--deepsort-use-embedder', action='store_true', help='Enable deep feature extraction (slower but more accurate). Default is IoU-only for speed.')
-    p.add_argument('--conf', type=float, default=0.5)
+    p.add_argument('--conf', type=float, default=0.35)
     p.add_argument('--debug', action='store_true')
     p.add_argument('--rtsp-retry', type=int, default=3)
     p.add_argument('--rtsp-reconnect-interval', type=int, default=30, help='Seconds between RTSP health checks')
@@ -264,10 +291,13 @@ def main():
         """Submit mobilenet prediction to executor."""
         def _mobi(c):
             try:
-                return mobi.predict_on_crop(c)
+                mobi_start = time.time()
+                result = mobi.predict_on_crop(c)
+                mobi_time = (time.time() - mobi_start) * 1000
+                return (result, mobi_time)
             except Exception as e:
                 LOGGER.exception("Mobilenet background error for tid %s: %s", tid_local, e)
-                return ('error', 0.0)
+                return (('error', 0.0), 0.0)
         # copy crop to avoid mutation by buffer
         try:
             crop_copy = crop_local.copy() if hasattr(crop_local, 'copy') else crop_local
@@ -300,6 +330,12 @@ def main():
     vmae_processing = set()  # track_ids currently being processed by VideoMAE
     last_vmae_frame = {}  # track_id -> frame_idx when last VideoMAE completed (for cooldown)
 
+    # Performance metrics tracking
+    perf_yolo_time = 0.0
+    perf_deepsort_time = 0.0
+    perf_mobilenet_time = 0.0
+    perf_videomae_time = 0.0
+    perf_total_time = 0.0
 
     frame_idx = 0
     event_idx = 0
@@ -359,6 +395,7 @@ def main():
 
         frame_idx += 1
         now = time.time()
+        frame_start_time = time.time()  # Track total frame processing time
         
         # Calculate FPS
         fps_frame_count += 1
@@ -372,7 +409,10 @@ def main():
         # VideoMAE results are ONLY used for saving clips, NOT for display labels
         while not vmae_result_queue.empty():
             try:
-                tid, vres, frames_buf, extra_sec = vmae_result_queue.get_nowait()
+                tid, vres, frames_buf, extra_sec, vmae_time = vmae_result_queue.get_nowait()
+                
+                # Update performance metric with latest VideoMAE time
+                perf_videomae_time = vmae_time
                 
                 # Store result for internal tracking only (not for display)
                 vmae_results[tid] = (vres.get('label'), vres.get('score', 0.0))
@@ -416,14 +456,19 @@ def main():
                 # Clear VideoMAE state - MobileNet will continue monitoring and can detect suspicious again
                 awaiting_vmae.pop(tid, None)
                 vmae_processing.discard(tid)
-                last_vmae_frame.pop(tid, None)  # Clear the frame marker
+                # Keep last_vmae_frame[tid] for cooldown tracking - don't clear it
                 
             except queue.Empty:
                 break
 
         # Real-time YOLO and DeepSORT processing
+        yolo_start = time.time()
         dets = yolo.detect(frame)
+        perf_yolo_time = (time.time() - yolo_start) * 1000  # Convert to ms
+        
+        deepsort_start = time.time()
         tracks = tracker.update(dets, frame=frame)
+        perf_deepsort_time = (time.time() - deepsort_start) * 1000  # Convert to ms
 
 
         active_tracks = []
@@ -515,9 +560,13 @@ def main():
                 try:
                     res = fut.result(timeout=0)
                     if res is not None:
-                        label, prob = res
+                        (label, prob), mobi_time = res
+                        perf_mobilenet_time = mobi_time  # Update performance metric
                         # Store MobileNet result for display
                         mobi_labels[tid_in_fut] = (label, prob)
+                        
+                        # Print MobileNet prediction (score, label, frame)
+                        print(f"MobileNet Prediction - Track ID: {tid_in_fut}, Label: {label}, Score: {prob:.4f}, Frame: {frame_idx}")
                         
                         if tid_in_fut in buffers:
                             buffers[tid_in_fut].set_label(label, prob)
@@ -525,13 +574,25 @@ def main():
                             # If MobileNet detects suspicious -> schedule VideoMAE extension (non-blocking)
                             if label != 'normal' and prob >= 0.5:
                                 if tid_in_fut not in awaiting_vmae and tid_in_fut not in vmae_processing:
-                                    # Extend buffer by extra_sec to collect more context for VideoMAE
-                                    extra_frames = int(round(args.extra_sec * fps))
-                                    buffers[tid_in_fut].extend_capacity(extra_frames)
-                                    awaiting_vmae[tid_in_fut] = extra_frames
-                                    last_vmae_frame[tid_in_fut] = frame_idx  # Mark when extension started
-                                    LOGGER.info('Track %s: MobileNet detected suspicious (%.2f), extending buffer by %d frames (%.1f sec)', 
-                                               tid_in_fut, prob, extra_frames, args.extra_sec)
+                                    # Check cooldown: prevent triggering VideoMAE if one was started recently
+                                    # This prevents overlapping video extractions when multiple suspicious events occur rapidly
+                                    last_trigger_frame = last_vmae_frame.get(tid_in_fut, -999999)
+                                    frames_since_last_trigger = frame_idx - last_trigger_frame
+                                    # Cooldown period: extra_sec + buffer_sec to ensure previous extraction completes
+                                    cooldown_frames = int(round((args.extra_sec) * fps))
+                                    
+                                    if frames_since_last_trigger >= cooldown_frames:
+                                        # Extend buffer by extra_sec to collect more context for VideoMAE
+                                        extra_frames = int(round(args.extra_sec * fps))
+                                        buffers[tid_in_fut].extend_capacity(extra_frames)
+                                        awaiting_vmae[tid_in_fut] = extra_frames
+                                        last_vmae_frame[tid_in_fut] = frame_idx  # Mark when extension started
+                                        LOGGER.info('Track %s: MobileNet detected suspicious (%.2f), extending buffer by %d frames (%.1f sec)', 
+                                                   tid_in_fut, prob, extra_frames, args.extra_sec)
+                                    else:
+                                        frames_remaining = cooldown_frames - frames_since_last_trigger
+                                        LOGGER.info('Track %s: suspicious detected but in cooldown period, skipping VideoMAE trigger (%d frames remaining)', 
+                                                   tid_in_fut, frames_remaining)
                 except Exception as e:
                     LOGGER.debug('Error reading mobilenet future for %s: %s', tid_in_fut, e)
                 finally:
@@ -624,10 +685,14 @@ def main():
             try:
                 res = fut_mobi.result(timeout=10.0)  # Wait up to 10 seconds per task
                 if res:
-                    label, prob = res
+                    (label, prob), mobi_time = res
                     mobi_labels[tid_mobi] = (label, prob)
                     if tid_mobi in buffers:
                         buffers[tid_mobi].set_label(label, prob)
+                    
+                    # Print MobileNet prediction (score, label, frame) during shutdown
+                    print(f"MobileNet Prediction (Shutdown) - Track ID: {tid_mobi}, Label: {label}, Score: {prob:.4f}, Final Frame: {frame_idx}")
+                    
                     LOGGER.info('Processed remaining MobileNet for track %s: %s (%.3f)', tid_mobi, label, prob)
                     
                     # If suspicious and not already queued for VideoMAE, queue it now
@@ -677,7 +742,7 @@ def main():
         processed_count = 0
         while not vmae_result_queue.empty():
             try:
-                tid, vres, frames_buf, extra_sec = vmae_result_queue.get_nowait()
+                tid, vres, frames_buf, extra_sec, vmae_time = vmae_result_queue.get_nowait()
                 processed_count += 1
                 LOGGER.info('VideoMAE (shutdown) result for %s: label=%s score=%.4f', 
                            tid, vres.get('label'), vres.get('score', 0.0))

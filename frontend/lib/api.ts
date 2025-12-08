@@ -82,8 +82,21 @@ export interface ProfileResponse {
   memberships: MembershipInfo[];
 }
 
-export const buildWsUrl = (path: string): string => {
+export const buildWsUrl = (path: string, useNotificationService: boolean = false): string => {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  
+  // For alerts, prefer notification service if configured, otherwise fall back to backend
+  if (useNotificationService || path.includes('/ws/alerts')) {
+    const notificationUrl = process.env.NEXT_PUBLIC_NOTIFICATION_URL;
+    if (notificationUrl) {
+    const wsProtocol = notificationUrl.startsWith('https') ? 'wss' : 'ws';
+    const wsBase = notificationUrl.replace(/^https?/, wsProtocol);
+    return `${wsBase}${normalizedPath}`;
+    }
+    // Fallback: use backend websocket when notification service URL is not set
+  }
+  
+  // For other WebSockets, use backend
   const wsBase = baseUrl.replace(/^http/, 'ws');
   return `${wsBase}/api${normalizedPath}`;
 };
@@ -295,7 +308,7 @@ export const storeApi = {
     storeId: string,
     payload: MemberPermissionRequest & { username: string; password: string }
   ): Promise<StoreMemberAccountResponse> => {
-    const response = await api.post(`/stores/${storeId}/members`, payload);
+    const response = await api.post(`/stores/${storeId}/member-account`, payload);
     return response.data;
   },
 
@@ -392,6 +405,36 @@ export const eventsApi = {
     return response.data;
   },
 
+  getInOutCounts: async (params?: {
+    camera_id?: string;
+    store_id?: string;
+    limit?: number;
+  }): Promise<Array<{
+    time: string;
+    camera_id: string;
+    store_id: string;
+    count_in: number;
+    count_out: number;
+  }>> => {
+    const response = await api.get('/events/inout-counts', { params });
+    return response.data;
+  },
+
+  getPeopleCounts: async (params?: {
+    camera_id?: string;
+    store_id?: string;
+    limit?: number;
+  }): Promise<Array<{
+    time: string;
+    store_id: string;
+    zone_id: string;
+    camera_id: string;
+    value: number;
+  }>> => {
+    const response = await api.get('/events/people-counts', { params });
+    return response.data;
+  },
+
   getCameraRecentBehaviors: async (
     cameraId: string,
     limit: number = 3
@@ -445,6 +488,23 @@ export const clipsApi = {
 
   deleteClip: async (filename: string): Promise<void> => {
     await api.delete(`/clips/${encodeURIComponent(filename)}`);
+  },
+};
+
+// -----------------------------------------------------------------------------
+// System API
+// -----------------------------------------------------------------------------
+
+export const systemApi = {
+  getStatsSummary: async (): Promise<{
+    total_cameras: number;
+    active_cameras: number;
+    total_people: number;
+    active_streams: number;
+    system_uptime: number;
+  }> => {
+    const response = await api.get('/system/stats/summary');
+    return response.data;
   },
 };
 

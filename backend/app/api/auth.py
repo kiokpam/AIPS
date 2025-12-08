@@ -390,10 +390,11 @@ def member_login(payload: MemberLoginRequest, db: Session = Depends(get_db)) -> 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> ForgotPasswordResponse:
-    """Request a password reset link. Sends email in production, returns link in development."""
+    """Request a password reset link. Sends email via notification service."""
     import secrets
     import logging
-    from app.services.email_service import email_service
+    import httpx
+    import os
     
     logger = logging.getLogger(__name__)
     email = payload.email.lower()
@@ -422,25 +423,71 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
         db.add(reset_token)
         db.commit()
         
-        # Send password reset email
-        email_sent = email_service.send_password_reset_email(
-            to_email=user.email,
-            reset_token=token,
-            user_name=user.name
-        )
+        # Send password reset email via notification service
+        notification_url = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification:8004")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        reset_url = f"{frontend_url}/reset-password?token={token}"
         
-        if email_sent:
-            logger.info(f"Password reset email sent to {user.email}")
-        else:
-            logger.warning(f"Failed to send password reset email to {user.email}")
-        
-        # In development mode (console provider), also return the reset URL for testing
-        # In production (SMTP/SendGrid), don't expose the URL
-        if not email_service.is_production:
-            reset_url = f"/reset-password?token={token}"
+        try:
+            response = httpx.post(
+                f"{notification_url}/notifications/send",
+                json={
+                    "type": "password_reset",
+                    "channels": ["email"],
+                    "data": {
+                        "to_email": user.email,
+                        "subject": "Reset Your AIPS Password",
+                        "html_content": f"""
+                        <html>
+                            <body>
+                                <h2>Password Reset Request</h2>
+                                <p>Hi {user.name},</p>
+                                <p>You requested to reset your password. Click the link below to reset it:</p>
+                                <p><a href="{reset_url}">Reset Password</a></p>
+                                <p>If you didn't request this, please ignore this email.</p>
+                                <p>This link will expire in 1 hour.</p>
+                            </body>
+                        </html>
+                        """,
+                        "text_content": f"""
+                        Password Reset Request
+                        
+                        Hi {user.name},
+                        
+                        You requested to reset your password. Visit the following link to reset it:
+                        {reset_url}
+                        
+                        If you didn't request this, please ignore this email.
+                        This link will expire in 1 hour.
+                        """
+                    }
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Password reset email sent to {user.email} via notification service")
+                # Check if console provider (development mode)
+                results = response.json().get("results", {})
+                if results.get("email") == True:
+                    # Production email sent
+                    return ForgotPasswordResponse(
+                        message="If an account with that email exists, a password reset link has been sent."
+                    )
+                else:
+                    # Development mode - return URL
+                    return ForgotPasswordResponse(
+                        message="If an account with that email exists, a password reset link has been sent.",
+                        reset_url=reset_url  # Only in development
+                    )
+            else:
+                logger.warning(f"Failed to send password reset email: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Failed to send password reset email via notification service: {e}")
+            # Return URL in case of error (for development)
             return ForgotPasswordResponse(
                 message="If an account with that email exists, a password reset link has been sent.",
-                reset_url=reset_url  # Only in development
+                reset_url=reset_url  # Fallback for development
             )
         
         return ForgotPasswordResponse(

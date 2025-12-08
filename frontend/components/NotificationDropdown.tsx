@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Bell, X, Check, CheckCheck, AlertTriangle, AlertCircle, Info } from 'lucide-react';
-import { eventsApi, Alert } from '../lib/api';
+import { eventsApi, Alert, buildWsUrl } from '../lib/api';
 import { useAuth } from '../src/contexts/AuthContext';
+import { wsManager } from '../lib/websocket-manager';
 import toast from 'react-hot-toast';
 
 interface NotificationDropdownProps {
@@ -14,11 +16,14 @@ interface NotificationDropdownProps {
 }
 
 export default function NotificationDropdown({ isOpen, onClose, unreadCount: externalUnreadCount, onUnreadCountChange }: NotificationDropdownProps) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const router = useRouter();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [unreadCount, setUnreadCount] = useState(externalUnreadCount || 0);
   const [isLoading, setIsLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const previousAlertIdsRef = useRef<Set<string>>(new Set());
+  const isInitialLoadRef = useRef<boolean>(true);
   
   const updateUnreadCount = (count: number) => {
     setUnreadCount(count);
@@ -31,7 +36,63 @@ export default function NotificationDropdown({ isOpen, onClose, unreadCount: ext
     try {
       setIsLoading(true);
       const response = await eventsApi.getAlerts({ limit: 20, unread_only: false });
-      setAlerts(response.alerts);
+      const newAlerts = response.alerts;
+      
+      // Detect new behavior alerts and show toast notifications (only if not initial load)
+      const currentAlertIds = new Set(newAlerts.map(a => a.id));
+      
+      if (!isInitialLoadRef.current) {
+        const newBehaviorAlerts = newAlerts.filter(alert => {
+          // Check if it's a behavior alert (has anomaly_type) and is new
+          return alert.anomaly_type && 
+                 !alert.acknowledged && 
+                 !previousAlertIdsRef.current.has(alert.id);
+        });
+        
+        // Show toast for new behavior alerts
+        newBehaviorAlerts.forEach(alert => {
+          toast(
+            (t) => (
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-900">{alert.message}</p>
+                  {alert.camera_name && (
+                    <p className="text-xs text-slate-600 mt-0.5">{alert.camera_name}</p>
+                  )}
+                  {alert.anomaly_type && (
+                    <p className="text-xs text-slate-500 mt-0.5 capitalize">{alert.anomaly_type}</p>
+                  )}
+                  <button
+                    onClick={() => {
+                      toast.dismiss(t.id);
+                      router.push('/dashboard/behavior');
+                    }}
+                    className="mt-2 text-xs font-medium text-blue-600 hover:text-blue-700 underline"
+                  >
+                    View Details
+                  </button>
+                </div>
+              </div>
+            ),
+            {
+              duration: 5000,
+              icon: '🚨',
+              style: {
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                color: '#1f2937',
+              },
+            }
+          );
+        });
+      }
+      
+      // Update previous alert IDs and mark initial load as complete
+      previousAlertIdsRef.current = currentAlertIds;
+      isInitialLoadRef.current = false;
+      
+      setAlerts(newAlerts);
       updateUnreadCount(response.unread_count);
     } catch (error: any) {
       console.error('Failed to fetch alerts:', error);
@@ -47,32 +108,127 @@ export default function NotificationDropdown({ isOpen, onClose, unreadCount: ext
     }
   }, [isOpen, isAuthenticated]);
 
-  // Poll for new alerts every 3 seconds when dropdown is open (reduced from 30s for faster updates)
+  // Refresh alerts when dropdown opens (WebSocket handles real-time updates, so less frequent polling needed)
   useEffect(() => {
-    if (!isOpen || !isAuthenticated) return;
-    
-    const interval = setInterval(() => {
+    if (isOpen && isAuthenticated) {
       fetchAlerts();
-    }, 3000);  // Reduced from 30000ms to 3000ms
-
-    return () => clearInterval(interval);
+    }
   }, [isOpen, isAuthenticated]);
 
-  // Poll for unread count every 2 seconds when dropdown is closed (reduced from 10s for faster updates)
+  // WebSocket connection for real-time alert updates
+  useEffect(() => {
+    if (!isAuthenticated || typeof window === 'undefined') return;
+    
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+
+    const wsUrl = buildWsUrl(`/ws/alerts`, true); // Explicitly use notification service
+
+    const ws = wsManager.getConnection({
+      url: wsUrl,
+      reconnect: true,
+      reconnectDelay: 3000,
+      onMessage: (data) => {
+        if (data.type === 'alert_update' && data.alert) {
+          const newAlert = data.alert as Alert;
+          
+          // Add new alert to the list (prepend to show newest first)
+          setAlerts(prev => {
+            // Check if alert already exists (avoid duplicates)
+            if (prev.some(a => a.id === newAlert.id)) {
+              return prev;
+            }
+            return [newAlert, ...prev];
+          });
+          
+          // Update unread count
+          if (!newAlert.acknowledged) {
+            setUnreadCount(prev => {
+              const newCount = prev + 1;
+              onUnreadCountChange?.(newCount);
+              return newCount;
+            });
+          }
+          
+          // Show toast notification for new behavior alerts
+          if (newAlert.anomaly_type && !newAlert.acknowledged) {
+            toast(
+              (t) => (
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-900">{newAlert.message}</p>
+                    {newAlert.camera_name && (
+                      <p className="text-xs text-slate-600 mt-0.5">{newAlert.camera_name}</p>
+                    )}
+                    {newAlert.anomaly_type && (
+                      <p className="text-xs text-slate-500 mt-0.5 capitalize">{newAlert.anomaly_type}</p>
+                    )}
+                    <button
+                      onClick={() => {
+                        toast.dismiss(t.id);
+                        router.push('/dashboard/behavior');
+                      }}
+                      className="mt-2 text-xs font-medium text-blue-600 hover:text-blue-700 underline"
+                    >
+                      View Details
+                    </button>
+                  </div>
+                </div>
+              ),
+              {
+                duration: 5000,
+                icon: '🚨',
+                style: {
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  color: '#1f2937',
+                },
+              }
+            );
+          }
+          
+          // Update previous alert IDs
+          previousAlertIdsRef.current.add(newAlert.id);
+        }
+      },
+      onError: (err) => {
+        console.error('Alerts websocket error:', err);
+      },
+    });
+
+    // Connection persists across navigations
+    return () => {
+      // Don't close - let manager handle it
+    };
+  }, [isAuthenticated, user, router, onUnreadCountChange]);
+
+  // Poll for alerts less frequently now (every 30 seconds) since we have WebSocket for real-time updates
+  // This is just a fallback in case WebSocket disconnects
   useEffect(() => {
     if (!isAuthenticated) return;
     
-    const fetchUnreadCount = async () => {
+    const fetchAlertsPeriodically = async () => {
       try {
-        const response = await eventsApi.getAlerts({ limit: 1, unread_only: true });
+        const response = await eventsApi.getAlerts({ limit: 20, unread_only: false });
+        setAlerts(response.alerts);
         updateUnreadCount(response.unread_count);
-      } catch (error) {
-        // Silently fail for background polling
+        
+        // Update previous alert IDs
+        const currentAlertIds = new Set(response.alerts.map(a => a.id));
+        previousAlertIdsRef.current = currentAlertIds;
+        isInitialLoadRef.current = false;
+      } catch (error: any) {
+        console.error('Failed to fetch alerts:', error);
       }
     };
-
-    fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 2000);  // Reduced from 10000ms to 2000ms
+    
+    // Initial fetch
+    fetchAlertsPeriodically();
+    
+    // Poll every 30 seconds as fallback (much less frequent since WebSocket handles real-time)
+    const interval = setInterval(fetchAlertsPeriodically, 30000);
+    
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
@@ -152,7 +308,14 @@ export default function NotificationDropdown({ isOpen, onClose, unreadCount: ext
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
+    // Show date/time in the viewer's local timezone
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   if (!isOpen) return null;
@@ -205,56 +368,79 @@ export default function NotificationDropdown({ isOpen, onClose, unreadCount: ext
           </div>
         ) : (
           <div className="divide-y divide-slate-700">
-            {alerts.map((alert) => (
-              <div
-                key={alert.id}
-                className={`p-4 hover:bg-slate-750 transition-colors ${
-                  !alert.acknowledged ? getSeverityColor(alert.severity) : 'border-l-4 border-transparent'
-                } ${!alert.acknowledged ? 'border-l-4' : ''}`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5">
-                    {getSeverityIcon(alert.severity)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className={`text-sm font-medium ${!alert.acknowledged ? 'text-slate-100' : 'text-slate-400'}`}>
-                        {alert.message}
-                      </p>
-                      {!alert.acknowledged && (
-                        <button
-                          onClick={() => handleAcknowledge(alert.id)}
-                          className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-slate-200 transition-colors flex-shrink-0"
-                          title="Mark as read"
-                        >
-                          <Check className="w-4 h-4" />
-                        </button>
-                      )}
+            {alerts.map((alert) => {
+              const isBehaviorAlert = !!alert.anomaly_type;
+              const handleClick = () => {
+                if (isBehaviorAlert) {
+                  router.push('/dashboard/behavior');
+                  onClose();
+                }
+              };
+              
+              return (
+                <div
+                  key={alert.id}
+                  onClick={handleClick}
+                  className={`p-4 transition-colors ${
+                    isBehaviorAlert ? 'cursor-pointer hover:bg-slate-700/50' : 'hover:bg-slate-750'
+                  } ${
+                    !alert.acknowledged ? getSeverityColor(alert.severity) : 'border-l-4 border-transparent'
+                  } ${!alert.acknowledged ? 'border-l-4' : ''}`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">
+                      {getSeverityIcon(alert.severity)}
                     </div>
-                    <div className="mt-1.5 flex items-center gap-2 text-xs text-slate-500">
-                      {alert.store_name && (
-                        <span>{alert.store_name}</span>
-                      )}
-                      {alert.camera_name && (
-                        <>
-                          <span>•</span>
-                          <span>{alert.camera_name}</span>
-                        </>
-                      )}
-                      {alert.anomaly_type && (
-                        <>
-                          <span>•</span>
-                          <span className="capitalize">{alert.anomaly_type}</span>
-                        </>
-                      )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className={`text-sm font-medium ${!alert.acknowledged ? 'text-slate-100' : 'text-slate-400'}`}>
+                          {alert.message}
+                        </p>
+                        {!alert.acknowledged && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleAcknowledge(alert.id);
+                            }}
+                            className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-slate-200 transition-colors flex-shrink-0"
+                            title="Mark as read"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2 text-xs text-slate-500">
+                        {alert.store_name && (
+                          <span>{alert.store_name}</span>
+                        )}
+                        {alert.camera_name && (
+                          <>
+                            <span>•</span>
+                            <span>{alert.camera_name}</span>
+                          </>
+                        )}
+                        {alert.anomaly_type && (
+                          <>
+                            <span>•</span>
+                            <span className="capitalize">{alert.anomaly_type}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="mt-1 flex items-center justify-between">
+                        <p className="text-xs text-slate-500">
+                          {formatTime(alert.timestamp)}
+                        </p>
+                        {isBehaviorAlert && (
+                          <span className="text-xs text-blue-400 font-medium">
+                            Click to view →
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {formatTime(alert.timestamp)}
-                    </p>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

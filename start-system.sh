@@ -17,7 +17,6 @@ if ! command -v docker-compose &> /dev/null; then
 fi
 
 # Create necessary directories
-mkdir -p models
 mkdir -p backend/uploads
 mkdir -p clips
 
@@ -30,16 +29,21 @@ else
     echo "⚠️  YOLO model: Missing (ai/models/yolov8n.onnx)"
 fi
 
-if [ -f "ai/models/mobilenet_pytorch_best.pth" ]; then
+if [ -f "ai/models/mobilenet.onnx" ]; then
     echo "✅ MobileNet model: Found"
 else
-    echo "⚠️  MobileNet model: Missing (ai/models/mobilenet_pytorch_best.pth)"
+    echo "⚠️  MobileNet model: Missing (ai/models/mobilenet.onnx)"
 fi
 
-if [ -f "ai/videomae/videomae.onnx" ]; then
+if [ -f "ai/videomae/videomae_runner.onnx" ] || [ -f "ai/videomae/videomae.onnx" ]; then
     echo "✅ VideoMAE model: Found"
+    if [ -f "ai/videomae/videomae_runner.onnx" ]; then
+        echo "   (Using videomae_runner.onnx)"
+    else
+        echo "   (Using videomae.onnx)"
+    fi
 else
-    echo "⚠️  VideoMAE model: Missing (optional - ai/videomae/videomae.onnx)"
+    echo "⚠️  VideoMAE model: Missing (optional - ai/videomae/videomae_runner.onnx or videomae.onnx)"
 fi
 
 echo ""

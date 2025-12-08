@@ -79,7 +79,8 @@ class MobileNetONNXRunner:
         if output.ndim == 2 and output.shape[1] == 1:
             # Binary classification with sigmoid
             prob = float(1 / (1 + np.exp(-output[0][0])))  # sigmoid
-            label = 'Suspicious' if prob > 0.5 else 'Normal'
+            # Lowered threshold to 0.1 to catch low-confidence suspicious cues
+            label = 'Suspicious' if prob > 0.1 else 'Normal'
         else:
             # Multi-class classification with softmax
             exp_output = np.exp(output[0] - np.max(output[0]))  # numerical stability

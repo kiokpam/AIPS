@@ -18,9 +18,6 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM Create models directory if it doesn't exist
-if not exist "models" mkdir models
-
 REM Create uploads directory for backend
 if not exist "backend\uploads" mkdir backend\uploads
 
