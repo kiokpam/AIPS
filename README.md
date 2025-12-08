@@ -1,315 +1,382 @@
-# AIPS – AI‑Powered Store Surveillance
+# AIPS – AI‑Powered Store Surveillance System
 
-End‑to‑end retail video analytics platform with camera management, live video preview/streaming, zone/line counting tools, AI microservices, and a modern web UI.
+End‑to‑end retail video analytics platform with real-time AI-powered behavior detection, people counting, camera management, live video streaming, and a modern web UI.
 
-This README explains the system flow, how to develop and run it, and where to add features.
-
----
-
-## High‑level Architecture
-
-Services (Dockerized):
-
-- backend/ (FastAPI)
-  - REST API for cameras, tasks (zones/lines), frames, preview, health.
-  - Manages `CameraWorker` instances (OpenCV capture, overlays, AI integration).
-  - TimescaleDB/Postgres via SQLAlchemy models with automatic table creation.
-
-- frontend/ (Next.js 14)
-  - Web UI for camera CRUD, live preview, drawing zones/lines, and configuration.
-  - Auth placeholder (localStorage), dark black‑blue design system.
-
-- ai/people-counting, ai/behavior-detection (FastAPI)
-  - Example AI microservices (can be swapped with your models).
-
-
-Data Store:
-
-- TimescaleDB/Postgres for core entities (cameras, counting zones/lines, time‑series people counts).
+This README explains the system architecture, how to run it, and key features.
 
 ---
 
-## Repository Layout
+## 🏗️ High‑level Architecture
+
+**Services (Dockerized):**
+
+- **backend/** (FastAPI)
+  - REST API for cameras, stores, organizations, members, tasks (zones/lines), events, alerts
+  - WebSocket endpoints for real-time updates (detections, in/out counts, alerts)
+  - Manages `CameraWorker` instances (OpenCV capture, overlays, AI integration)
+  - TimescaleDB/Postgres via SQLAlchemy models with automatic table creation
+  - File upload service for video testing
+
+- **frontend/** (Next.js 14)
+  - Modern web UI with dark theme
+  - Camera management, live preview, zone/line drawing
+  - Real-time dashboards (behavior detection, in/out counting)
+  - Multi-language support (EN/VI)
+  - WebSocket integration for live updates
+
+- **ai/** (Python AI Service)
+  - Unified AI service (`service_mode.py`) running YOLO detection, DeepSORT tracking
+  - MobileNet filtering for suspicious behavior screening
+  - VideoMAE analysis for detailed behavior detection (shoplifting, violence)
+  - Per-camera processing with WebSocket communication to backend
+  - GPU-accelerated (CUDA) with CPU fallback
+
+- **notification-service/** (FastAPI)
+  - WebSocket server for alert broadcasting to frontend clients
+  - Email notifications (SMTP)
+  - Telegram bot integration (optional)
+  - Receives alerts from backend and broadcasts to connected clients
+
+**Data Store:**
+- TimescaleDB/Postgres for core entities (cameras, stores, organizations, members, counting zones/lines, alerts, video clips, time‑series people counts)
+
+---
+
+## 📁 Repository Layout
 
 ```
-backend/                # FastAPI backend service
+backend/                    # FastAPI backend service
   app/
-    api/                # FastAPI routers: cameras, tasks, preview, events
-    models/             # SQLAlchemy models (Camera, CountingZone, Alert, VideoClip, …)
-    schemas/            # Pydantic schemas
+    api/                    # FastAPI routers: cameras, stores, auth, events, clips, ws
+    models/                 # SQLAlchemy models (Camera, Store, Alert, VideoClip, ...)
+    schemas/                # Pydantic schemas
     services/
-      camera_manager.py # CameraWorker, frame processing, AI integration
-      streaming_service.py # MJPEG generation and preview helpers
-    main.py             # App factory, CORS, router wiring
+      camera_manager.py     # CameraWorker, frame processing, AI integration
+      streaming_service.py  # MJPEG generation and preview helpers
+      websocket_manager.py  # WebSocket connection management
+    main.py                 # App factory, CORS, router wiring
 
-frontend/               # Next.js frontend application
-  app/                  # Next.js app router pages
-  src/                  # Components, contexts, utilities
+frontend/                   # Next.js frontend application
+  app/                      # Next.js app router pages
+    cameras/                # Camera management page
+    dashboard/              # Behavior, in-out dashboards
+    videos/                 # Saved video clips page
+  components/               # Reusable components
+  lib/                      # API client, WebSocket manager
+  src/                      # Contexts, i18n, utilities
 
-ai/                     # AI microservices (ready for integration)
-  ai-core/              # Core AI service (detection, tracking)
-  people-counting/      # People counting service (example)
-  behavior-detection/   # Behavior detection service (example)
+ai/                         # Unified AI service
+  ai/                       # AI model runners (YOLO, MobileNet, VideoMAE)
+  detectors/                # YOLO detector, DeepSORT tracker
+  inout_pkg/                # In/Out counting logic
+  zone/                     # Zone detection utilities
+  models/                   # ONNX model files (YOLO, MobileNet)
+  videomae/                 # VideoMAE model files
+  service_mode.py           # Main AI service loop
+  main.py                   # Standalone mode (for testing)
 
-shared/                 # Shared schemas and definitions
-  events-json/          # Event JSON schemas
-docker-compose.yml      # Orchestrates services
+notification-service/       # Notification service
+  app/
+    api/                    # REST API, WebSocket endpoints
+    services/               # Email, Telegram, notification router
+    models/                 # Notification models
+
+clips/                      # Video clips saved by AI (anomaly detection)
+backend/uploads/            # Uploaded video files (for testing)
+docker-compose.yml          # Orchestrates all services
+start-system.sh             # Startup script (Linux/Mac)
+start-system.bat            # Startup script (Windows)
 ```
 
 ---
 
-## Authentication & RBAC
+## 🔐 Authentication & RBAC
 
-- New multi-tenant auth model with organizations and role-based access:
-  - `manager`: full access within organization (manage cameras, tasks, members)
-  - `member`: read/monitor permissions as granted by managers
-- Key REST endpoints:
-  - `POST /api/auth/signup` – create organization and manager user
-  - `POST /api/auth/login` – obtain org-scoped JWT
-  - `POST /api/auth/switch-org` – switch active organization for users with multiple memberships
-  - `GET /api/auth/me` – profile with memberships
-  - `GET /api/auth/orgs/{org_id}/members` – list members (manager only)
-  - `POST /api/auth/orgs/{org_id}/members` – add/update members (manager only)
-- JWT access tokens now include `sub`, `org_id`, and `role` claims. All protected endpoints enforce organization scoping and role checks.
-- Set environment variables (or `.env`) for JWT configuration:
-  - `JWT_SECRET` (default `dev-secret-change-me`)
-  - `JWT_EXPIRES_SECONDS` (default `3600`)
+Multi-tenant authentication with organizations and role-based access:
 
----
+- **`manager`**: Full access within organization (manage cameras, stores, members, tasks)
+- **`member`**: Read/monitor permissions as granted by managers
 
-## Core User Flows
+**Key REST endpoints:**
+- `POST /api/auth/signup` – Create organization and manager user
+- `POST /api/auth/login` – Obtain org-scoped JWT
+- `POST /api/auth/switch-org` – Switch active organization
+- `GET /api/auth/me` – Profile with memberships
+- `GET /api/auth/orgs/{org_id}/members` – List members (manager only)
+- `POST /api/auth/orgs/{org_id}/members` – Add/update members (manager only)
 
-1) Add a camera
-- Frontend calls `POST /api/cameras/` with name, source (RTSP/file), model params.
-- Backend persists a `Camera`, the worker can be started via `POST /api/cameras/{id}/start`.
-- UI marks camera as active optimistically and polls stats.
+JWT tokens include `sub`, `org_id`, and `role` claims. All endpoints enforce organization scoping.
 
-2) Live preview (before saving camera)
-- Frontend hits `GET /api/preview/test?source=...` to validate connectivity (OpenCV one‑shot test).
-- Frontend can open `GET /api/preview/stream?source=...` (MJPEG) for quick pre‑add preview.
-
-3) Drawing zones/lines (people counting)
-- On the Add Camera modal, the UI draws on an HTML5 canvas placed over the media element.
-- Points are stored in normalized space (fractions `[0,1]`) relative to the content box (letterboxing aware).
-- On save, UI fetches an actual frame to get `naturalWidth/Height` and converts fractions → exact frame pixels.
-- UI calls `POST /api/tasks/camera/{id}/set` with `CountingZoneCreate[]` and/or `CountingLineCreate[]`.
-- Backend updates DB and calls `camera_worker.update_task_config()`, enabling overlays and AI logic.
-
-4) Live stream with overlays
-- UI displays `GET /api/cameras/{id}/stream?overlay=true` (MJPEG) inside `<img>`. Backend draws stored zones/lines.
-
-5) People counting/behavior detection
-- `CameraWorker` can periodically send frames to AI services; results update `current_count` and/or events.
+**Environment variables:**
+- `JWT_SECRET` (default: `dev-secret-change-me`)
+- `JWT_EXPIRES_SECONDS` (default: `3600`)
 
 ---
 
-## Default Credentials & Setup
+## 🚀 Core Features
 
-After signing up via `POST /api/auth/signup`, use the returned token for subsequent requests. Production deployments must set a strong `JWT_SECRET`.
+### 1. Camera Management
+- Add cameras with RTSP URLs or file sources
+- Live preview before saving
+- Start/stop camera processing
+- Real-time streaming with overlays
+
+### 2. Zone & Line Configuration
+- Draw counting zones (polygons) for behavior detection
+- Draw counting lines (Line A + Line B) for in/out counting
+- Visual overlay on live stream
+- Persistent configuration in database
+
+### 3. AI-Powered Analytics
+- **People Detection**: YOLO object detection
+- **Tracking**: DeepSORT multi-object tracking
+- **Behavior Detection**: 
+  - MobileNet filtering (fast screening)
+  - VideoMAE analysis (detailed behavior classification)
+  - Detects: shoplifting, violence, normal behavior
+- **People Counting**: In/Out counting via line crossings
+- **Real-time Metrics**: FPS, inference times, processing stats
+
+### 4. Real-time Dashboards
+- **Behavior Dashboard**: View detected anomalies (shoplifting, violence)
+- **In/Out Dashboard**: Track people entering/exiting stores
+- **Live Updates**: WebSocket-powered real-time data
+
+### 5. Alerts & Notifications
+- Real-time alert notifications via WebSocket
+- Email notifications (SMTP)
+- Telegram bot integration (optional)
+- Alert acknowledgment and management
+
+### 6. Video Clips
+- Automatic clip saving for detected anomalies
+- View and download saved clips
+- Clip metadata (behavior type, confidence, timestamp)
 
 ---
 
-## Coordinate Mapping Details
+## 🖥️ System Requirements
 
-Why normalized coordinates?
-- Keeps drawing resolution‑independent and robust to scaling/letterboxing.
+**Hardware:**
+- **GPU**: NVIDIA GeForce RTX 3050 (4 GB VRAM) or better
+- **RAM**: Minimum 8GB, Recommended 16GB+
+- **Storage**: Sufficient space for video clips and models
 
-Flow:
-- During click: compute `(fx, fy)` in `[0,1]` inside the content box; store both pixel `(x, y)` for preview and `(fx, fy)` for saving.
-- On save: fetch `frameWidth/Height`, convert `[fx*W, fy*H]` (rounded) → backend `polygon` / `p1,p2`.
-- Backend overlays use the saved frame pixels, ensuring alignment with live video.
+**Software:**
+- Docker Desktop + Docker Compose
+- NVIDIA Docker runtime (for GPU acceleration)
+- CUDA 12.3+ compatible drivers
+
+**Models Required:**
+- `ai/models/yolov8n.onnx` - YOLO detection model
+- `ai/models/mobilenet.onnx` - MobileNet filtering model
+- `ai/videomae/videomae_runner.onnx` or `videomae.onnx` - VideoMAE behavior model (optional)
 
 ---
 
-## Running the System
+## 🏃 Running the System
 
-Prereqs: Docker Desktop + Compose. On Windows with WSL, LF line endings are important for YAMLs.
+### Option 1: Using the Startup Script
 
-### Option 1 – Using the helper script (`start-system.sh`)
-
-This script wraps `docker-compose` and basic health checks for you.
-
+**Linux/Mac:**
 ```bash
-cd /path/to/AIPS               # e.g. /mnt/d/Capstone/github/AIPS on WSL
-chmod +x start-system.sh       # first time only
+cd /path/to/AIPS
+chmod +x start-system.sh
 ./start-system.sh
 ```
 
-What it does:
-- Verifies Docker and `docker-compose` are available.
-- Creates `models/` and `backend/uploads/` directories if missing.
-- Runs `docker-compose up --build -d`.
-- Waits briefly, then checks:
-  - DB readiness
-  - Backend: `http://localhost:8000/api/healthz`
-  - Frontend: `http://localhost:3000`
-
-On Windows without WSL, you can use the batch script instead:
-
+**Windows:**
 ```powershell
 cd D:\Capstone\github\AIPS
 start-system.bat
 ```
 
-### Quick Start (Docker Compose)
+**What it does:**
+- Verifies Docker and `docker-compose` availability
+- Checks for required AI model files
+- Creates necessary directories (`backend/uploads/`, `clips/`)
+- Runs `docker-compose up --build -d`
+- Performs health checks on services
 
-Bring up the full stack (backend, frontend, db, AI services, optional stream gateway):
+### Option 2: Docker Compose Directly
 
 ```bash
 docker-compose up -d --build
 ```
 
-Open apps:
+**Access points:**
 - Frontend: http://localhost:3000
-- Backend:  http://localhost:8000/api/healthz → `{ "status": "ok" }`
-- API docs: http://localhost:8000/docs
+- Backend API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+- Notification Service: http://localhost:8004
 
-Stop everything:
-
+**Stop system:**
 ```bash
 docker-compose down
 ```
 
-Rebuild just one service (e.g., frontend) after code changes:
-
+**View logs:**
 ```bash
-docker-compose build frontend
-docker-compose up -d frontend
+docker-compose logs -f [service-name]  # e.g., ai, backend, frontend
 ```
 
-### Run Each Service Individually (Dev Mode)
+---
 
-Backend (FastAPI with reload):
+## 🔌 Key API Endpoints
 
+### Health
+- `GET /health` - Service health check
+
+### Cameras
+- `GET /api/cameras/` - List cameras
+- `POST /api/cameras/` - Create camera
+- `POST /api/cameras/{id}/start` - Start camera processing
+- `POST /api/cameras/{id}/stop` - Stop camera processing
+- `GET /api/cameras/{id}/stats` - Camera statistics
+- `GET /api/cameras/{id}/stream?overlay=true` - MJPEG stream
+
+### Tasks (Zones/Lines)
+- `GET /api/tasks/camera/{id}/config` - Get camera configuration
+- `POST /api/tasks/camera/{id}/set` - Set zones/lines
+- `POST /api/tasks/camera/{id}/clear` - Clear configuration
+
+### Events & Alerts
+- `GET /api/events/alerts` - List alerts
+- `POST /api/events/anomaly-detected` - Report anomaly (AI service)
+- `POST /api/events/acknowledge/{alert_id}` - Acknowledge alert
+
+### Video Clips
+- `GET /api/clips/` - List saved video clips
+- `GET /api/clips/{filename}` - Download clip
+
+### WebSocket Endpoints
+- `WS /api/ws/detections` - Real-time detection updates (bounding boxes, metrics)
+- `WS /api/ws/inout` - Real-time in/out count updates
+- `WS /api/ws/alerts` - Real-time alert notifications
+- `WS /api/ws/detections/ai/{camera_id}` - AI service connection (internal)
+
+### AI Integration
+- `GET /api/ai/cameras` - List cameras for AI processing
+- `GET /api/ai/cameras/{id}/frame` - Get camera frame (AI service)
+- `GET /api/ai/cameras/{id}/config` - Get camera config (zones, lines)
+
+---
+
+## 🧪 Development Mode
+
+### Backend (FastAPI)
 ```bash
 cd backend
-pip install -r requirements-dev.txt || pip install -r requirements.txt
+pip install -e .
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Frontend (Next.js dev server):
-
+### Frontend (Next.js)
 ```bash
 cd frontend
 npm install
 npm run dev
-# open http://localhost:3000
+# Open http://localhost:3000
 ```
 
-AI – People Counting (example):
-
+### AI Service
 ```bash
-cd ai/people-counting
+cd ai
 pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8001
+python service_mode.py --backend-url http://localhost:8000 --device cuda
 ```
 
-AI – Behavior Detection (example):
-
+### Notification Service
 ```bash
-cd ai/behavior-detection
+cd notification-service
 pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8002
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8004
 ```
 
 ---
 
-## Key API Endpoints (selection)
+## 📊 AI Pipeline Performance
 
-Health
-- `GET /api/healthz`
+The full pipeline—including YOLO detection, DeepSORT tracking, per-identity buffer updates, lightweight MobileNet filtering, and asynchronous VideoMAE analysis—is executed on a live camera stream using an NVIDIA GeForce RTX 3050 (4 GB VRAM).
 
-Cameras
-- `GET /api/cameras/`
-- `POST /api/cameras/` { name, source, ai_services, … }
-- `POST /api/cameras/{id}/start` | `POST /api/cameras/{id}/stop`
-- `GET /api/cameras/{id}/stats` – fps, running, worker stats
-- `GET /api/cameras/{id}/frame?overlay=false` – single JPEG frame
-- `GET /api/cameras/{id}/stream?overlay=true` – MJPEG
-
-Tasks (zones/lines)
-- `GET /api/tasks/camera/{id}/config`
-- `POST /api/tasks/camera/{id}/set` { task_type: 'zone'|'line'|'both', zones, lines }
-- `POST /api/tasks/camera/{id}/clear`
-
-Preview
-- `GET /api/preview/test?source=...` – reachability check (OpenCV one‑shot; times out with friendly message)
-- `GET /api/preview/stream?source=...` – ad‑hoc MJPEG stream for quick inspection
+**Performance Metrics:**
+- YOLO Inference: ~35-45ms per frame
+- DeepSORT Tracking: ~12-20ms per frame
+- MobileNet Filtering: ~15-20ms per crop (async)
+- VideoMAE Analysis: ~280-425ms per clip (16 frames)
+- Overall Pipeline FPS: ~7-20 FPS (depending on camera count and load)
 
 ---
 
-## Development
+## 🔧 Configuration
 
-Frontend (Next.js):
-```bash
-cd frontend
-npm install
-npm run dev
-```
+### Environment Variables
 
-Backend (FastAPI):
-```bash
-cd backend
-uvicorn app.main:app --reload --port 8000
-```
+**Backend** (`docker-compose.yml`):
+- `DATABASE_URL` - PostgreSQL connection string
+- `JWT_SECRET` - JWT signing secret
+- `CORS_ORIGINS` - Allowed CORS origins
+- `CLIPS_DIR` - Directory for saved video clips
 
-Database setup:
-```bash
-# Database tables are automatically created on backend startup
-# No manual migration steps required
-```
+**AI Service** (`docker-compose.yml`):
+- `BACKEND_URL` - Backend API URL
+- `AI_DEVICE` - `cuda` or `cpu`
+- `CLIPS_DIR` - Directory for saving clips
 
-AI services (examples):
-```bash
-cd ai/people-counting
-uvicorn main:app --reload --port 8001
+**Frontend** (`docker-compose.yml`):
+- `NEXT_PUBLIC_API_URL` - Backend API URL
+- `NEXT_PUBLIC_NOTIFICATION_URL` - Notification service URL (optional)
 
-cd ai/behavior-detection
-uvicorn main:app --reload --port 8002
-```
+**Notification Service** (`docker-compose.yml`):
+- `BACKEND_URL` - Backend API URL
+- `EMAIL_PROVIDER` - Email service provider
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token (optional)
 
 ---
 
-## Theming & UI
+## 🐛 Troubleshooting
 
-- Global dark black‑blue style in `frontend/src/styles/globals.css`.
-- `app-layout.tsx` defines sidebar/topbar. Brand logo at `/public/logo.svg`.
-- Language toggle (EN/VI) in header and homepage; translation is wired in `app/page.tsx`.
+**Preview "Connection timeout"**
+- Verify camera RTSP URL is accessible
+- Check network connectivity
+- Test with: `curl "http://localhost:8000/api/preview/test?source=<RTSP_URL>"`
 
----
+**AI Service not detecting behaviors**
+- Check GPU availability: `nvidia-smi`
+- Verify models are present: `ls ai/models/`
+- Check AI service logs: `docker-compose logs -f ai`
 
-## Troubleshooting
+**WebSocket connection issues**
+- Verify backend/notification service is running
+- Check browser console for WebSocket errors
+- Ensure JWT token is valid
 
-Preview “Connection timeout – video source not responding”
-- Test directly:
-```bash
-curl -s "http://localhost:8000/api/preview/test?source=<RTSP>"
-```
-- If false: verify camera online, RTSP path/credentials, network/firewall, and that the backend host can reach the camera.
-
-Canvas overlay misalignment
-- Ensure normalized coordinates are saved; the UI fetches a real frame and scales `[fx, fy]` → frame pixels on save.
-
-CORS
-- Backend `CORSMiddleware` allows `http://localhost:3000` with credentials. Adjust `app/main.py` if needed.
-
----
-
-## Where to Add New Features
-
-- New AI rule (e.g., loitering):
-  - Backend event processor in `camera_manager.py` (counter/time in zone) + endpoint to fetch events.
-  - Frontend Events page with filters and evidence snapshots.
-
-- Access control or intercom integrations:
-  - Create a new router under `backend/app/api/` and service module under `services/`.
-
-- More translations:
-  - Add keys in `app/page.tsx` dictionary (or move to a shared i18n module), wire into other pages.
+**Database connection errors**
+- Verify PostgreSQL container is running: `docker-compose ps db`
+- Check database logs: `docker-compose logs db`
+- Ensure `DATABASE_URL` is correct
 
 ---
 
-## License
+## 📝 Adding New Features
+
+**New AI behavior detection:**
+- Modify `ai/service_mode.py` to add new behavior types
+- Update VideoMAE model or add custom detection logic
+- Add alert types in backend `Alert` model
+
+**New dashboard:**
+- Create new page in `frontend/app/dashboard/`
+- Add WebSocket subscription for real-time updates
+- Use existing API endpoints or add new ones
+
+**New notification channel:**
+- Add service in `notification-service/app/services/`
+- Register in `notification_router.py`
+- Update frontend to use new channel
+
+---
+
+## 📄 License
 
 MIT
-
