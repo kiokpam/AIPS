@@ -89,15 +89,18 @@ export const buildWsUrl = (path: string, useNotificationService: boolean = false
   if (useNotificationService || path.includes('/ws/alerts')) {
     const notificationUrl = process.env.NEXT_PUBLIC_NOTIFICATION_URL;
     if (notificationUrl) {
-    const wsProtocol = notificationUrl.startsWith('https') ? 'wss' : 'ws';
-    const wsBase = notificationUrl.replace(/^https?/, wsProtocol);
-    return `${wsBase}${normalizedPath}`;
+      const wsProtocol = notificationUrl.startsWith('https') ? 'wss' : 'ws';
+      const wsBase = notificationUrl.replace(/^https?/, wsProtocol);
+      return `${wsBase}${normalizedPath}`;
     }
     // Fallback: use backend websocket when notification service URL is not set
   }
   
   // For other WebSockets, use backend
-  const wsBase = baseUrl.replace(/^http/, 'ws');
+  // Resolve baseUrl dynamically to support test environment variable changes
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const resolvedBaseUrl = apiUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+  const wsBase = resolvedBaseUrl.replace(/^http/, 'ws');
   return `${wsBase}/api${normalizedPath}`;
 };
 

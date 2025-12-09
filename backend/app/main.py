@@ -50,7 +50,14 @@ app.include_router(api_router, prefix="/api")
 @app.on_event("startup")
 def on_startup() -> None:
     """Initialize database and services on startup"""
+    import os
     import time
+    
+    # Skip DB initialization during tests
+    if os.getenv('SKIP_DB_INIT') == '1':
+        logger.info("Skipping database initialization (test mode)")
+        return
+    
     max_retries = 10
     retry_delay = 2
     

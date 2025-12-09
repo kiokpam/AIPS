@@ -1,14 +1,74 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 *.so
 *.egg
 *.egg-info/
 dist/
 build/
+*.whl
+.Python
+
+# Python Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+.ENV
 
 # Jupyter Notebooks
-.ipynb_checkpoints
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+*.cover
+*.coveragerc
+coverage.xml
+*.pytest_cache
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
 
 # Data files
 *.csv
@@ -18,35 +78,98 @@ build/
 *.h5
 *.db
 *.sqlite
-
-# Environment
-.env
-.venv
-venv/
-ENV/
-
-# VS Code
-.vscode/
-
-# macOS
-.DS_Store
-**/.DS_Store
+*.sqlite3
 
 # Model files (large)
 ai/videomae/videomae_runner.onnx
 models/*.pt
 models/*.onnx
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.pb
 
-# Data and clips
+# Video and media files
 clips/
+uploads/
 *.mp4
 *.avi
 *.mov
+*.mkv
+*.flv
+*.wmv
+*.webm
+*.m4v
+*.3gp
+
+# Configuration files (sensitive)
 coordinate.json
 test_*.json
+config.local.json
+secrets.json
 
-
-# Metrics and logs
+# Logs and metrics
 metrics/
+logs/
 *.log
+*.log.*
+log/
 
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm
+.eslintcache
+.next/
+out/
+build/
+dist/
+.cache/
+.parcel-cache/
+.turbo/
+*.tsbuildinfo
+
+# Frontend build artifacts
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+frontend/.turbo/
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*.swp
+*.swo
+*~
+
+# Database dumps
+*.sql
+*.dump
+*.backup
+
+# Archives (unless needed)
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# OS generated files
+.DS_Store?
+Icon?
+.Spotlight-V100
+.Trashes

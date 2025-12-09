@@ -358,6 +358,90 @@ The full pipeline—including YOLO detection, DeepSORT tracking, per-identity bu
 
 ---
 
+## 🧪 Testing
+
+The project includes comprehensive test suites for all components. See [TESTING.md](TESTING.md) for detailed testing documentation.
+
+### Quick Start
+
+**Backend Tests:**
+```bash
+cd backend
+pip install -e ".[test]"
+pytest
+```
+
+**Frontend Tests:**
+```bash
+cd frontend
+npm install
+npm test
+```
+
+**AI Service Tests:**
+```bash
+cd ai
+pip install pytest numpy
+pytest tests/
+```
+
+### Test Coverage
+
+- **Unit Tests**: Core services and utilities (>80% coverage goal)
+- **Integration Tests**: API endpoints and database interactions
+- **End-to-End Tests**: Complete user workflows
+
+Run tests with coverage:
+```bash
+# Backend
+pytest --cov=app --cov-report=html
+
+# Frontend
+npm run test:coverage
+```
+
+---
+
+## 🧪 Testing
+
+The project includes comprehensive test suites. **Tests run independently** of your running system and don't interfere with it.
+
+### Quick Start
+
+**First time setup:**
+```bash
+# Install python3-venv if needed (Ubuntu/Debian)
+sudo apt install python3.10-venv
+
+# Run setup script
+./setup-testing.sh
+```
+
+**Run tests:**
+```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Run all tests
+./run-all-tests.sh
+```
+
+**Run individual service tests:**
+```bash
+# Backend
+cd backend && pytest
+
+# Frontend  
+cd frontend && npm test
+
+# AI Service
+cd ai && pytest tests/
+```
+
+See [QUICK_START_TESTING.md](QUICK_START_TESTING.md) for quick setup guide and [TESTING.md](TESTING.md) for detailed documentation.
+
+---
+
 ## 📝 Adding New Features
 
 **New AI behavior detection:**

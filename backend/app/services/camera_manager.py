@@ -222,7 +222,18 @@ class VideoStream:
                     continue
                 
                 # Try to read frame
-                ret, frame = self.cap.read()
+                try:
+                    result = self.cap.read()
+                    if len(result) == 2:
+                        ret, frame = result
+                    else:
+                        # Handle case where read() returns unexpected format
+                        ret = False
+                        frame = None
+                except (ValueError, TypeError) as e:
+                    # Handle unpacking errors gracefully
+                    ret = False
+                    frame = None
                 if not ret or frame is None:
                     consecutive_read_failures += 1
                     fail_count += 1
