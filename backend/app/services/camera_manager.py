@@ -31,9 +31,24 @@ from datetime import datetime
 import cv2
 import numpy as np
 from collections import deque
+import logging
 
 # Mitigate FFmpeg threading assertion issues on some Windows setups
 os.environ.setdefault('OPENCV_FFMPEG_THREADS', '1')
+
+# Suppress FFmpeg warnings about codec errors (they don't stop streaming, just clutter logs)
+# Set log level to suppress non-critical FFmpeg messages
+logging.getLogger('ffmpeg').setLevel(logging.ERROR)
+
+# Also try to set OpenCV's own FFmpeg wrapper to suppress verbose logging
+import ctypes
+try:
+    # This attempts to set FFmpeg log level, though it may not work on all systems
+    av_log_set_level = getattr(cv2.cv2, 'avLogSetLevel', None)
+    if av_log_set_level:
+        av_log_set_level(40)  # AV_LOG_QUIET = 40 (suppress most messages)
+except:
+    pass
 
 class VideoStream:
     """
@@ -72,17 +87,24 @@ class VideoStream:
         self.is_video_file = (
             isinstance(self.src, str)
             and not self.src.isdigit()
-            and not self.src.startswith(("rtsp://", "http://"))
+            and not self.src.startswith(("rtsp://", "http://", "/dev/video", "\\\\?\\"))
         )
 
         self.latest_frame = None
+        self.frame_seq = 0  # Sequence number incremented each time a new frame arrives
+        self.frame_timestamp = 0.0  # Timestamp when latest frame was captured
         self.lock = threading.Lock()
         self.running = True
         self.frame_times = deque(maxlen=30)
         self.start_time = time.time()  # Track when stream started
+        # Check if source is RTSP (needs buffer flushing)
+        self.is_rtsp = isinstance(self.src, str) and self.src.startswith(("rtsp://", "http://"))
+        # Check if source is USB device (local capture, no buffering needed)
+        # USB devices can be: int (device index), "/dev/video*" (Linux), or "\\?\usb*" (Windows)
+        self.is_usb = isinstance(self.src, int) or (isinstance(self.src, str) and self.src.startswith(("/dev/video", "\\\\?\\")))
 
         # Log stream creation
-        logger.info(f"Created VideoStream for source: {self.src}")
+        logger.info(f"Created VideoStream for source: {self.src} (RTSP={self.is_rtsp}, USB={self.is_usb}, FPS={self.video_fps})")
 
         threading.Thread(target=self._update, daemon=True, name=f"VideoStream-{id(self)}").start()
     
@@ -106,17 +128,62 @@ class VideoStream:
         try:
             if isinstance(src, int):
                 if os.name == 'nt':
+                    # Try DirectShow first
                     cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+                    if not cap or not cap.isOpened():
+                        # Fallback to Media Foundation (works better on some Windows setups)
+                        try:
+                            cap = cv2.VideoCapture(src, cv2.CAP_MSMF)
+                        except Exception:
+                            cap = cv2.VideoCapture(src)
                 else:
                     cap = cv2.VideoCapture(src)
+
+                # Optimize USB camera settings for smooth streaming
+                try:
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
+                # Prefer MJPG if the camera supports it (common for USB webcams)
+                try:
+                    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                    cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+                except Exception:
+                    pass
+                # Try to request a reasonable FPS; many webcams support 30
+                try:
+                    if (cap.get(cv2.CAP_PROP_FPS) or 0) <= 0:
+                        cap.set(cv2.CAP_PROP_FPS, 30)
+                except Exception:
+                    pass
                 return cap
 
             # RTSP/HTTP streams: prefer FFMPEG backend if available
             if isinstance(src, str) and src.startswith(("rtsp://", "http://")):
-                # Try default backend first
-                cap_default = cv2.VideoCapture(src)
+                # Try with TCP transport first (more reliable than UDP for RTSP)
+                rtsp_src = src
+                if src.startswith("rtsp://") and "?tcp" not in src:
+                    rtsp_src = src.replace("rtsp://", "rtsps://") if "rtsp://" not in src else src
+                    # Add TCP parameter if not already present
+                    if "?" not in rtsp_src:
+                        rtsp_src = src + "?tcp"
+                    else:
+                        rtsp_src = src + "&tcp"
+                
+                # Try default backend first with robust options
+                cap_default = cv2.VideoCapture(rtsp_src)
                 if cap_default.isOpened():
                     # Reduce buffering if supported
+                    try:
+                        cap_default.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    except Exception:
+                        pass
+                    # Try fallback to original source if TCP variant didn't work
+                    return cap_default
+                
+                # Fallback to original RTSP URL
+                cap_default = cv2.VideoCapture(src)
+                if cap_default.isOpened():
                     try:
                         cap_default.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     except Exception:
@@ -150,147 +217,92 @@ class VideoStream:
             return cv2.VideoCapture(src)
     
     def _update(self):
-        """Main capture loop"""
-        last_time = time.time()
-        fail_count = 0
-        max_failures = 100  # Increased threshold before giving up
+        """Main capture loop - simplified for stability"""
+        logger = logging.getLogger(__name__)
         consecutive_read_failures = 0
-        max_consecutive_read_failures = 50  # Reduced from 30 to be more aggressive about reconnecting
+        # Use a conservative failure window (~2 seconds) to avoid thrashing reconnects
+        failure_sleep = 0.01  # 10ms between failed reads
+        max_consecutive_read_failures = 200  # 200 * 10ms ≈ 2s
+        if getattr(self, 'is_usb', False):
+            # For USB cameras, be even more patient before reconnecting
+            failure_sleep = 0.01  # keep 10ms but allow longer window
+            max_consecutive_read_failures = 300  # 3s to tolerate brief stalls
+        frame_count = 0
+        last_fps_log = time.time()
         
         while self.running:
             try:
-                # Check if capture is still valid
-                if not self.cap:
-                    # Try to reopen if closed
-                    if fail_count < max_failures:
-                        try:
-                            self.cap = self._open_capture(self.src)
-                            fail_count = 0
-                            consecutive_read_failures = 0
-                            logger = logging.getLogger(__name__)
-                            logger.info(f"Reopened stream {self.src}")
-                        except Exception as e:
-                            fail_count += 1
-                            if fail_count % 10 == 0:
-                                logger = logging.getLogger(__name__)
-                                logger.warning(f"Failed to reopen stream {self.src} (attempt {fail_count}): {e}")
-                            time.sleep(1.0)  # Wait longer before retry
-                        continue
-                    else:
-                        logger = logging.getLogger(__name__)
-                        logger.error(f"Stream {self.src} failed too many times, stopping")
-                        self.running = False
-                        break
-                
-                # Check if capture is opened - use try/except as isOpened() can sometimes throw
-                try:
-                    if not self.cap.isOpened():
-                        # Capture closed, try to reopen
-                        consecutive_read_failures += 1
-                        if consecutive_read_failures < max_consecutive_read_failures:
-                            try:
-                                self.cap.release()
-                            except:
-                                pass
-                            try:
-                                self.cap = self._open_capture(self.src)
-                                consecutive_read_failures = 0
-                                logger = logging.getLogger(__name__)
-                                logger.info(f"Reopened closed stream {self.src}")
-                            except Exception as e:
-                                if consecutive_read_failures % 10 == 0:
-                                    logger = logging.getLogger(__name__)
-                                    logger.warning(f"Failed to reopen closed stream {self.src}: {e}")
-                                time.sleep(0.5)
-                        else:
-                            logger = logging.getLogger(__name__)
-                            logger.error(f"Stream {self.src} capture closed too many times, stopping")
-                            self.running = False
-                            break
-                        continue
-                except Exception as e:
-                    # isOpened() threw an exception - capture might be invalid
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Error checking if stream {self.src} is opened: {e}")
+                # Verify capture is open
+                if not self.cap or not self.cap.isOpened():
+                    logger.warning(f"Capture not open for {self.src}, trying to reopen...")
                     try:
-                        self.cap.release()
+                        if self.cap:
+                            self.cap.release()
                     except:
                         pass
-                    self.cap = None
-                    consecutive_read_failures += 1
-                    time.sleep(0.5)
-                    continue
+                    
+                    try:
+                        self.cap = self._open_capture(self.src)
+                        consecutive_read_failures = 0
+                        logger.info(f"Reopened stream {self.src}")
+                    except Exception as e:
+                        logger.error(f"Failed to open {self.src}: {e}")
+                        time.sleep(0.5)  # Wait before retry
+                        continue
                 
                 # Try to read frame
-                try:
-                    result = self.cap.read()
-                    if len(result) == 2:
-                        ret, frame = result
-                    else:
-                        # Handle case where read() returns unexpected format
-                        ret = False
-                        frame = None
-                except (ValueError, TypeError) as e:
-                    # Handle unpacking errors gracefully
-                    ret = False
-                    frame = None
+                ret, frame = self.cap.read()
+                
                 if not ret or frame is None:
                     consecutive_read_failures += 1
-                    fail_count += 1
-                    
-                    if self.is_video_file:
-                        # Loop video file
+                    # Only reconnect if we've had many consecutive failures
+                    if consecutive_read_failures >= max_consecutive_read_failures:
+                        logger.warning(
+                            f"Stream {self.src} unresponsive (failures={consecutive_read_failures}, usb={getattr(self, 'is_usb', False)}), reconnecting..."
+                        )
+                        consecutive_read_failures = 0
                         try:
-                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                            consecutive_read_failures = 0
-                            fail_count = 0
-                        except Exception:
-                            pass
-                    else:
-                        # For network streams, be more aggressive about reconnecting
-                        if consecutive_read_failures >= 20:  # Reduced threshold
-                            try:
-                                self.cap.release()
-                            except Exception:
-                                pass
-                            try:
-                                self.cap = self._open_capture(self.src)
-                                consecutive_read_failures = 0
-                                logger = logging.getLogger(__name__)
-                                logger.info(f"Reconnected stream {self.src} after read failures")
-                            except Exception as e:
-                                if consecutive_read_failures % 10 == 0:
-                                    logger = logging.getLogger(__name__)
-                                    logger.warning(f"Reconnection attempt failed for {self.src}: {e}")
-                                time.sleep(0.5)  # Wait before retry
+                            self.cap.release()
+                            self.cap = self._open_capture(self.src)
+                            logger.info(f"Reconnected {self.src}")
+                        except Exception as e:
+                            logger.error(f"Reconnection failed for {self.src}: {e}")
+                            time.sleep(0.5)
 
-                    time.sleep(0.05)
+                    time.sleep(failure_sleep)  # Brief wait before retry
                     continue
-                else:
-                    # Successfully read frame
-                    consecutive_read_failures = 0
-                    fail_count = 0
+                
+                # Got a valid frame
+                consecutive_read_failures = 0
+                
+                # Update frame storage (atomic operation with lock)
+                with self.lock:
+                    self.latest_frame = frame
+                    self.frame_seq += 1
+                    self.frame_timestamp = time.time()
+                    self.frame_times.append(time.time())
+                
+                # Log FPS occasionally
+                frame_count += 1
+                now = time.time()
+                if now - last_fps_log >= 5.0:  # Every 5 seconds
+                    if len(self.frame_times) >= 2:
+                        span = self.frame_times[-1] - self.frame_times[0]
+                        if span > 0:
+                            fps = (len(self.frame_times) - 1) / span
+                            logger.debug(f"VideoStream {self.src}: {fps:.1f} FPS ({frame_count} total frames)")
+                    last_fps_log = now
                     
-                    with self.lock:
-                        self.latest_frame = frame
-                        self.frame_times.append(time.time())
-                    
-                    # Sync FPS
-                    elapsed = time.time() - last_time
-                    delay = self.frame_delay - elapsed
-                    if delay > 0:
-                        time.sleep(min(delay, 0.01))
-                    last_time = time.time()
             except Exception as e:
-                fail_count += 1
                 consecutive_read_failures += 1
-                logger = logging.getLogger(__name__)
-                logger.error(f"Error in video stream update loop for {self.src}: {e}", exc_info=True)
-                if fail_count >= max_failures:
+                logger.error(f"Unexpected error in stream update: {e}", exc_info=False)
+                time.sleep(0.1)
+                
+                # Safety: stop if too many errors
+                if consecutive_read_failures >= max_consecutive_read_failures * 2:
                     logger.error(f"Too many errors for {self.src}, stopping stream")
                     self.running = False
                     break
-                time.sleep(0.1)
     
     def read(self) -> Optional[np.ndarray]:
         """Get latest frame"""
@@ -298,6 +310,36 @@ class VideoStream:
             if self.latest_frame is not None:
                 return self.latest_frame.copy()
         return None
+    
+    def read_with_seq(self) -> tuple[Optional[np.ndarray], int]:
+        """Get latest frame with sequence number for change detection"""
+        with self.lock:
+            frame = self.latest_frame.copy() if self.latest_frame is not None else None
+            return frame, self.frame_seq
+    
+    def read_with_timestamp(self) -> tuple[Optional[np.ndarray], float]:
+        """Get latest frame with timestamp for staleness detection"""
+        with self.lock:
+            frame = self.latest_frame.copy() if self.latest_frame is not None else None
+            return frame, self.frame_timestamp
+    
+    def read_with_metadata(self) -> tuple[Optional[np.ndarray], int, float]:
+        """Get latest frame with BOTH sequence number AND timestamp in ONE atomic read.
+        
+        This is critical to avoid mismatches where seq/timestamp are from different frames.
+        Returns: (frame, sequence_number, frame_timestamp)
+        """
+        with self.lock:
+            frame = self.latest_frame.copy() if self.latest_frame is not None else None
+            return frame, self.frame_seq, self.frame_timestamp
+    
+    def flush_old_frames(self, max_age_ms: float = 100):
+        """Check if current frame is stale and should be discarded"""
+        with self.lock:
+            if self.latest_frame is not None and self.frame_timestamp > 0:
+                age_ms = (time.time() - self.frame_timestamp) * 1000
+                return age_ms > max_age_ms
+        return False
     
     def get_fps(self) -> float:
         """Get current FPS"""
@@ -762,7 +804,7 @@ class CameraManager:
         """Get latest frame as JPEG bytes"""
         frame = self.get_camera_frame(camera_id)
         if frame is not None:
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             return buffer.tobytes()
         return None
     
@@ -866,18 +908,12 @@ class CameraManager:
                 p1 = tuple(_denorm_point(line["p1"], w, h))
                 p2 = tuple(_denorm_point(line["p2"], w, h))
                 cv2.line(overlay_frame, p1, p2, (0, 0, 255), 2)  # Red for Line A
-                # Add "Line A" label
-                mid_a = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
-                cv2.putText(overlay_frame, "Line A", mid_a, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
             
             # Draw Line B (p1_b → p2_b) if present
             if line.get("p1_b") and line.get("p2_b"):
                 p1_b = tuple(_denorm_point(line["p1_b"], w, h))
                 p2_b = tuple(_denorm_point(line["p2_b"], w, h))
                 cv2.line(overlay_frame, p1_b, p2_b, (255, 0, 0), 2)  # Blue for Line B
-                # Add "Line B" label
-                mid_b = ((p1_b[0] + p2_b[0]) // 2, (p1_b[1] + p2_b[1]) // 2)
-                cv2.putText(overlay_frame, "Line B", mid_b, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
         
         # Draw AI detections (bounding boxes from AI service)
         detection_data = self.get_detections(camera_id)
@@ -913,17 +949,17 @@ class CameraManager:
                     line_thickness = 3 if ("shoplifting" in label_lower or "violence" in label_lower) else 2
                     cv2.rectangle(overlay_frame, (x1, y1), (x2, y2), color, line_thickness)
                     
-                    # Draw label with behavior type and confidence
+                    # Draw label with behavior type (no probabilities)
                     if label:
                         # Format label text based on behavior type
                         if "shoplifting" in label_lower or "theft" in label_lower:
-                            label_text = f"[SHOPLIFTING] {confidence:.0%}"
+                            label_text = "[SHOPLIFTING]"
                         elif "violence" in label_lower or "fight" in label_lower:
-                            label_text = f"[VIOLENCE] {confidence:.0%}"
+                            label_text = "[VIOLENCE]"
                         elif label_lower != "normal" and confidence >= 0.5:
-                            label_text = f"[{label.upper()}] {confidence:.0%}"
+                            label_text = f"[{label.upper()}]"
                         else:
-                            label_text = f"{label} ({confidence:.0%})" if confidence > 0 else label
+                            label_text = label
                         
                         # Draw label background for better visibility
                         (text_width, text_height), baseline = cv2.getTextSize(
@@ -942,17 +978,7 @@ class CameraManager:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
                         )
             
-            # Draw people in zone count from AI
-            people_in_zone = detection_data.get("people_in_zone", 0)
-            if people_in_zone > 0:
-                cv2.putText(overlay_frame, f"In Zone: {people_in_zone}", 
-                           (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        
-        # Draw current count
-        if camera_worker.current_count > 0:
-            cv2.putText(overlay_frame, f"Count: {camera_worker.current_count}", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
+
         # Draw FPS
         fps = camera_worker.stream.get_fps()
         cv2.putText(overlay_frame, f"FPS: {fps:.1f}", 

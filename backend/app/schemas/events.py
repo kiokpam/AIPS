@@ -89,6 +89,8 @@ class DetectionUpdateEvent(BaseModel):
     """
     event: str = "detection_update"
     camera_id: str
+    store_id: Optional[str] = None  # Optional: for storing to people_counts table
+    zone_id: Optional[str] = None   # Optional: for storing to people_counts table
     detections: List[Detection]
     people_in_zone: int = 0
     ts: str

@@ -122,7 +122,8 @@ export default function NotificationDropdown({ isOpen, onClose, unreadCount: ext
     const token = localStorage.getItem('auth_token');
     if (!token) return;
 
-    const wsUrl = buildWsUrl(`/ws/alerts`, true); // Explicitly use notification service
+    // Include JWT token in WebSocket URL for authentication with notification service
+    const wsUrl = buildWsUrl(`/ws/alerts?token=${encodeURIComponent(token)}`, true);
 
     const ws = wsManager.getConnection({
       url: wsUrl,

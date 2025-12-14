@@ -34,9 +34,13 @@ import {
 import { cameraApi, storeApi, eventsApi, systemApi, buildWsUrl, type Camera as CameraType } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/src/contexts/I18nContext';
+import { useAuth } from '@/src/contexts/AuthContext';
 import { useData } from '@/src/contexts/DataContext';
 import { wsManager } from '@/lib/websocket-manager';
 import toast from 'react-hot-toast';
+
+// Toggle for showing the on-screen stream reconnect badge. Keep logic running regardless.
+const SHOW_STREAM_RECONNECT_BADGE = false;
 
 // Simple drawing canvas component used for overlaying zones/lines on top of the preview image.
 // This is intentionally kept local to this page so that the AI/drawing logic can evolve
@@ -73,6 +77,9 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    // Clear previous drawings
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Use requestAnimationFrame to batch redraws and prevent excessive renders
     const rafId = requestAnimationFrame(() => {
@@ -276,21 +283,22 @@ const tasksApi = {
 };
 
 
-const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCount }: {
+const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCount, isManager }: {
   camera: CameraType;
   onEdit: (camera: CameraType) => void;
   onDelete: (id: string) => void;
   onToggle: (id: string, isActive: boolean) => void;
   realtimeCount?: { count_in: number; count_out: number; ts: string };
+  isManager: boolean;
 }) => {
   const { t } = useI18n();
   const [isStreaming, setIsStreaming] = useState(!!camera.is_active);
   const [isStarting, setIsStarting] = useState(false);
   const [streamRetry, setStreamRetry] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
-  const [currentCount, setCurrentCount] = useState<number | null>(null);
   const [showAIDetails, setShowAIDetails] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+    const [currentCount, setCurrentCount] = useState<number | null>(null);
   // Model configuration removed - AI services will handle all model settings
   const [taskInfo, setTaskInfo] = useState<{ zones: any[]; lines: any[] } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -327,7 +335,6 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
   const imgRef = useRef<HTMLImageElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null);
-  const [streamNonce, setStreamNonce] = useState<number>(Date.now());
   const [detections, setDetections] = useState<Array<{
     track_id: number;
     bbox: number[];
@@ -348,74 +355,15 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
     total_frame_time_ms?: number;
   } | null>(null);
 
-  // When backend reports active, automatically try to show the stream
+    // Simple stream control: show stream when camera is active
   useEffect(() => {
-    if (camera.is_active) {
-      setIsStreaming(true);
-      // Check if camera is actually running via stats
-      cameraApi.getCameraStats(camera.id)
-        .then(stats => {
-          if (stats && stats.running) {
-            setIsStarting(false); // Camera is running, not just starting
-          } else {
-            setIsStarting(true); // Camera is starting but not running yet
-          }
-        })
-        .catch(() => {
-          setIsStarting(true); // Assume starting if stats unavailable
-        });
-    } else {
-      setIsStarting(false);
-      setIsStreaming(false);
-    }
-  }, [camera.is_active, camera.id]);
-  
-  // Periodically check if camera has finished starting
-  useEffect(() => {
-    if (!isStarting || !camera.is_active) return;
-    
-    const checkInterval = setInterval(async () => {
-      try {
-        const stats = await cameraApi.getCameraStats(camera.id);
-        if (stats && stats.running && stats.frame_count > 0) {
-          setIsStarting(false); // Camera is now running
-          clearInterval(checkInterval);
-        }
-      } catch (_) {
-        // Stats not available yet, keep checking
-      }
-    }, 2000); // Check every 2 seconds
-    
-    // Stop checking after 30 seconds
-    const timeout = setTimeout(() => {
-      clearInterval(checkInterval);
-      setIsStarting(false); // Give up, assume it's running or failed
-    }, 30000);
-    
-    return () => {
-      clearInterval(checkInterval);
-      clearTimeout(timeout);
-    };
-  }, [isStarting, camera.is_active, camera.id]);
+      setIsStreaming(camera.is_active);
+  }, [camera.id]);
 
-  // While starting, periodically refresh the MJPEG URL with a cache-busting nonce
+    // Update streaming state when camera active status changes
   useEffect(() => {
-    if (!isStreaming) return;
-    let timer: any;
-    let attempts = 0;
-    const maxAttempts = 30; // ~60 seconds (2s * 30)
-    const tick = () => {
-      if (!isStarting) return; // first frame arrived
-      attempts += 1;
-      setStreamNonce(Date.now());
-      if (attempts < maxAttempts) {
-        timer = setTimeout(tick, 2000);
-      }
-    };
-    // Kick off if starting
-    if (isStarting) timer = setTimeout(tick, 0);
-    return () => { if (timer) clearTimeout(timer); };
-  }, [isStreaming, isStarting]);
+      setIsStreaming(camera.is_active);
+  }, [camera.is_active, camera.id]);
 
   // Fetch frame size - prefer from image element (most accurate), fallback to stats
   useEffect(() => {
@@ -475,29 +423,55 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
     return () => { mounted = false; };
   }, [camera.id]);
 
-  // Draw overlay when we have tasks + frame size + img laid out
+  // Refs for animation loop to avoid dependency array bloat and re-renders
+  const latestDetectionsRef = useRef(detections);
+  const latestTaskInfoRef = useRef(taskInfo);
+  const latestHasBehaviorDetectionRef = useRef(hasBehaviorDetection);
+  
+  // Update refs with latest values without triggering re-setup
+  useEffect(() => {
+    latestDetectionsRef.current = detections;
+  }, [detections]);
+  
+  useEffect(() => {
+    latestTaskInfoRef.current = taskInfo;
+  }, [taskInfo]);
+  
+  useEffect(() => {
+    latestHasBehaviorDetectionRef.current = hasBehaviorDetection;
+  }, [hasBehaviorDetection]);
+
+  // Draw overlay continuously via requestAnimationFrame - no detection re-renders
   useEffect(() => {
     const canvas = overlayRef.current;
     const img = imgRef.current;
-    if (!canvas || !img || !taskInfo || !frameSize) return;
-    
-    // Redraw when taskInfo, frameSize, or streaming state changes
+    if (!canvas || !img || !frameSize) return;
 
     const container = img.parentElement as HTMLElement | null;
     if (!container) return;
 
-    const resizeAndDraw = () => {
+    let lastWidth = 0;
+    let lastHeight = 0;
+    let animFrameId: number | null = null;
+
+    const draw = () => {
       const containerRect = container.getBoundingClientRect();
       const cw = Math.max(1, Math.floor(containerRect.width));
       const ch = Math.max(1, Math.floor(containerRect.height));
-      canvas.width = cw;
-      canvas.height = ch;
+
+      // Only resize canvas if dimensions changed
+      if (cw !== lastWidth || ch !== lastHeight) {
+        canvas.width = cw;
+        canvas.height = ch;
+        lastWidth = cw;
+        lastHeight = ch;
+      }
 
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.clearRect(0, 0, cw, ch);
 
-      // Compute object-contain content box for the frame
+      // Compute object-contain content box for the frame (match CSS)
       const frameW = frameSize.w;
       const frameH = frameSize.h;
       const scale = Math.min(cw / frameW, ch / frameH);
@@ -506,144 +480,118 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
       const offsetX = (cw - contentW) / 2;
       const offsetY = (ch - contentH) / 2;
 
-      /**
-       * Map pixel coordinates (relative to frame) to overlay canvas coordinates
-       * Backend stores coordinates as pixels [x, y] relative to frame size
-       */
       const mapPoint = (p: number[]): [number, number] => {
-        // Backend always stores pixel coordinates [x, y] relative to frame size
-        // We need to scale and offset them to fit the overlay canvas
-        const frameX = p[0]; // Pixel X in frame coordinates
-        const frameY = p[1]; // Pixel Y in frame coordinates
-        
-        // Scale pixel coordinates to overlay canvas
+        const frameX = p[0];
+        const frameY = p[1];
         const canvasX = offsetX + frameX * scale;
         const canvasY = offsetY + frameY * scale;
-        
         return [canvasX, canvasY];
       };
 
-      // Draw zones
-      (taskInfo.zones || []).forEach((z: any) => {
-        const poly = (z.polygon || []).map((p: number[]) => mapPoint(p));
-        if (poly.length >= 2) {
-          ctx.strokeStyle = '#10b981';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([]);
-          ctx.beginPath();
-          ctx.moveTo(poly[0][0], poly[0][1]);
-          for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
-          ctx.closePath();
-          ctx.stroke();
-          if (z.name) {
-            ctx.fillStyle = '#10b981';
-            ctx.font = '14px sans-serif';
-            ctx.fillText(String(z.name), poly[0][0] + 4, poly[0][1] + 16);
+      const taskInfo = latestTaskInfoRef.current;
+      if (taskInfo) {
+        // Draw zones
+        (taskInfo.zones || []).forEach((z: any) => {
+          const poly = (z.polygon || []).map((p: number[]) => mapPoint(p));
+          if (poly.length >= 2) {
+            ctx.strokeStyle = '#10b981';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(poly[0][0], poly[0][1]);
+            for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+            ctx.closePath();
+            ctx.stroke();
+            if (z.name) {
+              ctx.fillStyle = '#10b981';
+              ctx.font = '14px sans-serif';
+              ctx.fillText(String(z.name), poly[0][0] + 4, poly[0][1] + 16);
+            }
           }
-        }
-      });
+        });
 
-      // Draw lines (Line A and Line B for In/Out counting)
-      (taskInfo.lines || []).forEach((line: any) => {
-        if (line.p1 && line.p2 && Array.isArray(line.p1) && Array.isArray(line.p2)) {
-          // Backend stores lines as pixel coordinates [x, y]
-          const p1 = mapPoint(line.p1);
-          const p2 = mapPoint(line.p2);
-          
-          // Draw Line A (red color)
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = 3;
-          ctx.setLineDash([]);
-          ctx.beginPath();
-          ctx.moveTo(p1[0], p1[1]);
-          ctx.lineTo(p2[0], p2[1]);
-          ctx.stroke();
-          // Draw endpoints for Line A
-          ctx.fillStyle = '#ef4444';
-          ctx.beginPath();
-          ctx.arc(p1[0], p1[1], 6, 0, 2 * Math.PI);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(p2[0], p2[1], 6, 0, 2 * Math.PI);
-          ctx.fill();
-          
-          // Draw Line B if present (blue color) - required for In/Out counting
-          if (line.p1_b && line.p2_b && Array.isArray(line.p1_b) && Array.isArray(line.p2_b)) {
-            const p1b = mapPoint(line.p1_b);
-            const p2b = mapPoint(line.p2_b);
+        // Draw lines
+        (taskInfo.lines || []).forEach((line: any) => {
+          if (line.p1 && line.p2 && Array.isArray(line.p1) && Array.isArray(line.p2)) {
+            const p1 = mapPoint(line.p1);
+            const p2 = mapPoint(line.p2);
             
-            ctx.strokeStyle = '#3b82f6';
+            ctx.strokeStyle = '#ef4444';
             ctx.lineWidth = 3;
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.moveTo(p1b[0], p1b[1]);
-            ctx.lineTo(p2b[0], p2b[1]);
+            ctx.moveTo(p1[0], p1[1]);
+            ctx.lineTo(p2[0], p2[1]);
             ctx.stroke();
-            // Draw endpoints for Line B
-            ctx.fillStyle = '#3b82f6';
+            ctx.fillStyle = '#ef4444';
             ctx.beginPath();
-            ctx.arc(p1b[0], p1b[1], 6, 0, 2 * Math.PI);
+            ctx.arc(p1[0], p1[1], 6, 0, 2 * Math.PI);
             ctx.fill();
             ctx.beginPath();
-            ctx.arc(p2b[0], p2b[1], 6, 0, 2 * Math.PI);
+            ctx.arc(p2[0], p2[1], 6, 0, 2 * Math.PI);
             ctx.fill();
+            
+            if (line.p1_b && line.p2_b && Array.isArray(line.p1_b) && Array.isArray(line.p2_b)) {
+              const p1b = mapPoint(line.p1_b);
+              const p2b = mapPoint(line.p2_b);
+              
+              ctx.strokeStyle = '#3b82f6';
+              ctx.lineWidth = 3;
+              ctx.setLineDash([]);
+              ctx.beginPath();
+              ctx.moveTo(p1b[0], p1b[1]);
+              ctx.lineTo(p2b[0], p2b[1]);
+              ctx.stroke();
+              ctx.fillStyle = '#3b82f6';
+              ctx.beginPath();
+              ctx.arc(p1b[0], p1b[1], 6, 0, 2 * Math.PI);
+              ctx.fill();
+              ctx.beginPath();
+              ctx.arc(p2b[0], p2b[1], 6, 0, 2 * Math.PI);
+              ctx.fill();
+            }
           }
-        }
-      });
+        });
+      }
 
-      // Draw detection bounding boxes
-      detections.forEach((det) => {
+      // Draw detection bounding boxes (read from ref, not dependency)
+      const dets = latestDetectionsRef.current;
+      const hasBehavior = latestHasBehaviorDetectionRef.current;
+      dets.forEach((det) => {
         if (!det.bbox || det.bbox.length !== 4) return;
         const [x1, y1, x2, y2] = det.bbox;
-        
-        // Map bounding box coordinates to canvas
         const topLeft = mapPoint([x1, y1]);
         const bottomRight = mapPoint([x2, y2]);
         const width = bottomRight[0] - topLeft[0];
         const height = bottomRight[1] - topLeft[1];
         
-        // Draw bounding box - no labels, just different colors for behavior detection
-        // Behavior detection: use orange/red colors for suspicious, green for normal
-        // In/Out counting: use blue/green colors
-        if (hasBehaviorDetection) {
-          // Behavior detection: check if suspicious based on label
+        if (hasBehavior) {
           const isSuspicious = det.label && det.label !== 'person' && det.label !== 'normal' && (det.confidence || 0) > 0.5;
           if (isSuspicious) {
-            ctx.strokeStyle = det.in_zone ? '#ef4444' : '#f97316'; // Red if in zone, orange otherwise
+            ctx.strokeStyle = det.in_zone ? '#ef4444' : '#f97316';
           } else {
-            ctx.strokeStyle = det.in_zone ? '#10b981' : '#3b82f6'; // Green if in zone, blue otherwise
+            ctx.strokeStyle = det.in_zone ? '#10b981' : '#3b82f6';
           }
         } else {
-          // In/Out counting: use blue/green colors
-          ctx.strokeStyle = det.in_zone ? '#10b981' : '#3b82f6'; // Green if in zone, blue otherwise
+          ctx.strokeStyle = det.in_zone ? '#10b981' : '#3b82f6';
         }
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.strokeRect(topLeft[0], topLeft[1], width, height);
       });
+
+      animFrameId = requestAnimationFrame(draw);
     };
 
-    // Throttle resize events to prevent excessive redraws
-    let rafId: number | null = null;
-    const throttledResize = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        resizeAndDraw();
-        rafId = null;
-      });
-    };
+    // Start animation loop
+    animFrameId = requestAnimationFrame(draw);
 
-    resizeAndDraw();
-    window.addEventListener('resize', throttledResize);
-    const ro = new ResizeObserver(throttledResize);
-    ro.observe(container);
-    
     return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', throttledResize);
-      ro.disconnect();
+      if (animFrameId !== null) {
+        cancelAnimationFrame(animFrameId);
+      }
     };
-  }, [taskInfo, frameSize, isStreaming, detections, hasBehaviorDetection]);
+  }, [frameSize]);
 
 
   // Poll camera stats to get current people count
@@ -837,7 +785,11 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
       reconnectDelay: 3000,
       onMessage: (data) => {
         if (data.type === 'detection_update' && data.camera_id === camera.id) {
-          setDetections(data.detections || []);
+          const dets = data.detections || [];
+          console.log(`[Camera ${camera.id}] Received ${dets.length} detections:`, 
+            dets.map((d: any) => ({ label: d.label, in_zone: d.in_zone, conf: d.confidence }))
+          );
+          setDetections(dets);
           if (data.metrics) {
             setAiMetrics(data.metrics);
           }
@@ -883,34 +835,26 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
           <div className="relative w-full h-full">
             <img
               ref={imgRef}
-              src={`${cameraApi.getCameraStreamUrl(camera.id)}&t=${streamNonce}`}
+                src={cameraApi.getCameraStreamUrl(camera.id)}
               alt={`${camera.name} stream`}
               className="video-stream"
-              onLoad={() => {
+                loading="eager"
+                decoding="async"
+              onLoad={(e) => {
                 setIsStarting(false);
-                setStreamRetry(0);
               }}
-              onError={() => {
-                // Retry a few times while the worker warms up
-                if (streamRetry < 20) {
-                  setStreamRetry((n) => n + 1);
+              onError={(e) => {
+                  // MJPEG errors are usually temporary, let browser handle reconnection
+                  console.error(`[Camera ${camera.id}] Stream connection issue`);
                   setIsStarting(true);
-                  setTimeout(() => {
-                    setIsStreaming(false);
-                    setTimeout(() => setIsStreaming(true), 300);
-                  }, 300);
-                } else {
-                  setIsStarting(false);
-                  setIsStreaming(false);
-                }
               }}
             />
             {/* Client-side overlay fallback to ensure zones/lines are visible */}
             <canvas ref={overlayRef} className="absolute inset-0 pointer-events-none" />
             
-            {/* Stream loading hint - shows when retrying */}
-            {isStarting && streamRetry > 3 && (
-              <div className="absolute bottom-12 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur-sm text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 animate-pulse">
+            {/* Stream loading hint */}
+            {isStarting && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-white text-sm gap-2">
                 <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 <span>{t('stream_loading_hint') || 'Loading stream... Refresh page if video doesn\'t appear'}</span>
               </div>
@@ -1314,20 +1258,24 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
               </>
             )}
           </button>
-          <button
-            onClick={() => setShowAIDetails(true)}
-            className="btn-outline btn-sm"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => {
-              if (confirm(t('confirm_delete'))) onDelete(camera.id);
-            }}
-            className="btn-outline btn-sm text-red-600 border-red-200 hover:bg-red-50"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {isManager && (
+            <>
+              <button
+                onClick={() => setShowAIDetails(true)}
+                className="btn-outline btn-sm"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => {
+                  if (confirm(t('confirm_delete'))) onDelete(camera.id);
+                }}
+                className="btn-outline btn-sm text-red-600 border-red-200 hover:bg-red-50"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
       {/* AI Details Modal */}
@@ -1548,7 +1496,8 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const { t } = useI18n();
   const [formData, setFormData] = useState({
     name: '',
-    source: '', // RTSP URL
+    source: '', // RTSP URL or USB index
+    sourceType: 'rtsp' as 'rtsp' | 'usb',
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isPreviewConnected, setIsPreviewConnected] = useState(false);
@@ -1717,9 +1666,18 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       }
 
       if (!formData.source.trim()) {
-        toast.error('Please enter an RTSP URL');
+        if (formData.sourceType === 'rtsp') {
+          toast.error('Please enter an RTSP URL');
+        } else {
+          toast.error('Please enter a USB device index (e.g., 0, 1, 2)');
+        }
         return;
       }
+      if (formData.sourceType === 'usb' && !/^\d+$/.test(formData.source.trim())) {
+        toast.error('USB index must be a number');
+        return;
+      }
+
 
       // Convert drawn areas to backend format using normalized coordinates
       const zones = drawnAreas
@@ -1750,7 +1708,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
       const cameraData = {
         name: formData.name.trim(),
-        source: formData.source.trim(), // RTSP URL only
+        source: formData.source.trim(), // RTSP URL or USB index
         zones,
         lines,
         canvasSize: drawSize ? { w: drawSize.w, h: drawSize.h } : null,
@@ -1773,7 +1731,8 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   const resetForm = () => {
       setFormData({
         name: '',
-        source: '', // RTSP URL only
+        source: '', // RTSP URL or USB index
+        sourceType: 'rtsp',
     });
     setSelectedFile(null);
     setDrawnAreas([]);
@@ -1833,7 +1792,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
     // Validate source
     if (!formData.source.trim()) {
-      toast.error('Please enter an RTSP URL');
+      toast.error(formData.sourceType === 'rtsp' ? 'Please enter an RTSP URL' : 'Please enter a USB device index');
       return;
     }
 
@@ -1856,7 +1815,15 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
       setPreviewNonce(nonce);
       const sourceUrl = `${baseUrl}/preview/stream?source=${sourceParam}&token=${encodeURIComponent(token)}&t=${nonce}`;
       
-      // Test the source first with timeout and retry
+      // If USB source, skip test and connect directly (backend supports numeric indices)
+      if (formData.sourceType === 'usb') {
+        setPreviewUrl(sourceUrl);
+        setIsPreviewConnected(true);
+        toast.success('Preview connected');
+        return;
+      }
+      
+      // Test the source first with timeout and retry (RTSP/file sources)
       try {
         const testUrl = `${baseUrl}/preview/test?source=${sourceParam}&token=${encodeURIComponent(token)}`;
         const testResponse = await Promise.race([
@@ -2080,7 +2047,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
   // Reset form when modal closes
   useEffect(() => {
     if (!isOpen) {
-      setFormData({ name: '', source: '' });
+      setFormData({ name: '', source: '', sourceType: 'rtsp' });
       setDrawnAreas([]);
       setCurrentDrawing(null);
       setPreviewUrl('');
@@ -2128,19 +2095,44 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
               />
             </div>
 
-              {/* Source Input */}
+              {/* Source Type + Source Input */}
             <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
-                    RTSP URL *
+                    Source *
                   </label>
-                <input
-                  type="text"
-                  value={formData.source}
-                  onChange={(e) => setFormData({...formData, source: e.target.value})}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="rtsp://..."
-                  required
-                />
+                  <div className="flex gap-3 mb-3">
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        className="accent-blue-600"
+                        checked={formData.sourceType === 'rtsp'}
+                        onChange={() => setFormData({ ...formData, sourceType: 'rtsp' })}
+                      />
+                      RTSP URL
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        className="accent-blue-600"
+                        checked={formData.sourceType === 'usb'}
+                        onChange={() => setFormData({ ...formData, sourceType: 'usb' })}
+                      />
+                      USB Device (Index)
+                    </label>
+                  </div>
+                  <input
+                    type={formData.sourceType === 'usb' ? 'text' : 'text'}
+                    value={formData.source}
+                    onChange={(e) => setFormData({...formData, source: e.target.value})}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder={formData.sourceType === 'usb' ? '0 (or 1, 2, ...)' : 'rtsp://...'}
+                    required
+                  />
+                  {formData.sourceType === 'usb' && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      Tip: USB device index is usually 0, 1, or 2 on Windows.
+                    </p>
+                  )}
             </div>
 
               {/* Connect Preview Button */}
@@ -2697,6 +2689,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 export default function CamerasPage() {
   const { t, lang } = useI18n();
   const { cameras: camerasFromContext, refreshCameras, isLoading: dataLoading } = useData();
+  const { user } = useAuth();
   const [cameras, setCameras] = useState<CameraType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -2704,6 +2697,9 @@ export default function CamerasPage() {
   const isInitialLoadRef = useRef(true);
   const [realtimeCounts, setRealtimeCounts] = useState<Record<string, { count_in: number; count_out: number; ts: string }>>({});
   const [totalPeople, setTotalPeople] = useState<number>(0);
+
+  // Check if user is a manager
+  const isManager = user?.active_membership?.role === 'manager';
 
   // Sync cameras from context
   useEffect(() => {
@@ -2753,28 +2749,6 @@ export default function CamerasPage() {
       // Extract zones and lines for future config API (optional)
       const { zones, lines, ...cameraConfig } = cameraData;
 
-      // Build backend payload according to CameraCreate
-      // Ensure a store exists; create a default one if backend has none
-      let storeId: string | null = null;
-      try {
-        const stores = await storeApi.getStores();
-        if (stores && stores.length > 0) {
-          storeId = stores[0].id;
-        } else {
-          const createdStore = await storeApi.createStore('Default Store');
-          storeId = createdStore.id;
-        }
-      } catch (e) {
-        console.error('Store lookup/creation failed:', e);
-        toast.error('Failed to get or create a store. Please create a store first in the Managers page.');
-        throw new Error('No store available. Please create a store first.');
-      }
-      
-      if (!storeId) {
-        toast.error('No store available. Please create a store first.');
-        throw new Error('No store available');
-      }
-
       // Auto-add in_out_counting if at least one complete line pair is drawn (Line A + Line B)
       // A complete line pair has p1, p2 (Line A) and p1_b, p2_b (Line B)
       const hasCompleteLinePair = lines && lines.length >= 1 && 
@@ -2784,6 +2758,33 @@ export default function CamerasPage() {
         aiServices.push('in_out_counting');
       }
 
+      // The backend requires a store_id (DB constraint). Use an "Unassigned" placeholder store per org.
+      // This avoids 500 errors and keeps cameras off real stores until reassigned in Team Management.
+      let storeId: string | null = null;
+      try {
+        const stores = await storeApi.getStores();
+        const unassignedStore = stores.find((s) => s.name.toLowerCase() === 'unassigned');
+        if (unassignedStore) {
+          storeId = unassignedStore.id;
+        } else if (stores.length > 0) {
+          // Fallback: use first store if exists
+          storeId = stores[0].id;
+        } else {
+          // Create placeholder store if none exist
+          const createdStore = await storeApi.createStore('Unassigned');
+          storeId = createdStore.id;
+        }
+      } catch (e) {
+        console.error('Store lookup/creation failed:', e);
+        toast.error('Failed to create or find a store. Please create a store first in Team Management.');
+        throw new Error('No store available');
+      }
+
+      if (!storeId) {
+        toast.error('No store available. Please create a store first.');
+        throw new Error('No store available');
+      }
+
       const payload = {
         store_id: storeId,
         name: cameraConfig.name,
@@ -2791,53 +2792,20 @@ export default function CamerasPage() {
         ai_services: aiServices,
       };
 
-      // Creating camera via API
+      // Create camera via API
       const created = await cameraApi.createCamera(payload);
 
-      // Optimistically add as active while backend starts the worker
-      const newCamera = { ...created, is_active: true };
-      setCameras(prev => [...prev, newCamera]);
-      // Also update context
-      refreshCameras();
-      toast('Starting camera...', { icon: '⏳' });
-
-      // Auto-start camera immediately after creation (requested behavior)
+      // Start the camera immediately so we can fetch real frame dimensions
       try {
         await cameraApi.startCamera(created.id);
       } catch (e) {
-        // Start camera after create failed (will retry on refresh)
+        console.warn('Failed to start camera immediately:', e);
       }
 
-      // Briefly wait and poll stats to reduce "offline" flicker
-      const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
-      const maxAttempts = 20; // up to ~10s
-      let cameraRunning = false;
-      for (let i = 0; i < maxAttempts; i++) {
-        try {
-          // if stats endpoint exists, use it to check running; ignore failure
-          const stats = await cameraApi.getCameraStats(created.id);
-          if (stats && stats.running) {
-            cameraRunning = true;
-            break;
-          }
-        } catch (_) {}
-        await wait(500);
-      }
-      
-      // Update camera status based on actual running state
-      if (cameraRunning) {
-        setCameras(prev => prev.map(c => 
-          c.id === created.id ? { ...c, is_active: true } : c
-        ));
-        refreshCameras(); // Sync with context
-        toast.success('Camera started successfully');
-      } else {
-        setCameras(prev => prev.map(c => 
-          c.id === created.id ? { ...c, is_active: false } : c
-        ));
-        refreshCameras(); // Sync with context
-        toast.error('Camera created but failed to start. Check RTSP stream accessibility.', { duration: 5000 });
-      }
+      // Add to local list and refresh
+      setCameras(prev => [...prev, created]);
+      await refreshCameras();
+      toast.success('Camera created and started. You can draw zones/lines now.', { duration: 4000 });
 
       // Persist zones to backend tasks using normalized coordinates
       try {
@@ -2874,8 +2842,21 @@ export default function CamerasPage() {
           }
           
           if (!cameraReady) {
-            // Camera not ready for frame fetch, using fallback dimensions
-            return { w: 1920, h: 1080 }; // Fallback to common resolution
+            // Wait a bit longer before falling back
+            for (let retry = 0; retry < 5; retry++) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              try {
+                const stats2 = await cameraApi.getCameraStats(created.id);
+                if (stats2 && stats2.running && stats2.frame_count > 0) {
+                  cameraReady = true;
+                  break;
+                }
+              } catch (_) {}
+            }
+            if (!cameraReady) {
+              // Camera not ready for frame fetch, using fallback dimensions
+              return { w: 1280, h: 720 }; // Safer fallback resolution
+            }
           }
           
           const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
@@ -3036,16 +3017,10 @@ export default function CamerasPage() {
       // Refresh camera list to ensure taskInfo is loaded
       await loadCameras();
 
-      // Refresh list from backend to reflect final state (but preserve running status if we detected it)
+      // Refresh list from backend to reflect final state
       const finalCameras = await cameraApi.getCameras();
-      setCameras(finalCameras.map(c => {
-        // If we just created this camera and know it's running, preserve that status
-        if (c.id === created.id && cameraRunning) {
-          return { ...c, is_active: true };
-        }
-        return c;
-      }));
-      toast.success('Camera added' + (cameraRunning ? ' and started' : ' (check RTSP stream)'));
+      setCameras(finalCameras);
+      toast.success('Camera added. Assign it to a store to start streaming.');
       
       // Show helpful hint about refreshing if streams don't load
       setTimeout(() => {
@@ -3186,13 +3161,15 @@ export default function CamerasPage() {
           <h1 className="text-3xl font-bold text-white">{t('cameras_title')}</h1>
           <p className="text-slate-300 mt-1">{t('cameras_sub')}</p>
         </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="btn-primary btn-md mt-4 sm:mt-0"
-        >
-          <Plus className="w-5 h-5 mr-2" />
-          {t('add_camera')}
-        </button>
+        {isManager && (
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="btn-primary btn-md mt-4 sm:mt-0"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            {t('add_camera')}
+          </button>
+        )}
       </div>
 
       {/* Stats */}
@@ -3246,6 +3223,7 @@ export default function CamerasPage() {
             camera={camera}
             onEdit={handleEditCamera}
             onDelete={handleDeleteCamera}
+            isManager={isManager}
             onToggle={handleToggleCamera}
             realtimeCount={realtimeCounts[camera.id]}
           />

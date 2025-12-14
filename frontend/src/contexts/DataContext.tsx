@@ -18,7 +18,7 @@ interface DataContextType {
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export function DataProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const [stores, setStores] = useState<Store[]>([]);
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -27,6 +27,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   
   const storesLoadingRef = useRef(false);
   const camerasLoadingRef = useRef(false);
+  
+  // Track active organization to detect switches
+  const activeOrgId = user?.active_membership?.organization?.id;
 
   const refreshStores = useCallback(async () => {
     if (storesLoadingRef.current) return;
@@ -76,18 +79,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     if (isAuthenticated) {
       refreshAll();
     }
-  }, [isAuthenticated, refreshAll]);
+  }, [isAuthenticated, activeOrgId, refreshAll]);
 
-  // Auto-refresh every 30 seconds if authenticated
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    
-    const interval = setInterval(() => {
-      refreshAll();
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, [isAuthenticated, refreshAll]);
+  // Auto-refresh disabled to prevent camera stream interruptions
+  // Users can manually refresh via dashboard/camera page buttons
+  // useEffect(() => {
+  //   if (!isAuthenticated) return;
+  //   const interval = setInterval(() => {
+  //     refreshAll();
+  //   }, 300000); // 5 minutes if re-enabled
+  //   return () => clearInterval(interval);
+  // }, [isAuthenticated, refreshAll]);
 
   return (
     <DataContext.Provider

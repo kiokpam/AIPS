@@ -65,7 +65,7 @@ class Camera(BaseModel):
 
 
 class CameraCreate(BaseModel):
-    store_id: str
+    store_id: Optional[str] = None
     name: str
     source: str  # RTSP URL or file path
     ai_services: List[str] = ["people_counting", "behavior_detection"]
@@ -80,6 +80,7 @@ class CameraUpdate(BaseModel):
     # Model configuration removed - AI services will handle all model settings
     skip_frame: Optional[int] = None
     is_active: Optional[bool] = None
+    store_id: Optional[str] = None
 
 
 class CountingZone(BaseModel):

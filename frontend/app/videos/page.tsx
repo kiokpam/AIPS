@@ -37,7 +37,9 @@ export default function VideosPage() {
       // Check if there's a clip query parameter and auto-select that video
       const clipParam = searchParams.get('clip');
       if (clipParam) {
-        const video = response.clips.find(v => v.filename === clipParam || v.id === clipParam);
+        // Support both full path and bare filename passed in clip parameter
+        const clipBase = clipParam.replace(/^.*[\\\/]/, '');
+        const video = response.clips.find(v => v.filename === clipBase || v.id === clipBase || v.id === clipParam || v.filename === clipParam);
         if (video) {
           setSelectedVideo(video);
           // Remove the query parameter from URL after selecting

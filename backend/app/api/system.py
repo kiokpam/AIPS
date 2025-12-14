@@ -8,7 +8,7 @@ import sys
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
-from app.api.deps import CurrentMembership, get_current_membership, get_db, require_manager
+from app.api.deps import CurrentMembership, get_current_membership, get_db, require_manager, MembershipRole
 from app.models.core import Camera as CameraModel
 from app.services.system_monitor import system_monitor
 from app.services.camera_manager import camera_manager
@@ -118,14 +118,28 @@ async def get_system_metrics(
 
 @router.get("/stats/summary")
 def get_system_stats_summary(
-    current: CurrentMembership = Depends(require_manager),
+    current: CurrentMembership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Get system-wide statistics summary (scoped to organization)"""
-    allowed_ids = {
-        row[0]
-        for row in db.query(CameraModel.id).filter(CameraModel.org_id == current.organization.id).all()
-    }
+    """Get system-wide statistics summary (filtered by member permissions)"""
+    from app.models.core import MemberPermission
+    
+    # Get allowed cameras for this user
+    if current.role == MembershipRole.manager:
+        # Managers can see all cameras in their organization
+        allowed_ids = {
+            row[0]
+            for row in db.query(CameraModel.id).filter(CameraModel.org_id == current.organization.id).all()
+        }
+    else:
+        # Members can only see cameras they have permission to view
+        permissions = db.query(MemberPermission).filter(
+            MemberPermission.membership_id == current.id,
+            MemberPermission.can_view == True,
+            MemberPermission.camera_id.isnot(None)
+        ).all()
+        allowed_ids = {perm.camera_id for perm in permissions}
+    
     cameras = [cam for cam in camera_manager.list_cameras() if cam.get("camera_id") in allowed_ids]
     total_people = sum(cam.get("current_count", 0) for cam in cameras)
     active_cameras = sum(1 for cam in cameras if cam.get("running", False))

@@ -13,6 +13,7 @@ import {
   CheckCircle,
   X,
   AlertTriangle,
+  AlertCircle,
   Settings,
   Eye,
   EyeOff,
@@ -39,6 +40,7 @@ export default function ManagersPage() {
   const [stores, setStores] = useState<StoreWithAccess[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddStoreModal, setShowAddStoreModal] = useState(false);
+  const [showCameraAssignModal, setShowCameraAssignModal] = useState(false);
   const [showMemberAccessModal, setShowMemberAccessModal] = useState(false);
   const [selectedStore, setSelectedStore] = useState<StoreWithAccess | null>(null);
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -59,6 +61,9 @@ export default function ManagersPage() {
     can_access_dashboard: true
   });
   const [errors, setErrors] = useState<{[key: string]: string}>({});
+  const [cameraAssignments, setCameraAssignments] = useState<Record<string, string>>({});
+  const [savingAssignments, setSavingAssignments] = useState(false);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
 
   // Use data from DataContext instead of making redundant API calls
   useEffect(() => {
@@ -78,6 +83,7 @@ export default function ManagersPage() {
         
         setStores(storesWithAccess);
         setCameras(camerasFromContext);
+        setCameraAssignments(camerasFromContext.reduce((acc, cam) => ({ ...acc, [cam.id]: cam.store_id }), {}));
         setIsLoading(false);
       } else {
         // Still loading from DataContext
@@ -127,11 +133,46 @@ export default function ManagersPage() {
     }
   };
 
+  const handleOpenCameraAssignModal = () => {
+    setCameraAssignments(camerasFromContext.reduce((acc, cam) => ({ ...acc, [cam.id]: cam.store_id }), {}));
+    setAssignmentError(null);
+    setShowCameraAssignModal(true);
+  };
+
+  const handleSaveCameraAssignments = async () => {
+    try {
+      setSavingAssignments(true);
+      setAssignmentError(null);
+      const updates = camerasFromContext
+        .filter(cam => cameraAssignments[cam.id] && cameraAssignments[cam.id] !== cam.store_id)
+        .map(cam => ({ id: cam.id, store_id: cameraAssignments[cam.id] }));
+
+      for (const upd of updates) {
+        await cameraApi.updateCamera(upd.id, { store_id: upd.store_id });
+      }
+
+      if (updates.length > 0) {
+        toast.success('Camera assignments updated');
+      } else {
+        toast('No camera changes to save', { icon: 'ℹ️' });
+      }
+
+      await refreshAll();
+      setShowCameraAssignModal(false);
+    } catch (error: any) {
+      console.error('Failed to update camera assignments', error);
+      setAssignmentError(error.response?.data?.detail || 'Failed to update camera assignments');
+      toast.error('Failed to update camera assignments');
+    } finally {
+      setSavingAssignments(false);
+    }
+  };
+
   const handleOpenMemberAccess = async (store: StoreWithAccess) => {
     setSelectedStore(store);
     setEditingMember(null);
     
-    // Load cameras for this store (use DataContext)
+    // Show only cameras that belong to this store
     const storeCameras = camerasFromContext.filter(c => c.store_id === store.id);
     setCameras(storeCameras);
     
@@ -172,7 +213,7 @@ export default function ManagersPage() {
     setErrors({});
     setCreatedAccount(null);
     
-    // Load cameras for this store (use DataContext)
+    // Show only cameras that belong to this store
     const storeCameras = camerasFromContext.filter(c => c.store_id === memberStore.id);
     setCameras(storeCameras);
     setShowMemberAccessModal(true);
@@ -237,9 +278,15 @@ export default function ManagersPage() {
     if (Object.keys(newErrors).length > 0) return;
     
     try {
+      // Ensure only cameras from the selected store are submitted
+      const allowedCameraIds = camerasFromContext
+        .filter(c => c.store_id === selectedStore.id)
+        .map(c => c.id);
+      const cameraIdsForStore = permissionFormData.camera_ids.filter(id => allowedCameraIds.includes(id));
+
       if (isEditing && editingMember) {
         await storeApi.updateStoreMemberAccount(selectedStore.id, editingMember.membership_id, {
-          camera_ids: permissionFormData.camera_ids,
+          camera_ids: cameraIdsForStore,
           can_access_dashboard: permissionFormData.can_access_dashboard,
           password: memberPassword || undefined,
         });
@@ -257,7 +304,7 @@ export default function ManagersPage() {
         const result = await storeApi.createStoreMemberAccount(selectedStore.id, {
           username: memberUsername.trim(),
           password: memberPassword,
-          camera_ids: permissionFormData.camera_ids,
+          camera_ids: cameraIdsForStore,
           can_access_dashboard: permissionFormData.can_access_dashboard
         });
         
@@ -310,13 +357,22 @@ export default function ManagersPage() {
             Manage your stores and configure member access for each branch
           </p>
         </div>
-        <button
-          onClick={() => setShowAddStoreModal(true)}
-          className="btn-primary btn-lg flex items-center gap-2"
-        >
-          <Plus className="w-5 h-5" />
-          Add Store
-        </button>
+        <div className="flex flex-wrap gap-3 justify-end">
+          <button
+            onClick={handleOpenCameraAssignModal}
+            className="btn-outline btn-lg flex items-center gap-2"
+          >
+            <CameraIcon className="w-5 h-5" />
+            Manage Cameras
+          </button>
+          <button
+            onClick={() => setShowAddStoreModal(true)}
+            className="btn-primary btn-lg flex items-center gap-2"
+          >
+            <Plus className="w-5 h-5" />
+            Add Store
+          </button>
+        </div>
       </div>
 
       {/* Info Banner */}
@@ -468,6 +524,112 @@ export default function ManagersPage() {
               >
                 Cancel
               </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Camera Assignment Modal */}
+      {showCameraAssignModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+          >
+            <div className="sticky top-0 bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between z-10">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
+                  <CameraIcon className="w-6 h-6 text-blue-400" />
+                  Manage Camera Assignments
+                </h2>
+                <p className="text-slate-400 mt-1">Change which store each camera belongs to.</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCameraAssignModal(false);
+                  setAssignmentError(null);
+                }}
+                className="p-2 text-slate-400 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {assignmentError && (
+                <div className="bg-red-900/30 border border-red-700 text-red-200 px-4 py-3 rounded-lg text-sm">
+                  {assignmentError}
+                </div>
+              )}
+
+              {camerasFromContext.some(c => !c.store_id) && (
+                <div className="bg-amber-900/20 border border-amber-700/40 text-amber-200 px-4 py-3 rounded-lg text-sm flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">Unassigned cameras detected</p>
+                    <p className="text-xs text-amber-300/80 mt-1">
+                      Some cameras are not assigned to any store. Assign them to enable member access and analytics.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-slate-900/50 border border-slate-700 rounded-lg overflow-hidden">
+                <div className="grid grid-cols-3 gap-0 px-4 py-2 text-xs uppercase tracking-wide text-slate-400 border-b border-slate-700">
+                  <div>Camera</div>
+                  <div>Current Store</div>
+                  <div>Assign To</div>
+                </div>
+                <div className="divide-y divide-slate-700">
+                  {camerasFromContext.map((camera) => {
+                    const currentStoreName = storesFromContext.find(s => s.id === camera.store_id)?.name || 'Unassigned';
+                    return (
+                      <div key={camera.id} className="grid grid-cols-3 gap-0 px-4 py-3 items-center text-sm text-slate-100">
+                        <div>
+                          <p className="font-semibold text-slate-100">{camera.name || 'Unnamed camera'}</p>
+                          <p className="text-xs text-slate-500 truncate">{camera.source}</p>
+                        </div>
+                        <div className={`${camera.store_id ? 'text-slate-300' : 'text-amber-400'}`}>
+                          {currentStoreName}
+                        </div>
+                        <div>
+                          <select
+                            className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-slate-100"
+                            value={cameraAssignments[camera.id] || camera.store_id || ''}
+                            onChange={(e) => setCameraAssignments(prev => ({ ...prev, [camera.id]: e.target.value }))}
+                          >
+                            {!camera.store_id && <option value="">-- Select Store --</option>}
+                            {storesFromContext.map(store => (
+                              <option key={store.id} value={store.id}>{store.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={() => {
+                    setShowCameraAssignModal(false);
+                    setAssignmentError(null);
+                  }}
+                  className="btn-outline btn-md"
+                  disabled={savingAssignments}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveCameraAssignments}
+                  className="btn-primary btn-md"
+                  disabled={savingAssignments}
+                >
+                  {savingAssignments ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
             </div>
           </motion.div>
         </div>
@@ -691,9 +853,25 @@ export default function ManagersPage() {
                 </p>
                 
                 {cameras.length === 0 ? (
-                  <div className="bg-slate-900/50 rounded-lg p-8 text-center border border-slate-700">
-                    <CameraIcon className="w-12 h-12 text-slate-500 mx-auto mb-3" />
-                    <p className="text-slate-400">No cameras in this store yet</p>
+                  <div className="bg-amber-900/20 rounded-lg p-6 border border-amber-700/40">
+                    <div className="flex items-start gap-3">
+                      <CameraIcon className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-amber-200 font-medium">No cameras available</p>
+                        <p className="text-sm text-amber-300/80 mt-1">
+                          Add cameras first or use "Manage Camera Assignments" to assign cameras to {selectedStore?.name}.
+                        </p>
+                        <button
+                          onClick={() => {
+                            setShowMemberAccessModal(false);
+                            setShowCameraAssignModal(true);
+                          }}
+                          className="mt-3 text-sm px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 rounded border border-amber-500/50 transition-colors"
+                        >
+                          Manage Camera Assignments
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-96 overflow-y-auto">

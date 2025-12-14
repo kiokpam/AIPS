@@ -5,6 +5,7 @@ Handles MJPEG streaming for cameras with task overlays
 
 import time
 import threading
+import logging
 from typing import Dict, Optional
 import cv2
 import numpy as np
@@ -20,17 +21,19 @@ class StreamingService:
     
     def generate_mjpeg_stream(self, camera_id: str, with_overlay: bool = True):
         """Generate MJPEG stream for a camera. Never raise inside generator; yield an error frame and exit instead."""
+        logger = logging.getLogger(__name__)
         camera_worker = camera_manager.get_camera(camera_id)
         if not camera_worker:
             # Yield a single error frame then exit to avoid half-started responses
             error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(error_frame, "Camera not running", (80, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if ret:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
             return
         
+        logger.debug(f"Starting stream for camera {camera_id} (with_overlay={with_overlay})")
         # Mark stream as active
         with self.stream_lock:
             self.active_streams[camera_id] = True
@@ -40,77 +43,114 @@ class StreamingService:
             send_times = []  # For FPS calculation
             frame_count = 0
             no_frame_count = 0  # Track consecutive None frames
-            max_no_frame_wait = 300  # Wait up to 3 seconds (300 * 0.01s) for first frame
+            max_no_frame_wait = 20  # Wait up to 200ms (20 * 0.01s) for first frame, then show placeholder
+            last_frame_time = 0  # Track when we last sent a frame to detect delays
+            last_frame_seq = -1  # Track last frame sequence to avoid re-encoding same frame
+            first_frame_sent = False  # Track if we've sent first frame
             
             while self.active_streams.get(camera_id, False):
                 try:
                     # Stop if camera disappeared
                     if not camera_manager.get_camera(camera_id):
+                        logger.debug(f"Camera {camera_id} no longer exists, stopping stream")
                         break
                     # Get frame with or without overlay
                     if with_overlay:
                         frame = camera_manager.get_camera_frame_with_overlay(camera_id)
+                        # For overlay frames, we can't use sequence tracking (overlay changes independently)
+                        frame_seq = -1
+                        frame_age = 0
                     else:
-                        frame = camera_manager.get_camera_frame(camera_id)
+                        # Get frame with sequence number AND timestamp to detect stale frames
+                        camera = camera_manager.get_camera(camera_id)
+                        if camera and camera.stream:
+                            frame, frame_seq, frame_timestamp = camera.stream.read_with_metadata()
+                            frame_age = (time.time() - frame_timestamp) * 1000 if frame_timestamp > 0 else 0
+                        else:
+                            frame = None
+                            frame_seq = -1
+                            frame_age = 0
                     
                     if frame is None:
                         no_frame_count += 1
                         # If we've been waiting too long, yield a "waiting" frame
                         if no_frame_count > max_no_frame_wait:
-                            # Yield a "waiting for stream" frame
+                            # Yield a "waiting for stream" frame every 500ms to keep connection alive
                             waiting_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                            cv2.putText(waiting_frame, "Waiting for stream...", (120, 220),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                            cv2.putText(waiting_frame, "Initializing camera...", (100, 220),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 149, 237), 2)
                             cv2.putText(waiting_frame, f"Camera: {camera_id}", (120, 260),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
-                            ret, jpeg = cv2.imencode('.jpg', waiting_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1)
+                            ret, jpeg = cv2.imencode('.jpg', waiting_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                             if ret:
                                 yield (b'--frame\r\n'
                                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-                            time.sleep(0.1)  # Slower when waiting
+                            time.sleep(0.05)  # Send placeholder every 50ms while waiting
                         else:
-                            time.sleep(0.01)
+                            time.sleep(0.01)  # Check for frames every 10ms
                         continue
                     
                     # Reset no_frame_count when we get a frame
                     no_frame_count = 0
                     
-                    # Encode frame to JPEG
+                    # Update last sequence (for reference/debugging only)
+                    if not with_overlay:
+                        last_frame_seq = frame_seq
+                    
+                    # Encode frame to JPEG with moderate quality for good speed/quality balance
+                    # Quality 80 is better than 70 but still very fast
                     ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     if not ret:
-                        time.sleep(0.01)
-                        continue
-                    
-                    # Calculate FPS
-                    now = time.time()
-                    send_times.append(now)
-                    # Keep only last 2 seconds
-                    cutoff = now - 2.0
-                    send_times = [t for t in send_times if t > cutoff]
+                        continue  # Skip bad frames without delay
                     
                     # Yield MJPEG frame
                     frame_count += 1
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
                     
-                    # Dynamic pacing based on FPS
-                    if len(send_times) >= 5:
+                    # Calculate FPS AFTER sending (to measure actual send rate)
+                    now = time.time()
+                    send_times.append(now)
+                    
+                    # Keep only last 2 seconds
+                    cutoff = now - 2.0
+                    send_times = [t for t in send_times if t > cutoff]
+                    
+                    # Log FPS occasionally (every 30 frames)
+                    if frame_count % 30 == 0:
+                        if len(send_times) >= 2:
+                            span = send_times[-1] - send_times[0]
+                            if span > 0:
+                                fps = (len(send_times) - 1) / span
+                                logger.debug(f"Camera {camera_id} streaming at {fps:.1f} FPS ({frame_count} frames sent)")
+                    
+                    # Track when we sent this frame
+                    last_frame_time = time.time()
+                    
+                    # For USB cameras, add minimal delay for smooth streaming
+                    # Reduced for lower latency (real-time responsiveness prioritized)
+                    try:
+                        camera = camera_manager.get_camera(camera_id)
+                        if camera and camera.stream and hasattr(camera.stream, 'is_usb') and camera.stream.is_usb:
+                            # Minimal delay for USB cameras (reduced from 10ms to 3ms for lower latency)
+                            time.sleep(0.003)  # 3ms - just enough to prevent frame bursts
+                    except Exception as e:
+                        logger.debug(f"USB detection check failed: {e}")
+                        pass
+                    
+                    # Only throttle if we're going extremely fast (>50 FPS) to prevent overwhelming client
+                    if len(send_times) >= 10:
                         span = send_times[-1] - send_times[0]
                         if span > 0:
                             fps = (len(send_times) - 1) / span
-                            frame_delay = 1.0 / min(fps, 30.0)  # Max 30 FPS
-                            time.sleep(min(frame_delay * 0.8, 0.033))
-                        else:
-                            time.sleep(0.033)
-                    else:
-                        time.sleep(0.033)  # ~30 FPS fallback
+                            if fps > 50:
+                                time.sleep(0.005)  # 5ms delay only if above 50 FPS
+                    # No delay for normal operation - send frames as fast as possible
                         
                 except GeneratorExit:
                     # Client disconnected, exit gracefully
                     break
                 except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
                     logger.warning(f"Stream error for camera {camera_id}: {e}", exc_info=True)
                     time.sleep(0.1)
                     # Continue streaming if possible
@@ -118,19 +158,18 @@ class StreamingService:
                     
         except GeneratorExit:
             # Client disconnected during stream setup
+            logger.debug(f"Client disconnected from camera {camera_id} stream")
             pass
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"Fatal stream error for camera {camera_id}: {e}", exc_info=True)
         finally:
             # Mark stream as inactive
             with self.stream_lock:
                 self.active_streams[camera_id] = False
+            logger.debug(f"Stream stopped for camera {camera_id} (sent {frame_count} frames)")
     
     def generate_preview_stream(self, source: str):
         """Generate preview stream for testing sources. Reuses existing camera stream if available."""
-        import logging
         logger = logging.getLogger(__name__)
         stream = None
         reuse_existing = False

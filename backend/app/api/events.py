@@ -1,7 +1,7 @@
 import uuid
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 
 from app.api.deps import CurrentMembership, get_current_membership, get_db, MembershipRole
-from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission
+from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission, CountingZone
 from app.schemas.events import CounterUpdateEvent, InOutUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse, DetectionUpdateEvent
 from app.services.camera_manager import camera_manager
 from app.services.websocket_manager import inout_ws_manager
@@ -23,6 +23,24 @@ CLIPS_DIR = Path(os.environ.get('CLIPS_DIR', '/app/clips'))
 
 router = APIRouter(prefix="/events", tags=["events"])
 logger = logging.getLogger(__name__)
+
+
+def _get_allowed_camera_ids(current: CurrentMembership, db: Session) -> List[str]:
+    """Get list of camera IDs that the current user can access"""
+    if current.role == MembershipRole.manager:
+        # Managers can see all cameras in their organization
+        return [
+            row[0]
+            for row in db.query(CameraModel.id).filter(CameraModel.org_id == current.organization.id).all()
+        ]
+    else:
+        # Members can only see cameras they have permission to view
+        permissions = db.query(MemberPermission).filter(
+            MemberPermission.membership_id == current.id,
+            MemberPermission.can_view == True,
+            MemberPermission.camera_id.isnot(None)
+        ).all()
+        return [perm.camera_id for perm in permissions]
 
 
 @router.post("/counter-update")
@@ -139,12 +157,15 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
 
 
 @router.post("/detection-update")
-def receive_detection_update(event: DetectionUpdateEvent):
+def receive_detection_update(event: DetectionUpdateEvent, db: Session = Depends(get_db)):
     """
     Receive real-time detection data from AI service.
     
     This endpoint receives bounding boxes and labels for visualization.
     Data is stored in-memory (not persisted) and used by the stream overlay.
+    
+    If store_id and zone_id are provided, also stores people_in_zone count to database
+    for use in the counting dashboard.
     """
     try:
         # Convert to format expected by camera manager
@@ -170,6 +191,62 @@ def receive_detection_update(event: DetectionUpdateEvent):
             people_in_zone=event.people_in_zone
         )
         
+        # If store_id and zone_id provided, also store to database for counting dashboard
+        if event.store_id and event.zone_id:
+            try:
+                store = db.query(StoreModel).filter(StoreModel.id == event.store_id).first()
+                if store:
+                    db.execute(text("""
+                        INSERT INTO people_counts (time, store_id, zone_id, camera_id, value, org_id)
+                        VALUES (:time, :store_id, :zone_id, :camera_id, :value, :org_id)
+                        ON CONFLICT (time, store_id, zone_id) DO UPDATE SET
+                            value = :value,
+                            camera_id = COALESCE(:camera_id, people_counts.camera_id)
+                    """), {
+                        "time": event.ts,
+                        "store_id": event.store_id,
+                        "zone_id": event.zone_id,
+                        "camera_id": event.camera_id,
+                        "value": event.people_in_zone,
+                        "org_id": store.org_id,
+                    })
+                    db.commit()
+            except Exception as db_error:
+                db.rollback()
+                logger.warning(f"Failed to store people count to database: {db_error}")
+                # Continue anyway - in-memory data is still updated for visualization
+        else:
+            # If store_id or zone_id missing, try to look them up from camera
+            try:
+                camera = db.query(CameraModel).filter(CameraModel.id == event.camera_id).first()
+                if camera:
+                    # Get first active zone for this camera
+                    zone = db.query(CountingZone).filter(
+                        CountingZone.camera_id == event.camera_id,
+                        CountingZone.is_active == True
+                    ).first()
+                    
+                    if zone:
+                        db.execute(text("""
+                            INSERT INTO people_counts (time, store_id, zone_id, camera_id, value, org_id)
+                            VALUES (:time, :store_id, :zone_id, :camera_id, :value, :org_id)
+                            ON CONFLICT (time, store_id, zone_id) DO UPDATE SET
+                                value = :value,
+                                camera_id = COALESCE(:camera_id, people_counts.camera_id)
+                        """), {
+                            "time": event.ts,
+                            "store_id": camera.store_id,
+                            "zone_id": zone.id,
+                            "camera_id": event.camera_id,
+                            "value": event.people_in_zone,
+                            "org_id": camera.org_id,
+                        })
+                        db.commit()
+            except Exception as db_error:
+                db.rollback()
+                logger.debug(f"Could not auto-lookup store/zone for camera {event.camera_id}: {db_error}")
+                # Continue anyway - in-memory data is still updated for visualization
+        
         return {"status": "success", "count": len(detections)}
     except Exception as e:
         logger.error(f"Failed to process detection update: {e}")
@@ -184,12 +261,25 @@ def get_inout_counts(
     current: CurrentMembership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
-    """Get recent In/Out count data for dashboard."""
+    """Get recent In/Out count data for dashboard (filtered by member permissions)."""
     try:
+        # Get allowed cameras for this user
+        allowed_camera_ids = _get_allowed_camera_ids(current, db)
+        
+        if not allowed_camera_ids:
+            # No camera access, return empty
+            return []
+        
         base_query = "SELECT time, camera_id, store_id, count_in, count_out FROM inout_counts WHERE org_id = :org_id"
         params = {"org_id": current.organization.id, "limit": limit}
+        
+        # Filter by allowed cameras
+        camera_ids_str = ",".join(f"'{cid}'" for cid in allowed_camera_ids)
+        base_query += f" AND camera_id IN ({camera_ids_str})"
 
         if camera_id:
+            if camera_id not in allowed_camera_ids:
+                raise HTTPException(status_code=403, detail="Camera access denied")
             base_query += " AND camera_id = :camera_id"
             params["camera_id"] = camera_id
         
@@ -212,6 +302,8 @@ def get_inout_counts(
             }
             for row in rows
         ]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching inout counts: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error while fetching inout counts")
@@ -220,18 +312,52 @@ def get_inout_counts(
 @router.get("/inout-summary")
 def get_inout_summary(
     store_id: Optional[str] = None,
+    time_range: Optional[str] = Query(None, description="Time range filter: 'today', 'week', 'month', or None for all-time"),
     current: CurrentMembership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
-    """Get summary of In/Out counts (latest totals per camera)."""
+    """Get summary of In/Out counts (latest totals per camera, filtered by member permissions and time range)."""
+    from datetime import datetime, timezone
+    
+    # Get allowed cameras for this user
+    allowed_camera_ids = _get_allowed_camera_ids(current, db)
+    
+    if not allowed_camera_ids:
+        # No camera access, return empty summary
+        return {
+            "total_in": 0,
+            "total_out": 0,
+            "net": 0,
+            "cameras": []
+        }
+    
+    # Calculate time filter if requested
+    params = {"org_id": current.organization.id}
+    time_filter = ""
+    if time_range:
+        now = datetime.now(timezone.utc)
+        start = None
+        if time_range == 'today':
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif time_range == 'week':
+            # Start of week (Monday)
+            start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif time_range == 'month':
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        if start:
+            time_filter = " AND time >= :start_time"
+            params["start_time"] = start
+    
     # Get the latest counts for each camera
-    base_query = """
+    camera_ids_str = ",".join(f"'{cid}'" for cid in allowed_camera_ids)
+    base_query = f"""
         SELECT DISTINCT ON (camera_id) 
             camera_id, store_id, count_in, count_out, time
         FROM inout_counts 
-        WHERE org_id = :org_id
+        WHERE org_id = :org_id AND camera_id IN ({camera_ids_str}){time_filter}
     """
-    params = {"org_id": current.organization.id}
     
     if store_id:
         base_query += " AND store_id = :store_id"
@@ -395,8 +521,16 @@ def get_people_counts(
     current: CurrentMembership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
-    """Get recent people count data"""
-    base_query = "SELECT time, store_id, zone_id, camera_id, value FROM people_counts WHERE org_id = :org_id"
+    """Get recent people count data (filtered by member permissions)"""
+    # Get allowed cameras for this user
+    allowed_camera_ids = _get_allowed_camera_ids(current, db)
+    
+    if not allowed_camera_ids:
+        # No camera access, return empty
+        return []
+    
+    camera_ids_str = ",".join(f"'{cid}'" for cid in allowed_camera_ids)
+    base_query = f"SELECT time, store_id, zone_id, camera_id, value FROM people_counts WHERE org_id = :org_id AND camera_id IN ({camera_ids_str})"
     params = {"org_id": current.organization.id, "limit": limit}
 
     if store_id:
@@ -404,6 +538,8 @@ def get_people_counts(
         params["store_id"] = store_id
     
     if camera_id:
+        if camera_id not in allowed_camera_ids:
+            raise HTTPException(status_code=403, detail="Camera access denied")
         base_query += " AND camera_id = :camera_id"
         params["camera_id"] = camera_id
 
@@ -422,6 +558,50 @@ def get_people_counts(
         }
         for row in rows
     ]
+
+@router.get("/realtime-people-counts")
+def get_realtime_people_counts(
+    store_id: Optional[str] = None,
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """Get real-time people counts from camera manager (filtered by member permissions)"""
+    try:
+        # Get allowed cameras for this user
+        allowed_camera_ids = _get_allowed_camera_ids(current, db)
+        
+        if not allowed_camera_ids:
+            # No camera access, return empty
+            return []
+        
+        # Get cameras with people counts from camera manager
+        cameras = [cam for cam in camera_manager.list_cameras() if cam.get("camera_id") in allowed_camera_ids]
+        
+        # Build response mapping: camera_id -> store_id -> people_in_zone
+        realtime_counts = {}
+        for camera in cameras:
+            camera_id = camera.get("camera_id")
+            current_count = camera.get("current_count", 0)
+            
+            # Get camera details from DB
+            cam = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
+            if cam:
+                cam_store_id = cam.store_id
+                
+                # Filter by store if requested
+                if store_id and cam_store_id != store_id:
+                    continue
+                
+                realtime_counts[camera_id] = {
+                    "camera_id": camera_id,
+                    "store_id": cam_store_id,
+                    "people_in_zone": current_count,
+                }
+        
+        return list(realtime_counts.values())
+    except Exception as e:
+        logger.error(f"Error fetching realtime people counts: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch realtime people counts")
 
 @router.get("/camera/{camera_id}/recent-behaviors")
 def get_camera_recent_behaviors(
@@ -552,22 +732,17 @@ def get_alerts(
     # Base query for alerts in the organization
     query = db.query(AlertModel).filter(AlertModel.org_id == current.organization.id)
     
-    # For members, filter by store permissions
+    # For members, filter by camera permissions (more granular than store-level)
     if current.role == MembershipRole.member:
-        # Get stores the member has access to
-        store_permissions = db.query(MemberPermission.store_id).filter(
-            MemberPermission.membership_id == current.membership.id,
-            MemberPermission.store_id.isnot(None)
-        ).distinct().all()
+        # Get cameras the member has access to
+        allowed_camera_ids = _get_allowed_camera_ids(current, db)
         
-        accessible_store_ids = [perm[0] for perm in store_permissions if perm[0]]
-        
-        if not accessible_store_ids:
-            # Member has no store access, return empty
+        if not allowed_camera_ids:
+            # Member has no camera access, return empty
             return AlertsResponse(alerts=[], unread_count=0, total_count=0)
         
-        # Filter alerts by accessible stores
-        query = query.filter(AlertModel.store_id.in_(accessible_store_ids))
+        # Filter alerts by accessible cameras
+        query = query.filter(AlertModel.camera_id.in_(allowed_camera_ids))
     
     # Filter by store if provided
     if store_id:
@@ -714,9 +889,17 @@ def list_clips(
     camera_id: Optional[str] = None,
     limit: int = Query(50, le=200),
     current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
 ):
-    """List available anomaly clips."""
+    """List available anomaly clips (filtered by member permissions)."""
     if not CLIPS_DIR.exists():
+        return {"clips": [], "total": 0}
+    
+    # Get allowed cameras for this user (member permission filtering)
+    allowed_camera_ids = _get_allowed_camera_ids(current, db)
+    
+    if not allowed_camera_ids:
+        # No camera access, return empty
         return {"clips": [], "total": 0}
     
     clips = []
@@ -726,6 +909,10 @@ def list_clips(
         parts = name.split('_')
         
         clip_camera_id = parts[0] if len(parts) > 0 else None
+        
+        # Filter by member permissions - only show clips from allowed cameras
+        if clip_camera_id not in allowed_camera_ids:
+            continue
         
         # Filter by camera if specified
         if camera_id and clip_camera_id != camera_id:
@@ -754,8 +941,9 @@ def list_clips(
 def get_clip(
     clip_name: str,
     current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
 ):
-    """Download an anomaly clip."""
+    """Download an anomaly clip (with member permission check)."""
     # Sanitize filename to prevent directory traversal
     safe_name = Path(clip_name).name
     clip_path = CLIPS_DIR / safe_name
@@ -763,8 +951,58 @@ def get_clip(
     if not clip_path.exists():
         raise HTTPException(status_code=404, detail="Clip not found")
     
+    # Get allowed cameras for this user (member permission filtering)
+    allowed_camera_ids = _get_allowed_camera_ids(current, db)
+    
+    # Parse camera_id from filename: {camera_id}_{track_id}_{label}_{score}.mp4
+    parts = safe_name.split('_')
+    clip_camera_id = parts[0] if len(parts) > 0 else None
+    
+    # Check if member has access to this camera's clips
+    if clip_camera_id and clip_camera_id not in allowed_camera_ids:
+        raise HTTPException(status_code=403, detail="Access denied: You don't have permission to view clips from this camera")
+    
     return FileResponse(
         path=clip_path,
         media_type="video/mp4",
         filename=safe_name,
     )
+
+
+@router.delete("/clips/{clip_name}")
+def delete_clip(
+    clip_name: str,
+    current: CurrentMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+):
+    """Delete an anomaly clip (manager/owner only, with camera permission check)."""
+    # Only managers and owners can delete clips
+    if current.role not in ['manager', 'owner']:
+        raise HTTPException(status_code=403, detail="Access denied: Only managers and owners can delete clips")
+    
+    # Sanitize filename to prevent directory traversal
+    safe_name = Path(clip_name).name
+    clip_path = CLIPS_DIR / safe_name
+    
+    if not clip_path.exists():
+        raise HTTPException(status_code=404, detail="Clip not found")
+    
+    # Get allowed cameras for this user (member permission filtering)
+    allowed_camera_ids = _get_allowed_camera_ids(current, db)
+    
+    # Parse camera_id from filename: {camera_id}_{track_id}_{label}_{score}.mp4
+    parts = safe_name.split('_')
+    clip_camera_id = parts[0] if len(parts) > 0 else None
+    
+    # Check if user has access to this camera's clips
+    if clip_camera_id and clip_camera_id not in allowed_camera_ids:
+        raise HTTPException(status_code=403, detail="Access denied: You don't have permission to delete clips from this camera")
+    
+    # Delete the file
+    try:
+        clip_path.unlink()
+        logger.info(f"Clip deleted: {safe_name} by user {current.member.user.email}")
+        return {"status": "success", "message": f"Clip {safe_name} deleted successfully"}
+    except Exception as e:
+        logger.error(f"Failed to delete clip {safe_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete clip: {str(e)}")

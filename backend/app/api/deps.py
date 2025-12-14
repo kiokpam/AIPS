@@ -112,6 +112,31 @@ def require_manager(
     return current
 
 
+def get_current_membership_flexible(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> CurrentMembership:
+    """Get current membership from Authorization header or token query param (for video/img tags).
+    Raises HTTPException if no valid token is found."""
+    token = None
+    
+    # Try Authorization header first
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    else:
+        # Try token query parameter (for img/video tags that can't send headers)
+        token = request.query_params.get("token")
+    
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required (provide token in header or query param)"
+        )
+    
+    return authenticate_token(token, db)
+
+
 def get_current_membership_optional(
     request: Request,
     db: Session = Depends(get_db),

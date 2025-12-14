@@ -67,7 +67,16 @@ export default function InOutDashboardPage() {
   const [stores, setStores] = useState<StoreStats[]>([]);
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
+  // Explicitly use browser timezone when grouping by hour to avoid UTC skew in peak hour calculations
+  const getLocalTimeZone = () => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch (_) {
+      return 'UTC';
+    }
+  };
   const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month'>('today');
+  const [granularity, setGranularity] = useState<'auto' | 'minute' | 'hour'>('auto');
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -85,6 +94,14 @@ export default function InOutDashboardPage() {
   const [animatedValues, setAnimatedValues] = useState({totalIn: 0, totalOut: 0, totalNet: 0});
   const lastValuesRef = useRef({totalIn: 0, totalOut: 0, totalNet: 0}); // Preserve last values during refresh
 
+  // Normalize timestamps from backend (which may be UTC without offset) to avoid timezone drift
+  const parseTimestamp = useCallback((value: string | Date) => {
+    if (!value) return new Date();
+    if (value instanceof Date) return value;
+    const hasTimezone = /([zZ]|[+-]\d\d:?\d\d)$/.test(value);
+    return new Date(hasTimezone ? value : `${value}Z`);
+  }, []);
+
   useEffect(() => {
     storeListRef.current = storeList;
   }, [storeList]);
@@ -93,7 +110,9 @@ export default function InOutDashboardPage() {
     cameraListRef.current = cameraList;
   }, [cameraList]);
 
-  // Filter stores based on selection
+  // Note: when granularity is 'auto', we compute the effective value during bucketing/formatting
+
+  // Filter stores based on selection (store + optional camera filter)
   const filteredStores = useMemo(() => {
     let result = stores;
     
@@ -101,19 +120,24 @@ export default function InOutDashboardPage() {
       result = result.filter(s => s.storeId === selectedStore);
     }
     
-    // Filter cameras within stores if specific cameras are selected
-    if (selectedCameras.length > 0 && selectedStore !== 'all') {
-      result = result.map(store => ({
-        ...store,
-        cameras: store.cameras.filter(cam => selectedCameras.includes(cam.cameraId)),
-        // Recalculate totals for filtered cameras
-        countIn: store.cameras.filter(cam => selectedCameras.includes(cam.cameraId))
-          .reduce((sum, cam) => sum + cam.countIn, 0),
-        countOut: store.cameras.filter(cam => selectedCameras.includes(cam.cameraId))
-          .reduce((sum, cam) => sum + cam.countOut, 0),
-        netInside: store.cameras.filter(cam => selectedCameras.includes(cam.cameraId))
-          .reduce((sum, cam) => sum + cam.countIn - cam.countOut, 0),
-      }));
+    // Apply camera filter across all stores when cameras are selected
+    if (selectedCameras.length > 0) {
+      result = result
+        .map(store => {
+          const filteredCams = store.cameras.filter(cam => selectedCameras.includes(cam.cameraId));
+          const countIn = filteredCams.reduce((sum, cam) => sum + cam.countIn, 0);
+          const countOut = filteredCams.reduce((sum, cam) => sum + cam.countOut, 0);
+          return {
+            ...store,
+            cameras: filteredCams,
+            countIn,
+            countOut,
+            // netInside recalculated server-side; keep existing until we re-derive it below
+            netInside: store.netInside,
+          };
+        })
+        // Hide stores that have no matching cameras when filtering by camera
+        .filter(store => store.cameras.length > 0);
     }
     
     return result;
@@ -123,9 +147,11 @@ export default function InOutDashboardPage() {
   const totalIn = filteredStores.reduce((sum, s) => sum + s.countIn, 0);
   const totalOut = filteredStores.reduce((sum, s) => sum + s.countOut, 0);
   const totalNet = filteredStores.reduce((sum, s) => sum + s.netInside, 0);
-  const totalCameras = selectedStore === 'all' 
-    ? cameraList.filter(c => c.is_active).length
-    : filteredStores.reduce((sum, s) => sum + s.cameras.length, 0);
+  const totalCameras = selectedCameras.length > 0
+    ? filteredStores.reduce((sum, s) => sum + s.cameras.length, 0)
+    : selectedStore === 'all'
+      ? cameraList.filter(c => c.is_active).length
+      : filteredStores.reduce((sum, s) => sum + s.cameras.length, 0);
 
   // Get time range label
   const getTimeRangeLabel = () => {
@@ -147,18 +173,26 @@ export default function InOutDashboardPage() {
   const outTrend = calculateTrend(totalOut, previousPeriodData?.totalOut || null);
 
   // Find peak hour - calculate by total in that hour in all zones
+  const localTimeZone = useMemo(() => getLocalTimeZone(), []);
+
   const peakHour = useMemo(() => {
     if (timeSeriesData.length === 0) return null;
-    // Group by hour and sum count_in for each hour
+    // Since counts are cumulative, take the MAX count_in per hour (not sum)
     const hourlyMap = new Map<number, number>();
     timeSeriesData.forEach(item => {
-      const itemTime = parseISO(item.time);
-      const hour = itemTime.getHours();
+      // Normalize to browser timezone to avoid UTC skew
+      const hourString = new Date(item.time).toLocaleString('en-US', {
+        hour: '2-digit',
+        hour12: false,
+        timeZone: localTimeZone,
+      });
+      const hour = parseInt(hourString, 10);
       const current = hourlyMap.get(hour) || 0;
-      hourlyMap.set(hour, current + item.count_in);
+      // Take MAX cumulative count, not sum
+      hourlyMap.set(hour, Math.max(current, item.count_in));
     });
     
-    // Find hour with maximum total in
+    // Find hour with maximum count
     let maxHour = 0;
     let maxCount = 0;
     hourlyMap.forEach((count, hour) => {
@@ -174,18 +208,23 @@ export default function InOutDashboardPage() {
       hour: `${maxHour.toString().padStart(2, '0')}:00`,
       count: maxCount
     };
-  }, [timeSeriesData]);
+  }, [timeSeriesData, localTimeZone]);
 
   // Calculate average hourly traffic
   const avgHourlyTraffic = useMemo(() => {
     if (timeSeriesData.length === 0 || totalIn === 0) return null;
     const hours = new Set<number>();
     timeSeriesData.forEach(item => {
-      const itemTime = parseISO(item.time);
-      hours.add(itemTime.getHours());
+      const hourString = new Date(item.time).toLocaleString('en-US', {
+        hour: '2-digit',
+        hour12: false,
+        timeZone: localTimeZone,
+      });
+      const hour = parseInt(hourString, 10);
+      hours.add(hour);
     });
     return hours.size > 0 ? Math.round(totalIn / hours.size) : null;
-  }, [timeSeriesData, totalIn]);
+  }, [timeSeriesData, totalIn, localTimeZone]);
 
 
   // Calculate traffic distribution (morning/afternoon/evening)
@@ -196,8 +235,12 @@ export default function InOutDashboardPage() {
     let evening = 0; // 18-24 or 0-6
     
     timeSeriesData.forEach(item => {
-      const itemTime = parseISO(item.time);
-      const hour = itemTime.getHours();
+      const hourString = new Date(item.time).toLocaleString('en-US', {
+        hour: '2-digit',
+        hour12: false,
+        timeZone: localTimeZone,
+      });
+      const hour = parseInt(hourString, 10);
       const traffic = item.count_in + item.count_out;
       
       if (hour >= 6 && hour < 12) {
@@ -219,7 +262,7 @@ export default function InOutDashboardPage() {
       peak: morning > afternoon && morning > evening ? 'morning' 
             : afternoon > evening ? 'afternoon' : 'evening'
     };
-  }, [timeSeriesData]);
+  }, [timeSeriesData, localTimeZone]);
 
   // Animate numbers - only animate if values actually changed
   useEffect(() => {
@@ -273,94 +316,124 @@ export default function InOutDashboardPage() {
     animate();
   }, [totalIn, totalOut, totalNet]);
 
-  // Fetch time-series data for charts
+  // Fetch time-series data for charts - returns data instead of setting state
   const fetchTimeSeriesData = useCallback(async () => {
     try {
       // Calculate time range
       const now = new Date();
       let startDate: Date;
-      let limit = 100;
+      let limit = 120; // lower default to reduce payload
       
       switch (timeRange) {
         case 'week':
           startDate = startOfWeek(now, { weekStartsOn: 1 });
-          limit = 500;
+          limit = 300;
           break;
         case 'month':
           startDate = startOfMonth(now);
-          limit = 1000;
+          limit = 500;
           break;
         default: // today
           startDate = startOfDay(now);
-          limit = 200;
+          limit = 120;
       }
       
       const params: any = {
         limit,
       };
       
+      // Always scope by store when a store is selected to reduce payload server-side
       if (selectedStore !== 'all') {
         params.store_id = selectedStore;
       }
       
-      // Fetch both in/out counts and people counts
-      const [inOutData, peopleCountsData] = await Promise.all([
-        selectedCameras.length > 0
-          ? Promise.all(selectedCameras.map(cameraId => 
-              eventsApi.getInOutCounts({ ...params, camera_id: cameraId })
-            )).then(results => results.flat())
-          : eventsApi.getInOutCounts(params),
-        selectedCameras.length > 0
-          ? Promise.all(selectedCameras.map(cameraId => 
-              eventsApi.getPeopleCounts({ ...params, camera_id: cameraId })
-            )).then(results => results.flat())
-          : eventsApi.getPeopleCounts(params),
-      ]);
-      
-      // Group in/out data by time
-      const inOutGrouped = new Map<string, { count_in: number; count_out: number }>();
-      inOutData.forEach(item => {
-        const timeKey = item.time;
-        if (!inOutGrouped.has(timeKey)) {
-          inOutGrouped.set(timeKey, { count_in: 0, count_out: 0 });
+      // Determine effective granularity ('auto' => today: minute, week/month: hour)
+      const effectiveGranularity: 'minute' | 'hour' =
+        granularity === 'auto' ? (timeRange === 'today' ? 'minute' : 'hour') : granularity;
+
+      // Helper: bucket a timestamp by granularity
+      const bucketTime = (d: Date): string => {
+        const x = new Date(d);
+        x.setSeconds(0, 0);
+        if (effectiveGranularity === 'hour') {
+          x.setMinutes(0, 0, 0);
         }
-        const existing = inOutGrouped.get(timeKey)!;
-        existing.count_in += item.count_in;
-        existing.count_out += item.count_out;
+        return x.toISOString();
+      };
+
+      // Fetch in/out counts
+      const inOutData = selectedCameras.length > 0
+        ? await Promise.all(selectedCameras.map(cameraId => 
+            eventsApi.getInOutCounts({ limit, camera_id: cameraId, store_id: selectedStore !== 'all' ? selectedStore : undefined })
+          )).then(results => results.flat())
+        : await eventsApi.getInOutCounts(params);
+      
+      // Group by time bucket and camera, then aggregate
+      // For each time bucket and camera, use the most recent count (data sorted DESC from backend)
+      const timeData = new Map<string, Map<string, { count_in: number; count_out: number }>>();
+      
+      inOutData.forEach(item => {
+        const parsedTime = parseTimestamp(item.time);
+        if (!isWithinInterval(parsedTime, { start: startDate, end: now })) return;
+        
+        const timeKey = bucketTime(parsedTime);
+        if (!timeData.has(timeKey)) {
+          timeData.set(timeKey, new Map());
+        }
+        const bucket = timeData.get(timeKey)!;
+        
+        // For each camera at this time bucket, keep the latest record (counts are cumulative)
+        if (!bucket.has(item.camera_id)) {
+          bucket.set(item.camera_id, { count_in: item.count_in, count_out: item.count_out });
+        }
       });
       
-      // Group people counts by time and sum all zones
-      const peopleCountsGrouped = new Map<string, number>();
-      peopleCountsData.forEach(item => {
-        const timeKey = item.time;
-        const current = peopleCountsGrouped.get(timeKey) || 0;
-        peopleCountsGrouped.set(timeKey, current + item.value);
-      });
+      // Generate all time buckets in the range to show complete timeline
+      const allBuckets = new Map<string, Map<string, { count_in: number; count_out: number }>>();
+      let currentTime = new Date(startDate);
+      while (currentTime <= now) {
+        const bucketKey = bucketTime(currentTime);
+        if (!allBuckets.has(bucketKey)) {
+          allBuckets.set(bucketKey, timeData.get(bucketKey) || new Map());
+        }
+        // Increment by granularity
+        if (effectiveGranularity === 'hour') {
+          currentTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
+        } else {
+          currentTime = new Date(currentTime.getTime() + 60 * 1000);
+        }
+      }
       
-      // Combine data: use people_counts for net (total people in all zones)
-      const allTimes = new Set([...Array.from(inOutGrouped.keys()), ...Array.from(peopleCountsGrouped.keys())]);
-      const processed = Array.from(allTimes)
-        .map(time => {
-          const inOut = inOutGrouped.get(time) || { count_in: 0, count_out: 0 };
-          const net = peopleCountsGrouped.get(time) || 0;
+      // Now aggregate across all time buckets
+      const processed = Array.from(allBuckets.entries())
+        .map(([timeKey, cameraMap]) => {
+          let totalIn = 0;
+          let totalOut = 0;
+          
+          // Sum across all cameras for this time bucket
+          cameraMap.forEach(counts => {
+            totalIn += counts.count_in;
+            totalOut += counts.count_out;
+          });
+          
+          // Calculate net as cumulative (in - out)
+          const net = totalIn - totalOut;
+          
           return {
-            time,
-            count_in: inOut.count_in,
-            count_out: inOut.count_out,
-            net: net, // Use total people in all zones
+            time: timeKey,
+            count_in: totalIn,
+            count_out: totalOut,
+            net: Math.max(0, net), // Net can't be negative (people inside)
           };
         })
-        .filter(item => {
-          const itemTime = parseISO(item.time);
-          return isWithinInterval(itemTime, { start: startDate, end: now });
-        })
-        .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+        .sort((a, b) => parseTimestamp(a.time).getTime() - parseTimestamp(b.time).getTime());
       
-      setTimeSeriesData(processed);
+      return processed;
     } catch (err) {
       console.error('Failed to fetch time-series data:', err);
+      return [];
     }
-  }, [timeRange, selectedStore, selectedCameras]);
+  }, [timeRange, selectedStore, selectedCameras, parseTimestamp, granularity]);
 
   // Fetch In/Out data from API
   const fetchInOutData = useCallback(async () => {
@@ -377,9 +450,14 @@ export default function InOutDashboardPage() {
       const storesData = storeList;
       const camerasData = cameraList;
       
-      const [inoutSummary, peopleCounts] = await Promise.all([
-        eventsApi.getInOutSummary(selectedStore !== 'all' ? selectedStore : undefined),
-        eventsApi.getPeopleCounts(selectedStore !== 'all' ? { store_id: selectedStore, limit: 1000 } : { limit: 1000 }),
+      // Fetch summary and time-series data IN PARALLEL (not sequentially)
+      const [inoutSummary, realtimePeopleCounts, timeSeriesResult] = await Promise.all([
+        eventsApi.getInOutSummary(
+          selectedStore !== 'all' ? selectedStore : undefined,
+          timeRange // Pass current time range filter
+        ),
+        eventsApi.getRealtimePeopleCounts(selectedStore !== 'all' ? { store_id: selectedStore } : undefined),
+        fetchTimeSeriesData(), // Run in parallel with summary data
       ]);
       
       // Build store stats from API data
@@ -397,22 +475,15 @@ export default function InOutDashboardPage() {
         };
       });
       
-      // Calculate total people in zones per store (use latest count per zone)
+      // Calculate total people in zones per store and per camera from real-time data
       const storePeopleCounts: { [key: string]: number } = {};
-      const zoneLatestCount: { [key: string]: { time: Date; value: number } } = {};
+      const cameraPeopleCounts: { [key: string]: number } = {};
       
-      peopleCounts.forEach((item: { time: string; store_id: string; zone_id: string; value: number }) => {
-        const zoneKey = `${item.store_id}_${item.zone_id}`;
-        const itemTime = new Date(item.time);
-        if (!zoneLatestCount[zoneKey] || itemTime > zoneLatestCount[zoneKey].time) {
-          zoneLatestCount[zoneKey] = { time: itemTime, value: item.value };
+      realtimePeopleCounts.forEach((item: { camera_id: string; store_id: string; people_in_zone: number }) => {
+        if (item.store_id && item.people_in_zone !== undefined) {
+          storePeopleCounts[item.store_id] = (storePeopleCounts[item.store_id] || 0) + item.people_in_zone;
+          cameraPeopleCounts[item.camera_id] = item.people_in_zone;
         }
-      });
-      
-      // Sum up people counts per store
-      Object.keys(zoneLatestCount).forEach(zoneKey => {
-        const [storeId] = zoneKey.split('_');
-        storePeopleCounts[storeId] = (storePeopleCounts[storeId] || 0) + zoneLatestCount[zoneKey].value;
       });
       
       // Add camera data from inout summary
@@ -426,25 +497,78 @@ export default function InOutDashboardPage() {
         const camera = camerasData.find(c => c.id === cam.camera_id);
         const store = storesData.find(s => s.id === cam.store_id);
         
-        if (store && storeStatsMap[cam.store_id]) {
-          storeStatsMap[cam.store_id].countIn += cam.count_in;
-          storeStatsMap[cam.store_id].countOut += cam.count_out;
-          // Use people_counts for netInside (total people in all zones)
-          storeStatsMap[cam.store_id].netInside = storePeopleCounts[cam.store_id] || 0;
-          storeStatsMap[cam.store_id].cameras.push({
-            cameraId: cam.camera_id,
-            cameraName: camera?.name || 'Unknown Camera',
-            countIn: cam.count_in,
-            countOut: cam.count_out,
-            lastUpdated: new Date(cam.last_updated),
+        // Skip cameras without valid store_id or store not found
+        if (!cam.store_id || !store || !storeStatsMap[cam.store_id]) {
+          return;
+        }
+        
+        storeStatsMap[cam.store_id].countIn += cam.count_in;
+        storeStatsMap[cam.store_id].countOut += cam.count_out;
+        // Use real-time people counts for netInside (current people in zones)
+        storeStatsMap[cam.store_id].netInside = storePeopleCounts[cam.store_id] || 0;
+        storeStatsMap[cam.store_id].cameras.push({
+          cameraId: cam.camera_id,
+          cameraName: camera?.name || 'Unknown Camera',
+          countIn: cam.count_in,
+          countOut: cam.count_out,
+          lastUpdated: parseTimestamp(cam.last_updated),
+        });
+        storeStatsMap[cam.store_id].lastUpdate = parseTimestamp(cam.last_updated);
+      });
+
+      // Ensure cameras assigned to a store appear even if no AI counts yet
+      camerasData.forEach(camera => {
+        if (!camera.store_id || !storeStatsMap[camera.store_id]) return;
+        const storeEntry = storeStatsMap[camera.store_id];
+        const exists = storeEntry.cameras.some(c => c.cameraId === camera.id);
+        if (!exists) {
+          storeEntry.cameras.push({
+            cameraId: camera.id,
+            cameraName: camera.name,
+            countIn: 0,
+            countOut: 0,
+            lastUpdated: new Date(),
           });
-          storeStatsMap[cam.store_id].lastUpdate = new Date(cam.last_updated);
+        }
+      });
+
+      // Update netInside from realtime people counts even if no in/out records yet
+      Object.keys(storeStatsMap).forEach(storeId => {
+        if (storePeopleCounts[storeId] !== undefined) {
+          storeStatsMap[storeId].netInside = storePeopleCounts[storeId];
         }
       });
       
-      const newStores = Object.values(storeStatsMap);
+      let newStores = Object.values(storeStatsMap);
+      
+      // Filter out the "Unassigned" placeholder store from dashboard display
+      newStores = newStores.filter(store => store.storeName.toLowerCase() !== 'unassigned');
+
+      // If cameras are filtered, recalc store aggregates using only selected cameras
+      if (selectedCameras.length > 0) {
+        newStores = newStores
+          .map(store => {
+            const filteredCams = store.cameras.filter(cam => selectedCameras.includes(cam.cameraId));
+            const countIn = filteredCams.reduce((sum, cam) => sum + cam.countIn, 0);
+            const countOut = filteredCams.reduce((sum, cam) => sum + cam.countOut, 0);
+            const netInside = filteredCams.reduce((sum, cam) => sum + (cameraPeopleCounts[cam.cameraId] || 0), 0);
+            return {
+              ...store,
+              cameras: filteredCams,
+              countIn,
+              countOut,
+              netInside,
+            };
+          })
+          .filter(store => store.cameras.length > 0);
+      }
       setStores(newStores);
       setLastRefresh(new Date());
+      
+      // Set time-series data from result
+      if (timeSeriesResult) {
+        setTimeSeriesData(timeSeriesResult);
+      }
       
       // Update last values ref immediately to prevent showing 0 during refresh
       const newTotalIn = newStores.reduce((sum, s) => sum + s.countIn, 0);
@@ -459,9 +583,6 @@ export default function InOutDashboardPage() {
           setAnimatedValues({ totalIn: newTotalIn, totalOut: newTotalOut, totalNet: newTotalNet });
         }
       }
-      
-      // Also fetch time-series data
-      await fetchTimeSeriesData();
     } catch (err: any) {
       // Ignore network errors from aborted/cancelled requests
       if (err.code === 'ERR_CANCELED' || err.name === 'AbortError' || err.code === 'ERR_NETWORK') {
@@ -472,7 +593,7 @@ export default function InOutDashboardPage() {
     } finally {
       fetchInOutDataLoadingRef.current = false;
     }
-  }, [selectedStore, storeList, cameraList, fetchTimeSeriesData]);
+  }, [selectedStore, selectedCameras, storeList, cameraList, fetchTimeSeriesData, parseTimestamp, animatedValues.totalIn, animatedValues.totalOut, animatedValues.totalNet]);
 
   // Manual refresh
   const handleRefresh = async () => {
@@ -541,13 +662,7 @@ export default function InOutDashboardPage() {
     if (hasAccess && selectedStore) {
       fetchInOutData();
     }
-  }, [selectedStore, hasAccess, fetchInOutData]);
-
-  useEffect(() => {
-    if (hasAccess) {
-      fetchTimeSeriesData();
-    }
-  }, [timeRange, selectedStore, selectedCameras, hasAccess, fetchTimeSeriesData]);
+  }, [selectedStore, selectedCameras, hasAccess, fetchInOutData]);
 
   // WebSocket connection for real-time in/out updates
   useEffect(() => {
@@ -581,14 +696,14 @@ export default function InOutDashboardPage() {
               countOut: data.count_out,
               // Keep current netInside temporarily, will be updated with accurate value below
               netInside: store.netInside,
-              lastUpdate: new Date(data.ts),
+              lastUpdate: parseTimestamp(data.ts),
               cameras: store.cameras.map((cam) =>
                 cam.cameraId === data.camera_id
                   ? {
                       ...cam,
                       countIn: data.count_in,
                       countOut: data.count_out,
-                      lastUpdated: new Date(data.ts),
+                      lastUpdated: parseTimestamp(data.ts),
                     }
                   : cam
               ),
@@ -620,7 +735,7 @@ export default function InOutDashboardPage() {
               countIn: data.count_in,
               countOut: data.count_out,
               netInside: 0, // Will be updated with accurate value below
-              lastUpdate: new Date(data.ts),
+              lastUpdate: parseTimestamp(data.ts),
               cameras: [
                 {
                   cameraId: data.camera_id,
@@ -630,7 +745,7 @@ export default function InOutDashboardPage() {
                     'Unknown Camera',
                   countIn: data.count_in,
                   countOut: data.count_out,
-                  lastUpdated: new Date(data.ts),
+                      lastUpdated: parseTimestamp(data.ts),
                 },
               ],
             });
@@ -639,30 +754,20 @@ export default function InOutDashboardPage() {
           return next;
         });
 
-        setLastRefresh(new Date(data.ts));
+        setLastRefresh(parseTimestamp(data.ts));
         
         // Fetch current people counts for the store to get accurate netInside (async, non-blocking)
         // This updates the netInside value after the initial update
         (async () => {
           try {
-            const peopleCounts = await eventsApi.getPeopleCounts(
-              data.store_id ? { store_id: data.store_id, limit: 1000 } : { limit: 1000 }
+            const realtimeCounts = await eventsApi.getRealtimePeopleCounts(
+              data.store_id ? { store_id: data.store_id } : undefined
             );
             
-            // Calculate total people in all zones for this store (use latest count per zone)
-            const zoneLatestCount: { [key: string]: { time: Date; value: number } } = {};
-            peopleCounts.forEach((item: { time: string; store_id: string; zone_id: string; value: number }) => {
-              if (item.store_id === data.store_id) {
-                const zoneKey = `${item.store_id}_${item.zone_id}`;
-                const itemTime = new Date(item.time);
-                if (!zoneLatestCount[zoneKey] || itemTime > zoneLatestCount[zoneKey].time) {
-                  zoneLatestCount[zoneKey] = { time: itemTime, value: item.value };
-                }
-              }
-            });
-            
             // Sum up people counts for this store
-            const totalPeople = Object.values(zoneLatestCount).reduce((sum, zone) => sum + zone.value, 0);
+            const totalPeople = realtimeCounts
+              .filter(item => item.store_id === data.store_id)
+              .reduce((sum, item) => sum + item.people_in_zone, 0);
             
             // Update stores with accurate people count
             setStores((prev: StoreStats[]) => {
@@ -677,7 +782,7 @@ export default function InOutDashboardPage() {
               });
             });
           } catch (error) {
-            console.error('Failed to fetch people counts for WebSocket update:', error);
+            console.error('Failed to fetch realtime people counts for WebSocket update:', error);
           }
         })();
       },
@@ -690,7 +795,7 @@ export default function InOutDashboardPage() {
     return () => {
       // Connection persists across navigations, so we don't close it here
     };
-  }, [hasAccess, isAuthenticated, t]);
+  }, [hasAccess, isAuthenticated, t, parseTimestamp]);
 
   if (isLoading || hasAccess === null) {
     return (
@@ -719,6 +824,28 @@ export default function InOutDashboardPage() {
     );
   }
 
+  // Check if stores exist
+  if (hasAccess && storeList.length === 0) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <StoreIcon className="w-16 h-16 text-amber-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-slate-200 mb-2">
+            {lang === 'vi' ? 'Tạo Cửa Hàng Trước' : 'Create a Store First'}
+          </h2>
+          <p className="text-slate-400 mb-6">
+            {lang === 'vi' 
+              ? 'Bạn cần tạo ít nhất một cửa hàng và gán camera để xem bảng điều khiển.'
+              : 'You need to create at least one store and assign cameras to it before viewing dashboards.'}
+          </p>
+          <button onClick={() => router.push('/managers')} className="btn-primary btn-md">
+            {lang === 'vi' ? 'Quản lý Cửa Hàng' : 'Manage Stores'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const formatTime = (date: Date) => {
     const now = new Date();
     const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
@@ -733,7 +860,8 @@ export default function InOutDashboardPage() {
     });
   };
 
-  const hasRealData = stores.some(s => s.countIn > 0 || s.countOut > 0);
+  // Consider real-time people counts as data as well
+  const hasRealData = stores.some(s => s.countIn > 0 || s.countOut > 0 || s.netInside > 0);
 
   return (
     <div className="space-y-6 text-slate-100">
@@ -1003,9 +1131,34 @@ export default function InOutDashboardPage() {
               animate={{ opacity: 1, y: 0 }}
               className="bg-slate-800/50 border border-slate-700 rounded-xl p-6"
             >
-              <h3 className="text-sm font-semibold text-slate-300 mb-4">
-                {lang === 'vi' ? 'Vào/Ra/Net theo thời gian' : 'In/Out/Net Over Time'}
-              </h3>
+              <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+                <h3 className="text-sm font-semibold text-slate-300">
+                  {lang === 'vi' ? 'Vào/Ra/Net theo thời gian' : 'In/Out/Net Over Time'}
+                </h3>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">{lang === 'vi' ? 'Độ chi tiết' : 'Granularity'}:</span>
+                  <div className="inline-flex bg-slate-700/50 border border-slate-600 rounded-lg overflow-hidden">
+                    <button
+                      className={`px-2.5 py-1.5 text-xs ${granularity === 'auto' ? 'bg-slate-600 text-white' : 'text-slate-300'}`}
+                      onClick={() => setGranularity('auto')}
+                    >
+                      Auto
+                    </button>
+                    <button
+                      className={`px-2.5 py-1.5 text-xs ${granularity === 'minute' ? 'bg-slate-600 text-white' : 'text-slate-300'}`}
+                      onClick={() => setGranularity('minute')}
+                    >
+                      {lang === 'vi' ? 'Phút' : 'Minute'}
+                    </button>
+                    <button
+                      className={`px-2.5 py-1.5 text-xs ${granularity === 'hour' ? 'bg-slate-600 text-white' : 'text-slate-300'}`}
+                      onClick={() => setGranularity('hour')}
+                    >
+                      {lang === 'vi' ? 'Giờ' : 'Hour'}
+                    </button>
+                  </div>
+                </div>
+              </div>
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={timeSeriesData}>
                   <defs>
@@ -1029,13 +1182,16 @@ export default function InOutDashboardPage() {
                     tick={{ fill: '#9ca3af', fontSize: 12 }}
                     tickFormatter={(value) => {
                       try {
-                        const date = parseISO(value);
-                        // Format with UTC+7 timezone using format utility
-                        return formatTimeUTC7(date, lang, {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          ...(timeRange !== 'today' ? { month: '2-digit', day: '2-digit' } : {})
-                        });
+                        const d = new Date(value);
+                        const hh = d.getHours().toString().padStart(2, '0');
+                        const mm = d.getMinutes().toString().padStart(2, '0');
+                        const eff = granularity === 'auto' ? (timeRange === 'today' ? 'minute' : 'hour') : granularity;
+                        if (timeRange !== 'today') {
+                          const month = (d.getMonth() + 1).toString().padStart(2, '0');
+                          const day = d.getDate().toString().padStart(2, '0');
+                          return eff === 'hour' ? `${month}/${day} ${hh}:00` : `${month}/${day} ${hh}:${mm}`;
+                        }
+                        return eff === 'hour' ? `${hh}:00` : `${hh}:${mm}`;
                       } catch {
                         return value;
                       }
@@ -1054,14 +1210,14 @@ export default function InOutDashboardPage() {
                     }}
                     labelFormatter={(value) => {
                       try {
-                        const date = parseISO(value);
-                        // Format with UTC+7 timezone using format utility
-                        return formatDateTime(date, lang, {
+                        const date = new Date(value);
+                        return date.toLocaleString(lang === 'vi' ? 'vi-VN' : 'en-US', {
                           year: 'numeric',
                           month: 'short',
                           day: '2-digit',
                           hour: '2-digit',
-                          minute: '2-digit'
+                          minute: '2-digit',
+                          timeZone: localTimeZone,
                         });
                       } catch {
                         return value;

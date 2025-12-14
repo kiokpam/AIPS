@@ -128,18 +128,20 @@ def create_camera(
     db: Session = Depends(get_db),
 ) -> CameraSchema:
     """Create a new camera with advanced configuration"""
-    store = (
-        db.query(StoreModel)
-        .filter(StoreModel.id == payload.store_id, StoreModel.org_id == current.organization.id)
-        .first()
-    )
-    if not store:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found")
+    # Validate store exists if store_id is provided
+    if payload.store_id:
+        store = (
+            db.query(StoreModel)
+            .filter(StoreModel.id == payload.store_id, StoreModel.org_id == current.organization.id)
+            .first()
+        )
+        if not store:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found")
 
     default_ai = payload.ai_services if payload.ai_services else ["people_counting", "behavior_detection"]
     item = CameraModel(
         id=str(uuid.uuid4()),
-        store_id=payload.store_id,
+        store_id=payload.store_id,  # Can be None for unassigned cameras
         name=payload.name,
         source=payload.source,
         ai_services=default_ai,
@@ -159,36 +161,71 @@ def create_camera(
         db.add(item)
         db.flush()  # Get ID without committing yet
 
-        # Try to start camera before committing to database
-        success = camera_manager.add_camera(
-            camera_id=item.id,
-            store_id=item.store_id,
-            source=item.source,
-            name=item.name,
-            ai_services=item.ai_services,
-            # Model configuration removed - AI services will handle all model settings
-            skip_frame=item.skip_frame,
-        )
+        # Only start camera if it has a store assigned
+        # Unassigned cameras remain inactive until assigned to a store
+        if item.store_id:
+            success = camera_manager.add_camera(
+                camera_id=item.id,
+                store_id=item.store_id,
+                source=item.source,
+                name=item.name,
+                ai_services=item.ai_services,
+                # Model configuration removed - AI services will handle all model settings
+                skip_frame=item.skip_frame,
+            )
 
-        if not success:
-            db.rollback()
-            # Check if it's a resource limit issue
-            current_count = camera_manager.get_camera_count()
-            max_cameras = camera_manager.get_max_cameras()
-            if current_count >= max_cameras:
-                logger.warning(f"Camera creation failed: max limit reached ({max_cameras} cameras)")
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Maximum camera limit reached ({max_cameras} cameras). Please stop some cameras before adding new ones."
-                )
-            logger.error(f"Camera creation failed: unable to start stream for {item.id}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera stream. Check RTSP URL accessibility and network connectivity.")
+            if not success:
+                db.rollback()
+                # Check if it's a resource limit issue
+                current_count = camera_manager.get_camera_count()
+                max_cameras = camera_manager.get_max_cameras()
+                if current_count >= max_cameras:
+                    logger.warning(f"Camera creation failed: max limit reached ({max_cameras} cameras)")
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=f"Maximum camera limit reached ({max_cameras} cameras). Please stop some cameras before adding new ones."
+                    )
+                logger.error(f"Camera creation failed: unable to start stream for {item.id}")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to start camera stream. Check RTSP URL accessibility and network connectivity.")
 
-        # Camera started successfully - commit to database
-        item.is_active = True
+            # Camera started successfully - mark as active
+            item.is_active = True
+        else:
+            # Unassigned camera - save as inactive
+            item.is_active = False
+            logger.info(f"Camera {item.id} created without store assignment (inactive)")
+        
+        # Commit to database
         db.commit()
         db.refresh(item)
         logger.info(f"Camera {item.id} created and started successfully")
+        
+        # Load zones/lines from database and sync to camera manager (if any exist)
+        zones_from_db = db.query(CountingZoneModel).filter(
+            CountingZoneModel.camera_id == item.id,
+            CountingZoneModel.org_id == current.organization.id,
+            CountingZoneModel.is_active == True
+        ).all()
+        
+        lines_from_db = db.query(CountingLineModel).filter(
+            CountingLineModel.camera_id == item.id,
+            CountingLineModel.org_id == current.organization.id,
+            CountingLineModel.is_active == True
+        ).all()
+        
+        if zones_from_db or lines_from_db:
+            zones_config = [
+                {"id": z.id, "name": z.name, "polygon": z.polygon, "is_active": z.is_active}
+                for z in zones_from_db
+            ]
+            lines_config = [
+                {"id": l.id, "name": l.name, "p1": l.p1, "p2": l.p2, "p1_b": l.p1_b, "p2_b": l.p2_b, "is_active": l.is_active}
+                for l in lines_from_db
+            ]
+            camera_worker = camera_manager.get_camera(item.id)
+            if camera_worker:
+                camera_worker.update_task_config(zones_config, lines_config)
+                logger.info(f"Loaded {len(zones_config)} zones and {len(lines_config)} lines for camera {item.id}")
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
@@ -262,26 +299,57 @@ def update_camera(
         if payload.is_active is not None:
             camera.is_active = payload.is_active
 
-        # If source or AI services changed, restart camera BEFORE committing
-        if payload.source is not None or payload.ai_services is not None:
-            camera_manager.remove_camera(camera_id)
-            success = camera_manager.add_camera(
-                camera_id=camera.id,
-                store_id=camera.store_id,
-                source=camera.source,
-                name=camera.name,
-                ai_services=camera.ai_services,
-                # Model configuration removed - AI services will handle all model settings
-                skip_frame=camera.skip_frame,
-            )
-            if not success:
-                db.rollback()
-                logger.error(f"Failed to restart camera {camera_id} with new configuration")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Failed to restart camera with new configuration",
+        # Handle store reassignment
+        store_changed = False
+        if payload.store_id is not None and payload.store_id != camera.store_id:
+            # Validate target store exists if assigning to a store
+            if payload.store_id:  # Not empty string
+                target_store = (
+                    db.query(StoreModel)
+                    .filter(StoreModel.id == payload.store_id, StoreModel.org_id == current.organization.id)
+                    .first()
                 )
-            logger.info(f"Camera {camera_id} restarted with new configuration")
+                if not target_store:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found")
+            camera.store_id = payload.store_id
+            store_changed = True
+
+        # Determine if camera needs to be restarted
+        needs_restart = (
+            payload.source is not None or 
+            payload.ai_services is not None or 
+            store_changed
+        )
+        
+        # If config changed, restart camera
+        if needs_restart:
+            # Stop existing camera if running
+            camera_manager.remove_camera(camera_id)
+            
+            # Only start camera if it has a store assigned
+            if camera.store_id:
+                success = camera_manager.add_camera(
+                    camera_id=camera.id,
+                    store_id=camera.store_id,
+                    source=camera.source,
+                    name=camera.name,
+                    ai_services=camera.ai_services,
+                    # Model configuration removed - AI services will handle all model settings
+                    skip_frame=camera.skip_frame,
+                )
+                if not success:
+                    db.rollback()
+                    logger.error(f"Failed to restart camera {camera_id} with new configuration")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Failed to restart camera with new configuration",
+                    )
+                camera.is_active = True
+                logger.info(f"Camera {camera_id} restarted and assigned to store {camera.store_id}")
+            else:
+                # Camera unassigned from store - mark as inactive
+                camera.is_active = False
+                logger.info(f"Camera {camera_id} stopped (unassigned from store)")
 
         # Only commit if restart succeeded (or no restart needed)
         db.commit()
@@ -462,6 +530,33 @@ def start_camera(
     camera.is_active = True
     db.commit()
     
+    # Load zones/lines from database and sync to camera manager (if any exist)
+    zones_from_db = db.query(CountingZoneModel).filter(
+        CountingZoneModel.camera_id == camera_id,
+        CountingZoneModel.org_id == current.organization.id,
+        CountingZoneModel.is_active == True
+    ).all()
+    
+    lines_from_db = db.query(CountingLineModel).filter(
+        CountingLineModel.camera_id == camera_id,
+        CountingLineModel.org_id == current.organization.id,
+        CountingLineModel.is_active == True
+    ).all()
+    
+    if zones_from_db or lines_from_db:
+        zones_config = [
+            {"id": z.id, "name": z.name, "polygon": z.polygon, "is_active": z.is_active}
+            for z in zones_from_db
+        ]
+        lines_config = [
+            {"id": l.id, "name": l.name, "p1": l.p1, "p2": l.p2, "p1_b": l.p1_b, "p2_b": l.p2_b, "is_active": l.is_active}
+            for l in lines_from_db
+        ]
+        camera_worker = camera_manager.get_camera(camera_id)
+        if camera_worker:
+            camera_worker.update_task_config(zones_config, lines_config)
+            logger.info(f"Loaded {len(zones_config)} zones and {len(lines_config)} lines for camera {camera_id}")
+    
     return {"message": "Camera started successfully"}
 
 @router.post("/{camera_id}/stop")
@@ -598,6 +693,51 @@ def set_camera_tasks(
         
         db.commit()
         logger.info(f"Camera {camera_id}: Saved {zones_created} zones and {lines_created} lines to database")
+        
+        # Update camera manager with new task config (sync zones/lines to in-memory camera worker)
+        # Re-query zones/lines from DB to get their IDs
+        zones_from_db = db.query(CountingZoneModel).filter(
+            CountingZoneModel.camera_id == camera_id,
+            CountingZoneModel.org_id == org_id,
+            CountingZoneModel.is_active == True
+        ).all()
+        
+        lines_from_db = db.query(CountingLineModel).filter(
+            CountingLineModel.camera_id == camera_id,
+            CountingLineModel.org_id == org_id,
+            CountingLineModel.is_active == True
+        ).all()
+        
+        zones_config = [
+            {
+                "id": z.id,
+                "name": z.name,
+                "polygon": z.polygon,
+                "is_active": z.is_active
+            }
+            for z in zones_from_db
+        ]
+        
+        lines_config = [
+            {
+                "id": l.id,
+                "name": l.name,
+                "p1": l.p1,
+                "p2": l.p2,
+                "p1_b": l.p1_b,
+                "p2_b": l.p2_b,
+                "is_active": l.is_active
+            }
+            for l in lines_from_db
+        ]
+        
+        # Update camera manager's in-memory task config
+        camera_worker = camera_manager.get_camera(camera_id)
+        if camera_worker:
+            camera_worker.update_task_config(zones_config, lines_config)
+            logger.info(f"Updated in-memory task config for camera {camera_id}")
+        else:
+            logger.warning(f"Camera {camera_id} not found in camera_manager, task config not updated in memory")
         
         return {
             "message": "Tasks saved successfully",

@@ -28,7 +28,8 @@ import {
   ChevronRight,
   ExternalLink,
   Play,
-  FileVideo
+  FileVideo,
+  Store as StoreIcon
 } from 'lucide-react';
 
 export default function BehaviorDashboardPage() {
@@ -253,6 +254,28 @@ export default function BehaviorDashboardPage() {
           </p>
           <button onClick={() => router.push('/cameras')} className="btn-primary btn-md">
             {lang === 'vi' ? 'Đến trang Camera' : 'Go to Cameras'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if stores exist
+  if (hasAccess && storeList.length === 0) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <StoreIcon className="w-16 h-16 text-amber-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-slate-200 mb-2">
+            {lang === 'vi' ? 'Tạo Cửa Hàng Trước' : 'Create a Store First'}
+          </h2>
+          <p className="text-slate-400 mb-6">
+            {lang === 'vi' 
+              ? 'Bạn cần tạo ít nhất một cửa hàng và gán camera để xem bảng điều khiển.'
+              : 'You need to create at least one store and assign cameras to it before viewing dashboards.'}
+          </p>
+          <button onClick={() => router.push('/managers')} className="btn-primary btn-md">
+            {lang === 'vi' ? 'Quản lý Cửa Hàng' : 'Manage Stores'}
           </button>
         </div>
       </div>
@@ -592,7 +615,8 @@ export default function BehaviorDashboardPage() {
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     if (alert.clip_ref) {
-                                      router.push(`/videos?clip=${encodeURIComponent(alert.clip_ref)}`);
+                                      const base = alert.clip_ref.replace(/^.*[\\\/]/, '');
+                                      router.push(`/videos?clip=${encodeURIComponent(base)}`);
                                     }
                                   }}
                                   className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-lg transition-colors"

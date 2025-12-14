@@ -334,8 +334,13 @@ export const cameraApi = {
     return response.data;
   },
 
+  updateCamera: async (id: string, payload: Partial<{ store_id: string; name: string; source: string; ai_services: string[]; is_active: boolean; skip_frame: number }>): Promise<Camera> => {
+    const response = await api.put(`/cameras/${id}`, payload);
+    return response.data;
+  },
+
   createCamera: async (payload: {
-    store_id: string;
+    store_id?: string;
     name: string;
     source: string;
     ai_services: string[];
@@ -400,10 +405,12 @@ export const eventsApi = {
   },
 
   getInOutSummary: async (
-    storeId?: string
+    storeId?: string,
+    timeRange?: string
   ): Promise<any> => {
     const params: any = {};
     if (storeId) params.store_id = storeId;
+    if (timeRange) params.time_range = timeRange;
     const response = await api.get('/events/inout-summary', { params });
     return response.data;
   },
@@ -435,6 +442,17 @@ export const eventsApi = {
     value: number;
   }>> => {
     const response = await api.get('/events/people-counts', { params });
+    return response.data;
+  },
+
+  getRealtimePeopleCounts: async (params?: {
+    store_id?: string;
+  }): Promise<Array<{
+    camera_id: string;
+    store_id: string;
+    people_in_zone: number;
+  }>> => {
+    const response = await api.get('/events/realtime-people-counts', { params });
     return response.data;
   },
 

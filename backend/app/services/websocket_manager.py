@@ -127,7 +127,11 @@ class DetectionWebSocketManager:
             logger.warning(f"Unknown message type from AI service: {message_type}")
     
     async def _handle_detection_message(self, camera_id: str, org_id: str, message: dict, camera_manager) -> None:
-        """Handle detection update messages."""
+        """Handle detection update messages.
+        
+        Note: DB persistence for people_in_zone is disabled to optimize real-time performance.
+        Use HTTP endpoint /api/events/detection-update for persistent storage if needed.
+        """
         camera_worker = camera_manager.get_camera(camera_id)
         if not camera_worker:
             return

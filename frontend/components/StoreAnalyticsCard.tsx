@@ -93,20 +93,32 @@ export default function StoreAnalyticsCard({
             </div>
           </div>
           
-          <div className="grid grid-cols-3 gap-3">
-            <div className="text-center p-2 bg-green-900/20 border border-green-700/30 rounded-lg">
-              <p className="text-lg font-bold text-green-400">{countIn}</p>
-              <p className="text-xs text-green-300/70">{lang === 'vi' ? 'Vào' : 'In'}</p>
+          {cameras.length === 0 ? (
+            <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 text-center">
+              <Camera className="w-8 h-8 text-amber-500 mx-auto mb-2" />
+              <p className="text-sm text-amber-200 font-medium mb-1">
+                {lang === 'vi' ? 'Chưa có camera' : 'No cameras assigned'}
+              </p>
+              <p className="text-xs text-amber-300/80">
+                {lang === 'vi' ? 'Thêm camera trong Quản lý nhóm' : 'Assign cameras in Team Management'}
+              </p>
             </div>
-            <div className="text-center p-2 bg-blue-900/20 border border-blue-700/30 rounded-lg">
-              <p className="text-lg font-bold text-blue-400">{countOut}</p>
-              <p className="text-xs text-blue-300/70">{lang === 'vi' ? 'Ra' : 'Out'}</p>
+          ) : (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="text-center p-2 bg-green-900/20 border border-green-700/30 rounded-lg">
+                <p className="text-lg font-bold text-green-400">{countIn}</p>
+                <p className="text-xs text-green-300/70">{lang === 'vi' ? 'Vào' : 'In'}</p>
+              </div>
+              <div className="text-center p-2 bg-blue-900/20 border border-blue-700/30 rounded-lg">
+                <p className="text-lg font-bold text-blue-400">{countOut}</p>
+                <p className="text-xs text-blue-300/70">{lang === 'vi' ? 'Ra' : 'Out'}</p>
+              </div>
+              <div className="text-center p-2 bg-purple-900/20 border border-purple-700/30 rounded-lg">
+                <p className="text-lg font-bold text-purple-400">{Math.max(0, netInside)}</p>
+                <p className="text-xs text-purple-300/70">{lang === 'vi' ? 'Trong' : 'Inside'}</p>
+              </div>
             </div>
-            <div className="text-center p-2 bg-purple-900/20 border border-purple-700/30 rounded-lg">
-              <p className="text-lg font-bold text-purple-400">{Math.max(0, netInside)}</p>
-              <p className="text-xs text-purple-300/70">{lang === 'vi' ? 'Trong' : 'Inside'}</p>
-            </div>
-          </div>
+          )}
         </div>
       </motion.div>
     );
@@ -224,9 +236,22 @@ export default function StoreAnalyticsCard({
                 </div>
 
                 {cameras.length === 0 ? (
-                  <div className="text-center py-6 text-slate-500">
-                    <Camera className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">{lang === 'vi' ? 'Chưa có dữ liệu camera' : 'No camera data'}</p>
+                  <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-6 text-center">
+                    <Camera className="w-12 h-12 text-amber-500 mx-auto mb-3" />
+                    <p className="text-sm text-amber-200 font-medium mb-2">
+                      {lang === 'vi' ? 'Chưa có camera được gán' : 'No cameras assigned to this store'}
+                    </p>
+                    <p className="text-xs text-amber-300/80 mb-3">
+                      {lang === 'vi' 
+                        ? 'Vào Quản lý nhóm → Quản lý phân công camera để thêm camera cho cửa hàng này' 
+                        : 'Go to Team Management → Manage Camera Assignments to add cameras to this store'}
+                    </p>
+                    <a 
+                      href="/managers" 
+                      className="inline-block text-xs px-3 py-1.5 bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 rounded border border-amber-500/50 transition-colors"
+                    >
+                      {lang === 'vi' ? 'Quản lý nhóm' : 'Team Management'}
+                    </a>
                   </div>
                 ) : (
                   <div className="grid gap-2">

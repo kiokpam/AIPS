@@ -15,14 +15,24 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_membership_optional, CurrentMembership, MembershipRole
+from app.api.deps import get_db, get_current_membership, get_current_membership_flexible, get_current_membership_optional, CurrentMembership, MembershipRole
 from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission
 
 router = APIRouter(prefix="/clips", tags=["clips"])
 logger = logging.getLogger(__name__)
 
-# Clips directory - mounted from docker-compose
-CLIPS_DIR = Path("/app/clips")
+# Clips directory - resolve relative to project root
+# When running in Docker: /app/clips (mapped via docker-compose volume)
+# When running natively: ./clips (relative to project root where backend is started)
+# Try to be smart: if /app/clips exists use it (Docker), otherwise use ./clips (native)
+if Path("/app/clips").exists():
+    CLIPS_DIR = Path("/app/clips")  # Docker path
+else:
+    CLIPS_DIR = Path("./clips").resolve()  # Windows/Linux native path
+
+# Ensure directory exists
+CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"Clips directory: {CLIPS_DIR}")
 
 
 class VideoClip(BaseModel):
@@ -84,7 +94,7 @@ def list_video_clips(
     behavior: Optional[str] = Query(None, description="Filter by behavior type"),
     store_id: Optional[str] = Query(None, description="Filter by store ID"),
     limit: int = Query(50, ge=1, le=200),
-    current: CurrentMembership = Depends(get_current_membership_optional),
+    current: CurrentMembership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
     clips: List[VideoClip] = []
@@ -94,7 +104,7 @@ def list_video_clips(
         return VideoClipsResponse(clips=[], total_count=0)
 
     # Permissions
-    accessible_store_ids = None
+    accessible_store_ids: Optional[List[str]] = None
     if current.role == MembershipRole.member:
         store_permissions = db.query(MemberPermission.store_id).filter(
             MemberPermission.membership_id == current.membership.id,
@@ -150,12 +160,18 @@ def list_video_clips(
                             store_id_clip = store_id_clip or alert.store_id
                             break
 
+            # Reject clips that cannot be attributed to this org (no camera/alert/store match)
+            if not store_id_clip and not matched_alert and (not camera_id or camera_id not in cameras):
+                continue
+
             if behavior and parsed["behavior"] != behavior.lower():
                 continue
             if store_id and store_id_clip != store_id:
                 continue
-            if accessible_store_ids and store_id_clip and store_id_clip not in accessible_store_ids:
-                continue
+            if accessible_store_ids:
+                # Members must have store assignment; if we cannot resolve store_id, block
+                if not store_id_clip or store_id_clip not in accessible_store_ids:
+                    continue
 
             clip_id = hashlib.md5(filename.encode()).hexdigest()[:12]
 
@@ -200,12 +216,17 @@ def options_video_clip():
 def get_video_clip(
     filename: str,
     request: Request,
-    current: Optional[CurrentMembership] = Depends(get_current_membership_optional),
+    current: CurrentMembership = Depends(get_current_membership_flexible),
+    db: Session = Depends(get_db),
     range: Optional[str] = Header(None),
 ):
-    """Download or stream a video clip with range support."""
-    # Note: Authentication is optional for video playback (token in URL)
-    # But we still check if token is provided and valid
+    """Download or stream a video clip with range support.
+    
+    Supports authentication via:
+    - Authorization: Bearer <token> header
+    - ?token=<token> query parameter (for HTML5 video elements)
+    """
+    # Authentication required; restrict access by org and member store permissions
     safe_filename = Path(filename).name
     clip_path = CLIPS_DIR / safe_filename
 
@@ -217,6 +238,55 @@ def get_video_clip(
         file_size = clip_path.stat().st_size
     except OSError:
         raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Resolve camera/store ownership for authorization
+    parsed = parse_clip_filename(safe_filename)
+
+    # Build org-scoped lookups
+    cameras = {c.id: c for c in db.query(CameraModel).filter(
+        CameraModel.org_id == current.organization.id
+    ).all()}
+    stores = {s.id: s for s in db.query(StoreModel).filter(
+        StoreModel.org_id == current.organization.id
+    ).all()}
+    alerts = {a.id: a for a in db.query(AlertModel).filter(
+        AlertModel.org_id == current.organization.id,
+        AlertModel.type == "anomaly"
+    ).all()}
+
+    camera_id = parsed.get("camera_id")
+    store_id_clip = None
+    matched_alert = None
+
+    if camera_id and camera_id in cameras:
+        store_id_clip = cameras[camera_id].store_id
+    else:
+        for alert in alerts.values():
+            if alert.clip_ref and safe_filename in (alert.clip_ref or ""):
+                matched_alert = alert
+                camera_id = camera_id or alert.camera_id
+                store_id_clip = store_id_clip or alert.store_id
+                break
+            elif alert.anomaly_type and parsed["behavior"] and \
+                 alert.anomaly_type.lower() == parsed["behavior"]:
+                if not camera_id or alert.camera_id == camera_id:
+                    matched_alert = alert
+                    camera_id = camera_id or alert.camera_id
+                    store_id_clip = store_id_clip or alert.store_id
+                    break
+
+    # Authorization: clip must belong to this org, and members must have store permission
+    if not store_id_clip and not matched_alert and (not camera_id or camera_id not in cameras):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    if current.role == MembershipRole.member:
+        store_permissions = db.query(MemberPermission.store_id).filter(
+            MemberPermission.membership_id == current.membership.id,
+            MemberPermission.store_id.isnot(None)
+        ).distinct().all()
+        accessible_store_ids = [perm[0] for perm in store_permissions if perm[0]]
+        if not accessible_store_ids or not store_id_clip or store_id_clip not in accessible_store_ids:
+            raise HTTPException(status_code=404, detail="Clip not found")
 
     ext = clip_path.suffix.lower()
     media_types = {

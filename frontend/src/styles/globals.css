@@ -189,7 +189,7 @@ body.dark-blue .input-on-dark { background: #0f172a; color: #e5e7eb; border: 1px
 
 /* Camera preview */
 .camera-preview { position: relative; background: #0b1325; aspect-ratio: 16/9; }
-.video-stream { width: 100%; height: 100%; object-fit: cover; }
+.video-stream { width: 100%; height: 100%; object-fit: contain; }
 .video-placeholder { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted); }
 
 .status-indicator { width: 10px; height: 10px; border-radius: 9999px; box-shadow: 0 0 0 2px rgba(0,0,0,0.25); }
