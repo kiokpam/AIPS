@@ -5,11 +5,16 @@ Routes notifications to appropriate channels (WebSocket, Email, Telegram)
 
 from typing import List, Dict, Any, Optional
 import logging
+import httpx
+import os
 from .websocket_manager import ws_manager
 from .email_service import email_service
-from .telegram_service import telegram_service
+from .telegram_service import TelegramService
 
 logger = logging.getLogger(__name__)
+
+# Backend URL from environment
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 
 class NotificationRouter:
@@ -18,12 +23,10 @@ class NotificationRouter:
     def __init__(
         self,
         ws_manager_instance,
-        email_service_instance,
-        telegram_service_instance
+        email_service_instance
     ):
         self.ws_manager = ws_manager_instance
         self.email_service = email_service_instance
-        self.telegram_service = telegram_service_instance
     
     async def send_notification(
         self,
@@ -34,7 +37,7 @@ class NotificationRouter:
         
         Args:
             notification_request: {
-                "org_id": "string",  # Optional for system emails
+                "org_id": "string",  # Required for Telegram
                 "user_id": "string",  # Optional, for user-specific notifications
                 "alert_id": "string",
                 "type": "alert|system|password_reset",
@@ -49,7 +52,6 @@ class NotificationRouter:
                     "subject": "...",  # For email
                     "html_content": "...",  # For email
                     "text_content": "...",  # For email (optional)
-                    "telegram_chat_id": "..."  # Optional, uses default if not provided
                 }
             }
         
@@ -102,34 +104,72 @@ class NotificationRouter:
                 logger.error(f"Email notification failed: {e}")
                 results["email"] = False
         
-        # Telegram notification
-        if "telegram" in channels:
+        # Telegram notification - fetch settings from Backend API
+        if "telegram" in channels and org_id:
             try:
-                video_path = data.get("video_path")
-                message = data.get("message", "Alert notification")
-                telegram_chat_id = data.get("telegram_chat_id")
-                
-                if video_path:
-                    # Send video (from record.py functionality)
-                    success = self.telegram_service.send_video(
-                        video_path=video_path,
-                        caption=message,
-                        chat_id=telegram_chat_id
+                # Fetch Telegram settings from Backend
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{BACKEND_URL}/api/telegram/settings",
+                        headers={"X-Org-ID": org_id},
+                        timeout=5.0
                     )
-                else:
-                    # Send text message
-                    success = self.telegram_service.send_message(
-                        message=message,
-                        chat_id=telegram_chat_id
-                    )
-                results["telegram"] = success
+                    
+                    if response.status_code == 200:
+                        telegram_settings = response.json()
+                        
+                        # Check if Telegram is enabled for this org
+                        if telegram_settings.get("enabled"):
+                            # Prepare alert message
+                            alert_data = data.get("alert", {})
+                            behavior = alert_data.get("anomaly_type", "unknown")
+                            camera_name = alert_data.get("camera_name", "Unknown")
+                            confidence = alert_data.get("confidence", 0)
+                            timestamp = alert_data.get("timestamp", "")
+                            
+                            # Format message
+                            message = f"""
+🚨 CẢNH BÁO BẤT THƯỜNG
+
+📹 Camera: {camera_name}
+⚠️ Hành vi: {behavior.upper()}
+📊 Độ tin cậy: {confidence:.1%}
+⏰ Thời gian: {timestamp}
+                            """.strip()
+                            
+                            # Get video path
+                            video_path = data.get("video_path")
+                            
+                            # Send to Telegram
+                            success = await TelegramService.send_alert_with_video(
+                                bot_token=telegram_settings["bot_token"],
+                                chat_id=telegram_settings["chat_id"],
+                                message=message,
+                                video_path=video_path
+                            )
+                            results["telegram"] = success
+                        else:
+                            logger.info(f"Telegram notifications disabled for org {org_id}")
+                            results["telegram"] = False
+                    elif response.status_code == 404:
+                        logger.info(f"Telegram not configured for org {org_id}")
+                        results["telegram"] = False
+                    else:
+                        logger.error(f"Failed to fetch Telegram settings: HTTP {response.status_code}")
+                        results["telegram"] = False
+                        
+            except httpx.TimeoutException:
+                logger.error("Timeout fetching Telegram settings from Backend")
+                results["telegram"] = False
             except Exception as e:
                 logger.error(f"Telegram notification failed: {e}")
                 results["telegram"] = False
+        elif "telegram" in channels and not org_id:
+            logger.warning("Telegram notification requires org_id")
+            results["telegram"] = False
         
         return results
 
 
 # Global instance
-notification_router = NotificationRouter(ws_manager, email_service, telegram_service)
-
+notification_router = NotificationRouter(ws_manager, email_service)

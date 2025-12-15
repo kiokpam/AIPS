@@ -1,0 +1,104 @@
+# Docker Compose - Hybrid Mode
+# AI, Frontend, Notification chạy trong Docker
+# Backend chạy local trên host machine
+
+services:
+  # Database - Vẫn cần cho Backend local
+  db:
+    image: timescale/timescaledb-ha:pg15-latest
+    container_name: aips-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=aips
+      - POSTGRES_PASSWORD=aips
+      - POSTGRES_DB=aips
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aips"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Frontend - Chạy trong Docker
+  frontend:
+    build: ./frontend
+    container_name: aips-frontend
+    restart: unless-stopped
+    environment:
+      # Trỏ đến Backend local (host machine)
+      - NEXT_PUBLIC_API_URL=http://host.docker.internal:8000
+      - NEXT_PUBLIC_NOTIFICATION_URL=http://notification:8004
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
+  # Notification Service - Chạy trong Docker
+  notification:
+    build: ./notification-service
+    container_name: aips-notification
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Bangkok
+      # Trỏ đến Backend local (host machine)
+      - BACKEND_URL=http://host.docker.internal:8000
+      - FRONTEND_URL=http://localhost:3000
+      # Email configuration
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-console}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-noreply@aips.local}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-AIPS}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      # Telegram configuration
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_MAX_RETRIES=${TELEGRAM_MAX_RETRIES:-3}
+      - TELEGRAM_RETRY_DELAY=${TELEGRAM_RETRY_DELAY:-5}
+    ports:
+      - "8004:8004"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./notification-service:/app  # Mount code để auto-reload
+      - ./clips:/app/clips
+
+  # AI Service - Chạy trong Docker với GPU
+  ai:
+    build: ./ai
+    container_name: aips-ai
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Bangkok
+      # Trỏ đến Backend local (host machine)
+      - BACKEND_URL=http://host.docker.internal:8000
+      - AI_DEVICE=cuda
+      - CLIPS_DIR=/app/clips
+      - PYTHONUNBUFFERED=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ENABLE_DETECTION_DB_PERSIST=false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./ai:/app
+      - ./clips:/app/clips
+    # GPU Support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  db_data:

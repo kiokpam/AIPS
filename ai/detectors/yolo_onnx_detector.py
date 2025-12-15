@@ -30,6 +30,9 @@ class YOLOONNXDetector:
         self.person_only = person_only
         self.input_size = input_size
         
+        # Pre-allocate padding buffer for reuse (optimization)
+        self._padding_buffer = np.full((input_size, input_size, 3), 114, dtype=np.uint8)
+        
         # Setup ONNX Runtime session with appropriate providers
         providers = []
         if device == 'cuda' or device == 'gpu' or (isinstance(device, str) and device.isdigit()):
@@ -71,24 +74,26 @@ class YOLOONNXDetector:
         scale = min(self.input_size / img_w, self.input_size / img_h)
         new_w, new_h = int(img_w * scale), int(img_h * scale)
         
-        # Resize
-        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        # Resize with faster interpolation (INTER_AREA is faster than INTER_LINEAR for downscaling)
+        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
         
-        # Pad to square
+        # Pad to square - reuse pre-allocated buffer
         pad_w = (self.input_size - new_w) // 2
         pad_h = (self.input_size - new_h) // 2
         
-        padded = np.full((self.input_size, self.input_size, 3), 114, dtype=np.uint8)
+        # Copy buffer to avoid mutation (faster than np.full every time)
+        padded = self._padding_buffer.copy()
         padded[pad_h:pad_h+new_h, pad_w:pad_w+new_w] = resized
         
-        # Convert to float and normalize
-        input_tensor = padded.astype(np.float32) / 255.0
+        # Convert to float and normalize in one operation (faster)
+        input_tensor = np.ascontiguousarray(padded, dtype=np.float32)
+        input_tensor *= (1.0 / 255.0)
         
-        # HWC to CHW
-        input_tensor = input_tensor.transpose(2, 0, 1)
+        # HWC to CHW - use transpose with optimized axis order
+        input_tensor = np.transpose(input_tensor, (2, 0, 1))
         
         # Add batch dimension
-        input_tensor = np.expand_dims(input_tensor, axis=0)
+        input_tensor = input_tensor[np.newaxis, :]
         
         return input_tensor, scale, (pad_w, pad_h)
 
@@ -139,20 +144,23 @@ class YOLOONNXDetector:
         if len(boxes) == 0:
             return []
         
-        # Convert from cx,cy,w,h to x1,y1,x2,y2
-        x1 = boxes[:, 0] - boxes[:, 2] / 2
-        y1 = boxes[:, 1] - boxes[:, 3] / 2
-        x2 = boxes[:, 0] + boxes[:, 2] / 2
-        y2 = boxes[:, 1] + boxes[:, 3] / 2
+        # Convert from cx,cy,w,h to x1,y1,x2,y2 (vectorized)
+        half_w = boxes[:, 2] * 0.5
+        half_h = boxes[:, 3] * 0.5
+        x1 = boxes[:, 0] - half_w
+        y1 = boxes[:, 1] - half_h
+        x2 = boxes[:, 0] + half_w
+        y2 = boxes[:, 1] + half_h
         
-        # Scale back to original image coordinates
+        # Scale back to original image coordinates (vectorized)
         pad_w, pad_h = pad
-        x1 = (x1 - pad_w) / scale
-        y1 = (y1 - pad_h) / scale
-        x2 = (x2 - pad_w) / scale
-        y2 = (y2 - pad_h) / scale
+        scale_inv = 1.0 / scale
+        x1 = (x1 - pad_w) * scale_inv
+        y1 = (y1 - pad_h) * scale_inv
+        x2 = (x2 - pad_w) * scale_inv
+        y2 = (y2 - pad_h) * scale_inv
         
-        # Clip to image bounds
+        # Clip to image bounds (vectorized, combined)
         orig_h, orig_w = orig_shape
         x1 = np.clip(x1, 0, orig_w)
         y1 = np.clip(y1, 0, orig_h)
@@ -160,16 +168,15 @@ class YOLOONNXDetector:
         y2 = np.clip(y2, 0, orig_h)
         
         # Apply NMS
-        boxes_for_nms = np.stack([x1, y1, x2, y2], axis=1)
+        boxes_for_nms = np.column_stack([x1, y1, x2, y2])
         indices = self.nms(boxes_for_nms, confidences, self.iou_thresh)
         
-        # Format output
-        detections = []
-        for idx in indices:
-            detections.append((
-                int(x1[idx]), int(y1[idx]), int(x2[idx]), int(y2[idx]),
-                float(confidences[idx]), int(class_ids[idx])
-            ))
+        # Format output - use list comprehension for speed
+        detections = [
+            (int(x1[idx]), int(y1[idx]), int(x2[idx]), int(y2[idx]),
+             float(confidences[idx]), int(class_ids[idx]))
+            for idx in indices
+        ]
         
         return detections
 

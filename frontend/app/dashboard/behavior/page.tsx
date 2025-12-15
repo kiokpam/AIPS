@@ -9,14 +9,15 @@ import { useData } from '@/src/contexts/DataContext';
 import { authApi, eventsApi, clipsApi, type Alert, type Store, type Camera, buildWsUrl } from '@/lib/api';
 import { wsManager } from '@/lib/websocket-manager';
 import DashboardFilters from '@/components/DashboardFilters';
-import { 
-  Shield, 
-  Activity, 
-  AlertTriangle, 
-  Eye, 
-  Zap, 
-  TrendingUp, 
-  MapPin, 
+import TelegramSettingsModal from '@/components/TelegramSettingsModal';
+import {
+  Shield,
+  Activity,
+  AlertTriangle,
+  Eye,
+  Zap,
+  TrendingUp,
+  MapPin,
   Clock,
   RefreshCw,
   CheckCircle,
@@ -29,7 +30,8 @@ import {
   ExternalLink,
   Play,
   FileVideo,
-  Store as StoreIcon
+  Store as StoreIcon,
+  Settings
 } from 'lucide-react';
 
 export default function BehaviorDashboardPage() {
@@ -46,31 +48,32 @@ export default function BehaviorDashboardPage() {
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
   const [alertTypeFilter, setAlertTypeFilter] = useState<string>('all');
+  const [showTelegramSettings, setShowTelegramSettings] = useState(false);
   const fetchDataLoadingRef = useRef(false);
 
   // Filter alerts based on selections
   const filteredAlerts = useMemo(() => {
     let result = alerts;
-    
+
     if (selectedStore !== 'all') {
       result = result.filter(a => a.store_id === selectedStore);
     }
-    
+
     if (selectedCameras.length > 0) {
       result = result.filter(a => a.camera_id && selectedCameras.includes(a.camera_id));
     }
-    
+
     if (alertTypeFilter !== 'all') {
       result = result.filter(a => a.anomaly_type?.toLowerCase() === alertTypeFilter);
     }
-    
+
     return result;
   }, [alerts, selectedStore, selectedCameras, alertTypeFilter]);
 
   // Calculate stats per store
   const storeStats = useMemo(() => {
     const stats: Record<string, { total: number; unread: number; shoplifting: number; violence: number }> = {};
-    
+
     storeList.forEach(store => {
       const storeAlerts = alerts.filter(a => a.store_id === store.id);
       stats[store.id] = {
@@ -80,7 +83,7 @@ export default function BehaviorDashboardPage() {
         violence: storeAlerts.filter(a => a.anomaly_type?.toLowerCase().includes('violence')).length,
       };
     });
-    
+
     return stats;
   }, [alerts, storeList]);
 
@@ -101,13 +104,13 @@ export default function BehaviorDashboardPage() {
       return;
     }
     fetchDataLoadingRef.current = true;
-    
+
     try {
       setError(null);
-      
+
       // Only fetch alerts - stores and cameras come from DataContext
       const alertsData = await eventsApi.getAlerts({ limit: 100 });
-      
+
       setAlerts(alertsData.alerts);
       setUnreadCount(alertsData.unread_count);
     } catch (err: any) {
@@ -204,7 +207,7 @@ export default function BehaviorDashboardPage() {
     const handleAlertMessage = (data: any) => {
       if (data.type === 'alert_update' && data.alert) {
         const newAlert = data.alert as Alert;
-        
+
         // Add new alert to the list (prepend to show newest first)
         setAlerts(prev => {
           // Check if alert already exists (avoid duplicates)
@@ -213,7 +216,7 @@ export default function BehaviorDashboardPage() {
           }
           return [newAlert, ...prev];
         });
-        
+
         // Update unread count
         if (!newAlert.acknowledged) {
           setUnreadCount(prev => prev + 1);
@@ -270,7 +273,7 @@ export default function BehaviorDashboardPage() {
             {lang === 'vi' ? 'Tạo Cửa Hàng Trước' : 'Create a Store First'}
           </h2>
           <p className="text-slate-400 mb-6">
-            {lang === 'vi' 
+            {lang === 'vi'
               ? 'Bạn cần tạo ít nhất một cửa hàng và gán camera để xem bảng điều khiển.'
               : 'You need to create at least one store and assign cameras to it before viewing dashboards.'}
           </p>
@@ -354,6 +357,14 @@ export default function BehaviorDashboardPage() {
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
 
+            <button
+              onClick={() => setShowTelegramSettings(true)}
+              className="p-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+              title={lang === 'vi' ? 'Cài đặt Telegram' : 'Telegram Settings'}
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+
             <div className="flex items-center gap-2 px-3 py-2 bg-green-900/20 border border-green-700/30 rounded-lg">
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
               <span className="text-green-300 text-xs font-medium">Live</span>
@@ -379,32 +390,29 @@ export default function BehaviorDashboardPage() {
             <div className="flex bg-slate-800/80 border border-slate-700 rounded-lg p-1">
               <button
                 onClick={() => setAlertTypeFilter('all')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                  alertTypeFilter === 'all'
-                    ? 'bg-slate-700 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${alertTypeFilter === 'all'
+                  ? 'bg-slate-700 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+                  }`}
               >
                 {lang === 'vi' ? 'Tất cả' : 'All'}
               </button>
               <button
                 onClick={() => setAlertTypeFilter('shoplifting')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
-                  alertTypeFilter === 'shoplifting'
-                    ? 'bg-red-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${alertTypeFilter === 'shoplifting'
+                  ? 'bg-red-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+                  }`}
               >
                 <ShoppingBag className="w-3 h-3" />
                 Shoplifting
               </button>
               <button
                 onClick={() => setAlertTypeFilter('violence')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
-                  alertTypeFilter === 'violence'
-                    ? 'bg-purple-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${alertTypeFilter === 'violence'
+                  ? 'bg-purple-600 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+                  }`}
               >
                 <Swords className="w-3 h-3" />
                 Violence
@@ -538,7 +546,7 @@ export default function BehaviorDashboardPage() {
                   {lang === 'vi' ? 'Không có cảnh báo' : 'No alerts found'}
                 </p>
                 <p className="text-sm mt-1">
-                  {lang === 'vi' 
+                  {lang === 'vi'
                     ? 'Cảnh báo sẽ xuất hiện khi AI phát hiện shoplifting hoặc violence'
                     : 'Alerts appear when AI detects shoplifting or violence'}
                 </p>
@@ -555,15 +563,14 @@ export default function BehaviorDashboardPage() {
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: 20 }}
                         transition={{ delay: idx * 0.02 }}
-                        className={`p-4 hover:bg-slate-700/20 transition-colors ${
-                          alert.acknowledged ? 'opacity-50' : ''
-                        }`}
+                        className={`p-4 hover:bg-slate-700/20 transition-colors ${alert.acknowledged ? 'opacity-50' : ''
+                          }`}
                       >
                         <div className="flex items-start gap-4">
                           <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${styles.bg} border`}>
                             <span className={styles.text}>{styles.icon}</span>
                           </div>
-                          
+
                           <div className="flex-1 min-w-0">
                             <div className="flex items-start justify-between gap-2 mb-1">
                               <div className="flex items-center gap-2 flex-wrap">
@@ -589,11 +596,11 @@ export default function BehaviorDashboardPage() {
                                 )}
                               </div>
                             </div>
-                            
+
                             <p className="text-sm text-slate-200 font-medium mb-2 line-clamp-2">
                               {alert.message}
                             </p>
-                            
+
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3 text-xs text-slate-500">
                                 {alert.store_name && (
@@ -609,7 +616,7 @@ export default function BehaviorDashboardPage() {
                                   </span>
                                 )}
                               </div>
-                              
+
                               {alert.clip_ref && (
                                 <button
                                   onClick={(e) => {
@@ -650,7 +657,7 @@ export default function BehaviorDashboardPage() {
               <MapPin className="w-4 h-4 text-orange-400" />
               {lang === 'vi' ? 'Theo cửa hàng' : 'By Store'}
             </h3>
-            
+
             <div className="space-y-2">
               {storeList.length === 0 ? (
                 <p className="text-center text-slate-500 py-4 text-sm">
@@ -660,13 +667,12 @@ export default function BehaviorDashboardPage() {
                 storeList.map(store => {
                   const stats = storeStats[store.id] || { total: 0, unread: 0, shoplifting: 0, violence: 0 };
                   return (
-                    <div 
+                    <div
                       key={store.id}
-                      className={`p-3 rounded-lg border transition-colors cursor-pointer ${
-                        selectedStore === store.id 
-                          ? 'bg-blue-900/30 border-blue-700/50'
-                          : 'bg-slate-900/50 border-slate-700/50 hover:border-slate-600/50'
-                      }`}
+                      className={`p-3 rounded-lg border transition-colors cursor-pointer ${selectedStore === store.id
+                        ? 'bg-blue-900/30 border-blue-700/50'
+                        : 'bg-slate-900/50 border-slate-700/50 hover:border-slate-600/50'
+                        }`}
                       onClick={() => setSelectedStore(selectedStore === store.id ? 'all' : store.id)}
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -703,7 +709,7 @@ export default function BehaviorDashboardPage() {
               <Zap className="w-4 h-4 text-yellow-400" />
               {lang === 'vi' ? 'Truy cập nhanh' : 'Quick Access'}
             </h3>
-            
+
             <div className="space-y-2">
               <button
                 onClick={() => router.push('/videos')}
@@ -715,7 +721,7 @@ export default function BehaviorDashboardPage() {
                 </div>
                 <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-slate-300 transition-colors" />
               </button>
-              
+
               <button
                 onClick={() => router.push('/cameras')}
                 className="w-full p-3 bg-slate-900/50 border border-slate-700/50 rounded-lg hover:border-slate-600/50 transition-colors text-left flex items-center justify-between group"
@@ -735,7 +741,7 @@ export default function BehaviorDashboardPage() {
               <Activity className="w-4 h-4 text-green-400" />
               {lang === 'vi' ? 'Trạng thái hệ thống' : 'System Status'}
             </h3>
-            
+
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-slate-500">{lang === 'vi' ? 'Camera hoạt động' : 'Active Cameras'}</span>
@@ -753,6 +759,12 @@ export default function BehaviorDashboardPage() {
           </div>
         </motion.div>
       </div>
+
+      {/* Telegram Settings Modal */}
+      <TelegramSettingsModal
+        isOpen={showTelegramSettings}
+        onClose={() => setShowTelegramSettings(false)}
+      />
     </div>
   );
 }

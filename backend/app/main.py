@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app.api.routes import router as api_router
+from app.api import telegram
 from app.config.settings import get_settings
 from app.models import Base
 from app.db.session import engine
@@ -45,6 +46,7 @@ def health() -> HealthResponse:
 
 
 app.include_router(api_router, prefix="/api")
+app.include_router(telegram.router)  # Telegram router already has /api/telegram prefix
 
 
 @app.on_event("startup")
