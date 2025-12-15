@@ -29,7 +29,9 @@
     "framer-motion": "^10.16.16",
     "date-fns": "^2.30.0",
     "react-datepicker": "^4.25.0",
-    "@types/react-datepicker": "^4.19.4"
+    "@types/react-datepicker": "^4.19.4",
+    "@headlessui/react": "^1.7.17",
+    "@heroicons/react": "^2.1.1"
   },
   "devDependencies": {
     "eslint": "^8.56.0",

@@ -225,6 +225,10 @@ class CameraProcessor:
         self.frame_times = deque(maxlen=30)  # Track last 30 frame timestamps for FPS calculation
         self.last_frame_time = time.time()
         
+        # Frame preprocessing cache (optimization)
+        self._last_frame_shape = None
+        self._preprocessing_params = None  # Cache scale and pad values
+        
         # Model inference timing metrics
         self.model_timings = {
             'yolo': deque(maxlen=100),  # Last 100 inference times

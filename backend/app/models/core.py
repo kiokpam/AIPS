@@ -193,3 +193,16 @@ class PasswordResetToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class TelegramSettings(Base):
+    """Telegram notification settings per organization"""
+    __tablename__ = "telegram_settings"
+
+    org_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), 
+        primary_key=True
+    )
+    bot_token: Mapped[str] = mapped_column(String, nullable=False)
+    chat_id: Mapped[str] = mapped_column(String, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

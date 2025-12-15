@@ -12,7 +12,7 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aips"]
+      test: [ "CMD-SHELL", "pg_isready -U aips" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -23,6 +23,7 @@ services:
     restart: unless-stopped
     environment:
       - NEXT_PUBLIC_API_URL=http://host.docker.internal:8000
+      - NEXT_PUBLIC_BACKEND_URL=http://host.docker.internal:8000
       - NEXT_PUBLIC_NOTIFICATION_URL=http://notification:8004
     ports:
       - "3000:3000"
@@ -59,7 +60,7 @@ services:
     ports:
       - "8004:8004"
     volumes:
-      - ./clips:/app/clips  # Access to video clips for Telegram
+      - ./clips:/app/clips # Access to video clips for Telegram
 
   # AI Service - GPU Accelerated
   # Requires: NVIDIA GPU + nvidia-docker runtime
@@ -70,8 +71,8 @@ services:
     environment:
       - TZ=Asia/Bangkok
       - BACKEND_URL=http://host.docker.internal:8000
-      - AI_DEVICE=cuda  # GPU acceleration enabled
-      - CLIPS_DIR=/app/clips  # Directory for saving video clips
+      - AI_DEVICE=cuda # GPU acceleration enabled
+      - CLIPS_DIR=/app/clips # Directory for saving video clips
       - PYTHONUNBUFFERED=1
       - NVIDIA_VISIBLE_DEVICES=all
       # Performance: Disable per-frame DB writes for real-time bounding boxes
@@ -80,7 +81,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./ai:/app
-      - ./clips:/app/clips  # Saved video clips for anomalies
+      - ./clips:/app/clips # Saved video clips for anomalies
     # GPU Support - requires nvidia-docker
     deploy:
       resources:
@@ -88,7 +89,7 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
 
 volumes:
   db_data:

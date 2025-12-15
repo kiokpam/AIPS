@@ -56,7 +56,12 @@ def get_camera_frame_for_ai(
     
     if format == "base64":
         # Encode frame as base64 JSON
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        # Use optimized JPEG parameters for faster encoding
+        encode_params = [
+            cv2.IMWRITE_JPEG_QUALITY, 75,  # Lower quality for speed (was 85)
+            cv2.IMWRITE_JPEG_OPTIMIZE, 0,  # Disable optimization for speed
+        ]
+        ret, buffer = cv2.imencode('.jpg', frame, encode_params)
         if not ret:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -71,8 +76,12 @@ def get_camera_frame_for_ai(
             "height": frame.shape[0]
         }
     else:
-        # Return JPEG binary
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        # Return JPEG binary with optimized encoding
+        encode_params = [
+            cv2.IMWRITE_JPEG_QUALITY, 75,  # Lower quality for speed (was 85)
+            cv2.IMWRITE_JPEG_OPTIMIZE, 0,  # Disable optimization for speed
+        ]
+        ret, buffer = cv2.imencode('.jpg', frame, encode_params)
         if not ret:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
