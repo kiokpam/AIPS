@@ -63,6 +63,7 @@ export default function InOutDashboardPage() {
   const { user, isAuthenticated } = useAuth();
   const { stores: storeList, cameras: cameraList } = useData();
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingData, setIsLoadingData] = useState(false); // Track active data fetches
   const [hasAccess, setHasAccess] = useState<boolean | null>(null);
   const [stores, setStores] = useState<StoreStats[]>([]);
   const [selectedStore, setSelectedStore] = useState<string>('all');
@@ -77,6 +78,8 @@ export default function InOutDashboardPage() {
   };
   const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month'>('today');
   const [granularity, setGranularity] = useState<'auto' | 'minute' | 'hour'>('auto');
+  // Reset clamping when the day or time range changes
+  const [dayKey, setDayKey] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -264,12 +267,16 @@ export default function InOutDashboardPage() {
     };
   }, [timeSeriesData, localTimeZone]);
 
-  // Animate numbers - only animate if values actually changed
+  // Animate numbers with non-decreasing clamp at the display level
   useEffect(() => {
-    // If values are 0 and we have previous values, keep showing previous values (no animation)
-    if (totalIn === 0 && totalOut === 0 && totalNet === 0 && 
-        (lastValuesRef.current.totalIn > 0 || lastValuesRef.current.totalOut > 0)) {
-      // Keep previous values during loading - don't update animated values
+    // Clamp the target values to never decrease compared to last displayed values
+    const targetIn = Math.max(totalIn, lastValuesRef.current.totalIn);
+    const targetOut = Math.max(totalOut, lastValuesRef.current.totalOut);
+    const targetNet = Math.max(totalNet, lastValuesRef.current.totalNet);
+
+    // If all targets are zero and we had previous values, keep previous values (avoid flicker)
+    if (targetIn === 0 && targetOut === 0 && targetNet === 0 &&
+        (lastValuesRef.current.totalIn > 0 || lastValuesRef.current.totalOut > 0 || lastValuesRef.current.totalNet > 0)) {
       setAnimatedValues({
         totalIn: lastValuesRef.current.totalIn,
         totalOut: lastValuesRef.current.totalOut,
@@ -279,16 +286,16 @@ export default function InOutDashboardPage() {
     }
 
     // Only animate if values actually changed
-    if (totalIn === lastValuesRef.current.totalIn && 
-        totalOut === lastValuesRef.current.totalOut && 
-        totalNet === lastValuesRef.current.totalNet) {
+    if (targetIn === lastValuesRef.current.totalIn &&
+        targetOut === lastValuesRef.current.totalOut &&
+        targetNet === lastValuesRef.current.totalNet) {
       return;
     }
 
     const startIn = lastValuesRef.current.totalIn;
     const startOut = lastValuesRef.current.totalOut;
     const startNet = lastValuesRef.current.totalNet;
-    
+
     const duration = 1000;
     const steps = 30;
     const stepTime = duration / steps;
@@ -297,24 +304,30 @@ export default function InOutDashboardPage() {
     const animate = () => {
       currentStep++;
       const progress = currentStep / steps;
-      const easeOut = 1 - Math.pow(1 - progress, 3); // Ease out cubic
+      const easeOut = 1 - Math.pow(1 - progress, 3);
 
       setAnimatedValues({
-        totalIn: Math.floor(startIn + (totalIn - startIn) * easeOut),
-        totalOut: Math.floor(startOut + (totalOut - startOut) * easeOut),
-        totalNet: Math.floor(startNet + (totalNet - startNet) * easeOut),
+        totalIn: Math.floor(startIn + (targetIn - startIn) * easeOut),
+        totalOut: Math.floor(startOut + (targetOut - startOut) * easeOut),
+        totalNet: Math.floor(startNet + (targetNet - startNet) * easeOut),
       });
 
       if (currentStep < steps) {
         setTimeout(animate, stepTime);
       } else {
-        setAnimatedValues({ totalIn, totalOut, totalNet });
-        lastValuesRef.current = { totalIn, totalOut, totalNet };
+        setAnimatedValues({ totalIn: targetIn, totalOut: targetOut, totalNet: targetNet });
+        lastValuesRef.current = { totalIn: targetIn, totalOut: targetOut, totalNet: targetNet };
       }
     };
 
     animate();
   }, [totalIn, totalOut, totalNet]);
+
+  // Reset displayed totals when the day, time range, or store changes (new baseline)
+  useEffect(() => {
+    lastValuesRef.current = { totalIn: 0, totalOut: 0, totalNet: 0 };
+    setAnimatedValues({ totalIn: 0, totalOut: 0, totalNet: 0 });
+  }, [dayKey, timeRange, selectedStore]);
 
   // Fetch time-series data for charts - returns data instead of setting state
   const fetchTimeSeriesData = useCallback(async () => {
@@ -442,22 +455,27 @@ export default function InOutDashboardPage() {
       return;
     }
     fetchInOutDataLoadingRef.current = true;
+    setIsLoadingData(true); // Show skeleton loaders while fetching
     
     try {
       setError(null);
       
-      // Use stores and cameras from DataContext instead of fetching
-      const storesData = storeList;
-      const camerasData = cameraList;
+      // Use refs to always read the latest stores/cameras without retriggering this callback
+      const storesData = storeListRef.current || [];
+      const camerasData = cameraListRef.current || [];
+
+      // If the currently selected store no longer exists (e.g., after data loads), fall back to 'all'
+      if (selectedStore !== 'all' && !storesData.some(s => s.id === selectedStore)) {
+        setSelectedStore('all');
+      }
       
-      // Fetch summary and time-series data IN PARALLEL (not sequentially)
-      const [inoutSummary, realtimePeopleCounts, timeSeriesResult] = await Promise.all([
+      // Fetch summary and realtime counts first so UI updates fast; time-series loads afterward
+      const [inoutSummary, realtimePeopleCounts] = await Promise.all([
         eventsApi.getInOutSummary(
           selectedStore !== 'all' ? selectedStore : undefined,
           timeRange // Pass current time range filter
         ),
         eventsApi.getRealtimePeopleCounts(selectedStore !== 'all' ? { store_id: selectedStore } : undefined),
-        fetchTimeSeriesData(), // Run in parallel with summary data
       ]);
       
       // Build store stats from API data
@@ -496,12 +514,23 @@ export default function InOutDashboardPage() {
       }) => {
         const camera = camerasData.find(c => c.id === cam.camera_id);
         const store = storesData.find(s => s.id === cam.store_id);
-        
-        // Skip cameras without valid store_id or store not found
-        if (!cam.store_id || !store || !storeStatsMap[cam.store_id]) {
+
+        // If store entry is missing (e.g., DataContext not loaded yet), create it on the fly
+        if (!cam.store_id) {
           return;
         }
-        
+        if (!storeStatsMap[cam.store_id]) {
+          storeStatsMap[cam.store_id] = {
+            storeId: cam.store_id,
+            storeName: store?.name || 'Unknown Store',
+            countIn: 0,
+            countOut: 0,
+            netInside: 0,
+            cameras: [],
+            lastUpdate: new Date(),
+          };
+        }
+
         storeStatsMap[cam.store_id].countIn += cam.count_in;
         storeStatsMap[cam.store_id].countOut += cam.count_out;
         // Use real-time people counts for netInside (current people in zones)
@@ -562,13 +591,39 @@ export default function InOutDashboardPage() {
           })
           .filter(store => store.cameras.length > 0);
       }
-      setStores(newStores);
+      // Compute current day key (YYYY-MM-DD) for 'today' range
+      const currentDay = new Date().toISOString().slice(0, 10);
+      const shouldClamp = timeRange === 'today' && currentDay === dayKey;
+      // Apply non-decreasing clamp only within the same day for 'today'
+      setStores((prev) => {
+        if (!prev || prev.length === 0 || !shouldClamp) return newStores;
+        const prevById = new Map(prev.map(s => [s.storeId, s]));
+        return newStores.map(ns => {
+          const ps = prevById.get(ns.storeId);
+          if (!ps) return ns;
+          return {
+            ...ns,
+            countIn: ns.countIn < ps.countIn ? ps.countIn : ns.countIn,
+            countOut: ns.countOut < ps.countOut ? ps.countOut : ns.countOut,
+          };
+        });
+      });
+      // Update dayKey when crossing to a new day or range change
+      setDayKey(currentDay);
       setLastRefresh(new Date());
-      
-      // Set time-series data from result
-      if (timeSeriesResult) {
-        setTimeSeriesData(timeSeriesResult);
-      }
+
+      // Kick off time-series fetch in the background; don't block UI updates
+      // IMPORTANT: Don't call setStores again, only update timeSeriesData
+      fetchTimeSeriesData()
+        .then((timeSeriesResult) => {
+          if (timeSeriesResult) {
+            setTimeSeriesData(timeSeriesResult);
+            // Do NOT call setStores here - it would wipe out the data we just fetched
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to fetch time-series data (async):', err);
+        });
       
       // Update last values ref immediately to prevent showing 0 during refresh
       const newTotalIn = newStores.reduce((sum, s) => sum + s.countIn, 0);
@@ -592,8 +647,11 @@ export default function InOutDashboardPage() {
       setError(err.message || 'Failed to load data');
     } finally {
       fetchInOutDataLoadingRef.current = false;
+      setIsLoadingData(false);
     }
-  }, [selectedStore, selectedCameras, storeList, cameraList, fetchTimeSeriesData, parseTimestamp, animatedValues.totalIn, animatedValues.totalOut, animatedValues.totalNet]);
+  }, [selectedStore, selectedCameras, fetchTimeSeriesData, parseTimestamp]);
+  // NOTE: Removed storeList, cameraList, and animatedValues from dependencies
+  // Using refs instead to prevent infinite fetch loops when data context updates
 
   // Manual refresh
   const handleRefresh = async () => {
@@ -616,11 +674,17 @@ export default function InOutDashboardPage() {
 
       if (user.active_membership.role === 'manager') {
         setHasAccess(true);
-        // Fetch data immediately without waiting
+        // Fetch data and wait for it to complete before clearing loading state
         dataFetchPromise = fetchInOutData();
-        interval = setInterval(fetchInOutData, 15000);
-        setIsLoading(false);
-        // Don't await - let it load in background
+        // Wait for initial data load, then set up interval
+        dataFetchPromise.then(() => {
+          setIsLoading(false);
+          interval = setInterval(fetchInOutData, 15000);
+        }).catch(() => {
+          // Even on error, stop loading after a timeout
+          setIsLoading(false);
+          interval = setInterval(fetchInOutData, 15000);
+        });
         return;
       }
 
@@ -657,12 +721,34 @@ export default function InOutDashboardPage() {
     };
   }, [isAuthenticated, user, fetchInOutData]);
 
-  // Refetch when store selection changes
+  // Trigger initial fetch when access is confirmed and data context finishes loading
+  const initialFetchDoneRef = useRef(false);
   useEffect(() => {
-    if (hasAccess && selectedStore) {
+    if (!hasAccess || initialFetchDoneRef.current) return;
+    // Only fetch once when context stores/cameras have loaded
+    if (storeListRef.current?.length > 0 || cameraListRef.current?.length > 0) {
+      initialFetchDoneRef.current = true;
       fetchInOutData();
     }
+  }, [hasAccess, fetchInOutData]);
+
+  // Refetch when store or camera selection changes (debounced to prevent double-fetch)
+  useEffect(() => {
+    if (!hasAccess || !selectedStore) return;
+    
+    // Debounce fetch to avoid double-calls when both selectedStore and selectedCameras change rapidly
+    const timeoutId = setTimeout(() => {
+      fetchInOutData();
+    }, 50); // 50ms debounce - quick enough to feel instant but prevents double-fetch
+    
+    return () => clearTimeout(timeoutId);
   }, [selectedStore, selectedCameras, hasAccess, fetchInOutData]);
+
+  // Reset clamping when timeRange changes (different aggregation window)
+  useEffect(() => {
+    // On range change, update dayKey so next fetch can clamp appropriately
+    setDayKey(new Date().toISOString().slice(0, 10));
+  }, [timeRange]);
 
   // WebSocket connection for real-time in/out updates
   useEffect(() => {
@@ -690,12 +776,9 @@ export default function InOutDashboardPage() {
             }
             storeFound = true;
 
+            // Update the specific camera's counts
             const updatedStore: StoreStats = {
               ...store,
-              countIn: data.count_in,
-              countOut: data.count_out,
-              // Keep current netInside temporarily, will be updated with accurate value below
-              netInside: store.netInside,
               lastUpdate: parseTimestamp(data.ts),
               cameras: store.cameras.map((cam) =>
                 cam.cameraId === data.camera_id
@@ -709,6 +792,7 @@ export default function InOutDashboardPage() {
               ),
             };
 
+            // Add camera if it doesn't exist
             const cameraExists = updatedStore.cameras.some((cam) => cam.cameraId === data.camera_id);
             if (!cameraExists) {
               const cameraMeta = cameraListRef.current.find((cam) => cam.id === data.camera_id);
@@ -723,6 +807,12 @@ export default function InOutDashboardPage() {
                 },
               ];
             }
+
+            // Aggregate counts from all cameras in the store and clamp to non-decreasing
+            const aggIn = updatedStore.cameras.reduce((sum, cam) => sum + cam.countIn, 0);
+            const aggOut = updatedStore.cameras.reduce((sum, cam) => sum + cam.countOut, 0);
+            updatedStore.countIn = aggIn < store.countIn ? store.countIn : aggIn;
+            updatedStore.countOut = aggOut < store.countOut ? store.countOut : aggOut;
 
             return updatedStore;
           });
@@ -745,7 +835,7 @@ export default function InOutDashboardPage() {
                     'Unknown Camera',
                   countIn: data.count_in,
                   countOut: data.count_out,
-                      lastUpdated: parseTimestamp(data.ts),
+                  lastUpdated: parseTimestamp(data.ts),
                 },
               ],
             });
@@ -985,66 +1075,80 @@ export default function InOutDashboardPage() {
 
        {/* Summary Cards */}
        <div className="grid grid-cols-2 gap-4">
-         <motion.div
-           initial={{ opacity: 0, y: 20 }}
-           animate={{ opacity: 1, y: 0 }}
-           className="bg-gradient-to-br from-green-500/20 to-emerald-600/10 border border-green-500/30 rounded-xl p-5 relative overflow-hidden"
-         >
-           <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/5 rounded-full -mr-16 -mt-16" />
-           <div className="flex items-center justify-between relative z-10">
-             <div className="flex-1">
-               <p className="text-green-300/80 text-xs font-medium uppercase tracking-wide mb-1 flex items-center gap-2">
-                 {lang === 'vi' ? 'Đếm vào' : 'Count In'}
-                 {inTrend !== null && (
-                  <span className={`flex items-center gap-1 text-xs ${inTrend >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {inTrend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                    {Math.abs(inTrend).toFixed(1)}%
-                  </span>
-                )}
-               </p>
-               <p className="text-3xl font-bold text-green-400 transition-all duration-300">
-                 {animatedValues.totalIn.toLocaleString()}
-               </p>
-               <p className="text-xs text-slate-500 mt-1">{getTimeRangeLabel()}</p>
+         {isLoadingData && stores.length === 0 ? (
+           <>
+             <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-5 animate-pulse">
+               <div className="h-4 bg-slate-700 rounded w-1/3 mb-3"></div>
+               <div className="h-8 bg-slate-700 rounded w-1/2 mb-2"></div>
+               <div className="h-3 bg-slate-700 rounded w-1/4"></div>
              </div>
-             <div className="w-12 h-12 bg-green-500/20 rounded-xl flex items-center justify-center">
-               <ArrowUpRight className="w-6 h-6 text-green-400" />
+             <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-5 animate-pulse">
+               <div className="h-4 bg-slate-700 rounded w-1/3 mb-3"></div>
+               <div className="h-8 bg-slate-700 rounded w-1/2 mb-2"></div>
+               <div className="h-3 bg-slate-700 rounded w-1/4"></div>
              </div>
-           </div>
-         </motion.div>
+           </>
+         ) : (
+           <>
+             <motion.div
+               initial={{ opacity: 0, y: 20 }}
+               animate={{ opacity: 1, y: 0 }}
+               className="bg-gradient-to-br from-green-500/20 to-emerald-600/10 border border-green-500/30 rounded-xl p-5 relative overflow-hidden"
+             >
+               <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/5 rounded-full -mr-16 -mt-16" />
+               <div className="flex items-center justify-between relative z-10">
+                 <div className="flex-1">
+                   <p className="text-green-300/80 text-xs font-medium uppercase tracking-wide mb-1 flex items-center gap-2">
+                     {lang === 'vi' ? 'Đếm vào' : 'Count In'}
+                     {inTrend !== null && (
+                      <span className={`flex items-center gap-1 text-xs ${inTrend >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {inTrend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                        {Math.abs(inTrend).toFixed(1)}%
+                      </span>
+                    )}
+                   </p>
+                   <p className="text-3xl font-bold text-green-400 transition-all duration-300">
+                     {animatedValues.totalIn.toLocaleString()}
+                   </p>
+                   <p className="text-xs text-slate-500 mt-1">{getTimeRangeLabel()}</p>
+                 </div>
+                 <div className="w-12 h-12 bg-green-500/20 rounded-xl flex items-center justify-center">
+                   <ArrowUpRight className="w-6 h-6 text-green-400" />
+                 </div>
+               </div>
+             </motion.div>
 
-         <motion.div
-           initial={{ opacity: 0, y: 20 }}
-           animate={{ opacity: 1, y: 0 }}
-           transition={{ delay: 0.05 }}
-           className="bg-gradient-to-br from-blue-500/20 to-cyan-600/10 border border-blue-500/30 rounded-xl p-5 relative overflow-hidden"
-         >
-           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full -mr-16 -mt-16" />
-           <div className="flex items-center justify-between relative z-10">
-             <div className="flex-1">
-               <p className="text-blue-300/80 text-xs font-medium uppercase tracking-wide mb-1 flex items-center gap-2">
-                 {lang === 'vi' ? 'Đếm ra' : 'Count Out'}
-                 {outTrend !== null && (
-                  <span className={`flex items-center gap-1 text-xs ${outTrend >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {outTrend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                    {Math.abs(outTrend).toFixed(1)}%
-                  </span>
-                )}
-               </p>
-               <p className="text-3xl font-bold text-blue-400 transition-all duration-300">
-                 {animatedValues.totalOut.toLocaleString()}
-               </p>
-               <p className="text-xs text-slate-500 mt-1">{getTimeRangeLabel()}</p>
-             </div>
-             <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center">
-               <ArrowDownRight className="w-6 h-6 text-blue-400" />
-             </div>
-           </div>
-         </motion.div>
-
+             <motion.div
+               initial={{ opacity: 0, y: 20 }}
+               animate={{ opacity: 1, y: 0 }}
+               transition={{ delay: 0.05 }}
+               className="bg-gradient-to-br from-blue-500/20 to-cyan-600/10 border border-blue-500/30 rounded-xl p-5 relative overflow-hidden"
+             >
+               <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full -mr-16 -mt-16" />
+               <div className="flex items-center justify-between relative z-10">
+                 <div className="flex-1">
+                   <p className="text-blue-300/80 text-xs font-medium uppercase tracking-wide mb-1 flex items-center gap-2">
+                     {lang === 'vi' ? 'Đếm ra' : 'Count Out'}
+                     {outTrend !== null && (
+                      <span className={`flex items-center gap-1 text-xs ${outTrend >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {outTrend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                        {Math.abs(outTrend).toFixed(1)}%
+                      </span>
+                    )}
+                   </p>
+                   <p className="text-3xl font-bold text-blue-400 transition-all duration-300">
+                     {animatedValues.totalOut.toLocaleString()}
+                   </p>
+                   <p className="text-xs text-slate-500 mt-1">{getTimeRangeLabel()}</p>
+                 </div>
+                 <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center">
+                   <ArrowDownRight className="w-6 h-6 text-blue-400" />
+                 </div>
+               </div>
+             </motion.div>
+           </>
+         )}
        </div>
-
-       {/* Quick Insights */}
        {hasRealData && (
          <motion.div
            initial={{ opacity: 0, y: 20 }}
@@ -1292,16 +1396,30 @@ export default function InOutDashboardPage() {
 
         {filteredStores.length === 0 ? (
           <div className="text-center py-16 bg-slate-800/50 rounded-xl border border-slate-700">
-            <StoreIcon className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-slate-300 mb-2">
-              {lang === 'vi' ? 'Chưa có cửa hàng' : 'No Stores Found'}
-            </h3>
-            <p className="text-slate-500 mb-4">
-              {lang === 'vi' ? 'Tạo cửa hàng và thêm camera để bắt đầu' : 'Create stores and add cameras to get started'}
-            </p>
-            <button onClick={() => router.push('/cameras')} className="btn-primary btn-md">
-              {lang === 'vi' ? 'Quản lý Camera' : 'Manage Cameras'}
-            </button>
+            {stores.length === 0 ? (
+              <>
+                <StoreIcon className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                <h3 className="text-xl font-semibold text-slate-300 mb-2">
+                  {lang === 'vi' ? 'Chưa có cửa hàng' : 'No Stores Found'}
+                </h3>
+                <p className="text-slate-500 mb-4">
+                  {lang === 'vi' ? 'Tạo cửa hàng và thêm camera để bắt đầu' : 'Create stores and add cameras to get started'}
+                </p>
+                <button onClick={() => router.push('/cameras')} className="btn-primary btn-md">
+                  {lang === 'vi' ? 'Quản lý Camera' : 'Manage Cameras'}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                <h3 className="text-lg font-semibold text-slate-300">
+                  {lang === 'vi' ? 'Đang tải dữ liệu...' : 'Loading data...'}
+                </h3>
+                <p className="text-slate-500 text-sm mt-2">
+                  {lang === 'vi' ? 'Lấy dữ liệu cửa hàng' : 'Fetching store data'}
+                </p>
+              </>
+            )}
           </div>
         ) : viewMode === 'cards' ? (
           <div className={`grid gap-4 ${selectedStore === 'all' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>

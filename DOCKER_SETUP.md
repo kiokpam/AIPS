@@ -259,6 +259,189 @@ deploy:
           capabilities: [gpu]
 ```
 
+## 🎥 USB Camera Setup (Direct Access - No WiFi/RTSP Delay)
+
+### Why Use USB Cameras?
+
+Instead of streaming cameras via RTSP over WiFi, you can connect USB cameras directly to the host machine and pass them through to the Docker container. This **eliminates network delays** and provides **lower latency**.
+
+**Benefits:**
+- ✅ Ultra-low latency (local USB connection)
+- ✅ No WiFi delays or packet loss
+- ✅ Works offline without network cameras
+- ✅ Cheaper than IP cameras (use webcams/USB cameras)
+
+### Setup on Linux
+
+#### 1. **Identify USB Cameras**
+
+```bash
+# List all video devices
+ls -la /dev/video*
+
+# Show details about each device
+v4l2-ctl --list-devices
+
+# Output example:
+# /dev/video0 - USB Camera 1
+# /dev/video1 - USB Camera 2
+```
+
+#### 2. **Edit docker-compose.yml**
+
+Already configured! The `devices` section in docker-compose.yml maps USB devices:
+
+```yaml
+backend:
+  devices:
+    - /dev/video0:/dev/video0  # Camera 1
+    - /dev/video1:/dev/video1  # Camera 2
+    - /dev/video2:/dev/video2  # Camera 3 (add more as needed)
+```
+
+#### 3. **Restart Backend**
+
+```bash
+docker-compose restart backend
+```
+
+#### 4. **Add USB Camera via API**
+
+**Option A: Using API Documentation (UI)**
+
+1. Go to http://localhost:8000/docs
+2. Find the **POST /api/cameras** endpoint
+3. Use camera source as `/dev/video0` (instead of `rtsp://...`):
+
+```json
+{
+  "name": "USB Camera 1",
+  "source": "/dev/video0",
+  "store_id": "store-1",
+  "ai_services": ["people_counting", "behavior_detection"]
+}
+```
+
+**Option B: Using curl**
+
+```bash
+curl -X POST http://localhost:8000/api/cameras \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "USB Camera 1",
+    "source": "/dev/video0",
+    "store_id": "store-1",
+    "ai_services": ["people_counting", "behavior_detection"]
+  }'
+```
+
+### Setup on Windows (Docker Desktop)
+
+USB device passthrough on Windows Docker Desktop is **limited**. Options:
+
+#### **Option 1: WSL2 with Udev Rules (Recommended)**
+
+1. Install WSL2 with Linux kernel
+2. Install udev rules to grant container access:
+   ```bash
+   sudo usermod -a -G video $(whoami)
+   ```
+3. Update docker-compose.yml to use WSL2 backend
+4. Follow Linux setup above
+
+#### **Option 2: Run Backend Outside Docker**
+
+If USB access is problematic, run the backend natively:
+
+```bash
+# Install dependencies
+pip install -r backend/requirements.txt
+
+# Run backend directly (not in Docker)
+cd backend
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Add USB camera via API using device index (0, 1, 2...)
+# POST /api/cameras with source: "0" (for Camera 0)
+```
+
+### Setup on macOS
+
+macOS Docker Desktop has **very limited** USB passthrough. Workarounds:
+
+#### **Option 1: Use Network Streaming**
+Continue using RTSP streams for best compatibility.
+
+#### **Option 2: Run Backend Natively**
+```bash
+brew install opencv
+pip install -r backend/requirements.txt
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+### Camera Source Formats
+
+The backend supports multiple source formats:
+
+| Source Format | Platform | Latency | Notes |
+|---|---|---|---|
+| `/dev/video0` | Linux | ✅ Ultra-low | Direct USB device, recommended |
+| `0` | Windows/macOS | ✅ Low | Device index (0 = first camera) |
+| `rtsp://host:8554/stream` | Any | ⚠️ Medium | Network streaming (WiFi delays) |
+| `/path/to/video.mp4` | Any | ✅ Low | Local video file (useful for testing) |
+
+### Troubleshooting USB Cameras
+
+#### **Camera Not Found**
+
+```bash
+# Check if device exists
+ls -la /dev/video0
+
+# Check device permissions
+getfacl /dev/video0
+# Fix: sudo chmod 666 /dev/video0
+```
+
+#### **Permission Denied**
+
+```bash
+# Grant container access to video group
+# In docker-compose.yml, ensure:
+user: "0:0"  # or use proper udev rules
+
+# Or run container with video group
+docker run --device /dev/video0 --group-add video ...
+```
+
+#### **Camera Busy (Already in Use)**
+
+```bash
+# Check what's using the device
+sudo lsof /dev/video0
+
+# Close conflicting applications (other docker containers, cameras app, etc.)
+```
+
+#### **Poor Framerate or Lag**
+
+- Check USB bandwidth: `lsusb -t | grep Video`
+- USB 2.0 cameras max 30fps at 1080p; USB 3.0 supports higher
+- Try lower resolution in camera settings if available
+
+### Performance Tips
+
+**To minimize latency with USB cameras:**
+
+1. **Use USB 3.0 cameras** (faster than 2.0)
+2. **Lower resolution** if possible (480p instead of 1080p)
+3. **Increase skip_frame** if CPU is bottleneck: `POST /api/cameras/{id}/config`
+   ```json
+   {"skip_frame": 3}
+   ```
+4. **Use hardware acceleration** (GPU) for AI processing
+
 ## 📊 Monitoring
 
 ### Health Checks

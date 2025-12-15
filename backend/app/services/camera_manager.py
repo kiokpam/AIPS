@@ -804,7 +804,7 @@ class CameraManager:
         """Get latest frame as JPEG bytes"""
         frame = self.get_camera_frame(camera_id)
         if frame is not None:
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
             return buffer.tobytes()
         return None
     
@@ -822,25 +822,10 @@ class CameraManager:
         if metrics:
             update_data["metrics"] = metrics
         
-        # If we have detections, always update
-        # If no detections but we have recent data (<5s), keep the old data (don't overwrite with empty)
-        # If no detections and data is stale (>5s), clear it
-        if len(detections) > 0:
-            # Always update when we have detections
-            update_data["detections"] = detections
-            self.camera_detections[camera_id] = update_data
-        elif current_data and (current_time - current_data.get("updated_at", 0)) < 5.0:
-            # Keep existing detections if they're recent (within 5s)
-            # This prevents empty updates from clearing valid bounding boxes
-            # Only update the timestamp, people_in_zone, and metrics
-            update_data["detections"] = current_data.get("detections", [])
-            if "metrics" in current_data and "metrics" not in update_data:
-                update_data["metrics"] = current_data["metrics"]
-            self.camera_detections[camera_id] = update_data
-        else:
-            # Clear stale data (>5s old) or initialize new entry
-            update_data["detections"] = []
-            self.camera_detections[camera_id] = update_data
+        # Always update detections immediately (both empty and non-empty)
+        # Never cache old detections - send empty array as soon as AI reports no tracks
+        update_data["detections"] = detections
+        self.camera_detections[camera_id] = update_data
         
         # Also update the camera worker's current_count for stats API
         camera = self.cameras.get(camera_id)

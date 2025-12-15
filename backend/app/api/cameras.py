@@ -435,6 +435,13 @@ def get_camera_stream(
     db: Session = Depends(get_db),
 ):
     """Get camera video stream as MJPEG"""
+    # Guard: optional auth can be None; reject unauthenticated access explicitly
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required to view camera stream",
+        )
+
     _get_camera_or_404(db, camera_id, current.organization.id)
 
     def generate():

@@ -30,8 +30,8 @@ class DeepSortTracker:
         # Configure for GPU acceleration
         kwargs = {
             'max_age': max_age,
-            'n_init': 3,  # Number of consecutive detections before track is confirmed
-            'max_iou_distance': 0.7,  # Maximum IoU distance for matching
+            'n_init': 1,  # Number of consecutive detections before track is confirmed (reduced from 3 for lower latency)
+            'max_iou_distance': 0.7,  # Looser IoU matching keeps IDs stable during fast motion
             'nn_budget': 100,  # Maximum size of appearance feature gallery
         }
         
@@ -44,7 +44,7 @@ class DeepSortTracker:
             LOGGER.info('DeepSORT initialized with IoU-only tracking (no embedder - fastest)')
         else:
             # GPU embedder configuration
-            kwargs['max_cosine_distance'] = 0.3  # Maximum cosine distance for feature matching
+            kwargs['max_cosine_distance'] = 0.5  # Increased from 0.3 for lenient appearance matching (prevents creating new tracks)
             
             if embedder_gpu:
                 kwargs['embedder'] = embedder
@@ -109,6 +109,14 @@ class DeepSortTracker:
             try:
                 tid = int(tr.track_id)
                 l, t, r, b = tr.to_ltrb()
+                
+                # Filter out very small tracks (likely ghosts/noise)
+                # Minimum person bbox: 20x20 pixels
+                width = r - l
+                height = b - t
+                if width < 20 or height < 20:
+                    continue  # Skip tiny tracks
+                
                 out.append((tid, (int(l), int(t), int(r), int(b))))
             except Exception:
                 continue

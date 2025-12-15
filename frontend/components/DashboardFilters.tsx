@@ -51,7 +51,7 @@ export default function DashboardFilters({
     return cameras.filter(c => c.store_id === selectedStore);
   }, [cameras, selectedStore]);
 
-  // Auto-select all cameras when store changes
+  // Auto-select all cameras when store changes (but avoid re-running when cameras list updates)
   useEffect(() => {
     if (selectedStore === 'all') {
       onCamerasChange([]);
@@ -60,7 +60,9 @@ export default function DashboardFilters({
       const storeCameras = cameras.filter(c => c.store_id === selectedStore);
       onCamerasChange(storeCameras.map(c => c.id));
     }
-  }, [selectedStore, cameras]);
+    // Only run when selectedStore changes, not when cameras array changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStore]);
 
   const handleStoreChange = (storeId: string) => {
     onStoreChange(storeId);

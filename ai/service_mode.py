@@ -176,7 +176,7 @@ class CameraProcessor:
         # Per-camera tracker (not shared) – enable embedder to stabilize IDs (matches dev main.py)
         use_gpu = str(self.models.device).lower() in ("cuda", "gpu") or str(self.models.device).isdigit()
         self.tracker = DeepSortTracker(
-            max_age=10,  
+            max_age=3,  # Shorter age reduces overlap when tracks temporarily drop during motion
             use_embedder=True,
             embedder="mobilenet",
             embedder_gpu=use_gpu,
@@ -189,7 +189,7 @@ class CameraProcessor:
         self.id_remap: Dict[int, int] = {}  # deepsort_id -> display_id
         self.next_display_id = 1
         self.id_last_seen: Dict[int, int] = {}  # Track when IDs were last seen (frame_idx)
-        self.id_remap_timeout_frames = 30  # Remove mapping after 30 frames of inactivity
+        self.id_remap_timeout_frames = 5  # Remove mapping after 5 frames of inactivity (200ms at 25fps) - reduced from 30 for faster cleanup
         
         # Buffers for behavior detection
         self.buffers: Dict[int, PersonBuffer] = {}
@@ -447,7 +447,7 @@ class CameraProcessor:
         """Pull latest frame from backend API."""
         try:
             url = f"{self.backend_url}/api/ai/cameras/{self.camera_id}/frame"
-            resp = requests.get(url, timeout=2)  # Reduced from 5s to 2s for faster response
+            resp = requests.get(url, timeout=0.5)  # Reduced from 2s to 0.5s for faster response
             
             if resp.status_code == 200:
                 # Success - reset failure counter
@@ -562,11 +562,22 @@ class CameraProcessor:
             yolo_time = time.perf_counter() - yolo_start
             self.model_timings['yolo'].append(yolo_time)
             
+            # Debug: Log YOLO detections periodically
+            if self.frame_idx % 30 == 0:
+                if len(dets) > 0:
+                    LOGGER.info(f"🔍 Camera {self.camera_id}: YOLO detected {len(dets)} people - bboxes: {dets[:2]}")  # Show first 2
+                else:
+                    LOGGER.warning(f"⚠️ Camera {self.camera_id}: YOLO detected 0 people (frame shape: {frame.shape if frame is not None else 'None'})")
+            
             # 2. DeepSORT tracking
             deepsort_start = time.perf_counter()
             tracks_raw = self.tracker.update(dets, frame=frame)
             deepsort_time = time.perf_counter() - deepsort_start
             self.model_timings['deepsort'].append(deepsort_time)
+            
+            # Debug: Log tracking results periodically
+            if self.frame_idx % 30 == 0:
+                LOGGER.info(f"👥 Camera {self.camera_id}: Tracking {len(tracks_raw)} people (from {len(dets)} detections)")
             
             # Remap DeepSORT IDs to sequential display IDs (1, 2, 3...) for readability
             # This matches AI developers' behavior where IDs start from 1
@@ -663,6 +674,11 @@ class CameraProcessor:
                     self.zone = None
             else:
                 self.zone = None
+            
+            # Debug: Log zone and tracking info periodically
+            if self.frame_idx % 30 == 0:
+                zone_status = f"zone: {len(self.zone)} points" if self.zone else "zone: NOT SET"
+                LOGGER.info(f"🎯 Camera {self.camera_id}: Processing {len(tracks)} tracks, {zone_status}")
             
             people_in_zone = 0
             for tid, xyxy in tracks:
@@ -844,18 +860,11 @@ class CameraProcessor:
                             # Update performance metric
                             # Keep timings in seconds (consistent with YOLO/DeepSORT/VideoMAE)
                             self.model_timings['mobilenet'].append(mobi_time)
-                            # Store MobileNet result for display
+                            # Store MobileNet result for display (don't update detection list in loop)
                             self.mobi_labels[tid_in_fut] = (label, prob)
                             
                             # Print MobileNet prediction (score, label, frame)
                             LOGGER.debug(f"MobileNet Prediction - Track ID: {tid_in_fut}, Label: {label}, Score: {prob:.4f}, Frame: {self.frame_idx}")
-                            
-                            # Update the detection entry with new label
-                            for det in results['detections']:
-                                if det['track_id'] == tid_in_fut:
-                                    det['label'] = label
-                                    det['confidence'] = prob
-                                    break
                             
                             # If MobileNet detects suspicious -> schedule VideoMAE extension (non-blocking)
                             if label != 'normal' and prob >= 0.5:
@@ -1112,13 +1121,27 @@ class CameraProcessor:
                 self._push_detections_http_fallback(detections, people_in_zone, timestamp)
                 return
         
+        # Get store_id and zone_id from config for database storage
+        store_id = self.config.get('store_id', '')
+        zones = self.config.get('zones', [])
+        zone_id = zones[0].get('id') if zones and len(zones) > 0 else None
+        
         # Add message to queue (non-blocking)
         message = {
-            'message_type': 'detection',  # Message type identifier
+            # Frontend expects `type: detection_update` and `camera_id`
+            'type': 'detection_update',
+            'camera_id': self.camera_id,
             'detections': detections,
             'people_in_zone': people_in_zone,
-            'ts': timestamp
+            'ts': timestamp,
         }
+        
+        # Add store_id and zone_id if available (for database storage)
+        if store_id:
+            message['store_id'] = store_id
+        if zone_id:
+            message['zone_id'] = zone_id
+        
         if metrics:
             message['metrics'] = metrics
         
@@ -1133,15 +1156,28 @@ class CameraProcessor:
     def _push_detections_http_fallback(self, detections: List[Dict], people_in_zone: int, timestamp: str):
         """Fallback HTTP POST for detection updates when WebSocket is unavailable."""
         try:
+            # Get store_id and zone_id from config for database storage
+            store_id = self.config.get('store_id', '')
+            zones = self.config.get('zones', [])
+            zone_id = zones[0].get('id') if zones and len(zones) > 0 else None
+            
+            payload = {
+                'event': 'detection_update',
+                'camera_id': self.camera_id,
+                'detections': detections,
+                'people_in_zone': people_in_zone,
+                'ts': timestamp,
+            }
+            
+            # Add store_id and zone_id if available (for database storage)
+            if store_id:
+                payload['store_id'] = store_id
+            if zone_id:
+                payload['zone_id'] = zone_id
+            
             resp = requests.post(
                 f"{self.backend_url}/api/events/detection-update",
-                json={
-                    'event': 'detection_update',
-                    'camera_id': self.camera_id,
-                    'detections': detections,
-                    'people_in_zone': people_in_zone,
-                    'ts': timestamp,
-                },
+                json=payload,
                 timeout=1  # Short timeout
             )
             if resp.status_code != 200 and self.frame_idx % 100 == 0:
@@ -1280,6 +1316,7 @@ class CameraProcessor:
         now = datetime.utcnow().isoformat() + 'Z'
         
         # Push detection updates for visualization (bounding boxes) via WebSocket
+        # Send every frame for real-time updates (matching old version behavior)
         detections = results.get('detections', [])
         people_in_zone = results.get('people_in_zone', 0)
         
@@ -1288,9 +1325,8 @@ class CameraProcessor:
         if self.frame_idx % 30 == 0:
             metrics = self.get_metrics()
         
-        # Push detections every frame via WebSocket (non-blocking)
-        if len(detections) > 0 or self.frame_idx % 1 == 0:  # Every frame for real-time updates
-            self._push_detections_websocket(detections, people_in_zone, now, metrics)
+        # Push detections every frame (no throttling for real-time responsiveness)
+        self._push_detections_websocket(detections, people_in_zone, now, metrics)
         
         # Push In/Out counts (only if changed) via WebSocket
         inout_data = results.get('inout')
@@ -1510,8 +1546,8 @@ class AIService:
                 except Exception as e:
                     LOGGER.error(f"Error processing camera {cam_id}: {e}", exc_info=True)
             
-            # Small delay between cycles - reduced for faster processing
-            time.sleep(0.03)  # ~33 FPS max per camera (reduced from 0.05 for lower latency)
+            # Small delay between cycles - optimized for real-time responsiveness
+            time.sleep(0.01)  # ~100 FPS max per camera (reduced from 0.03 for lower latency)
     
     def stop(self):
         """Stop the AI service."""

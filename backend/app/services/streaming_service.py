@@ -27,7 +27,7 @@ class StreamingService:
             # Yield a single error frame then exit to avoid half-started responses
             error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(error_frame, "Camera not running", (80, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            ret, jpeg = cv2.imencode('.jpg', error_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if ret:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
@@ -81,7 +81,7 @@ class StreamingService:
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 149, 237), 2)
                             cv2.putText(waiting_frame, f"Camera: {camera_id}", (120, 260),
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1)
-                            ret, jpeg = cv2.imencode('.jpg', waiting_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                            ret, jpeg = cv2.imencode('.jpg', waiting_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                             if ret:
                                 yield (b'--frame\r\n'
                                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
@@ -97,9 +97,9 @@ class StreamingService:
                     if not with_overlay:
                         last_frame_seq = frame_seq
                     
-                    # Encode frame to JPEG with moderate quality for good speed/quality balance
-                    # Quality 80 is better than 70 but still very fast
-                    ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    # Encode frame to JPEG with high quality for clear video
+                    # Quality 92 provides excellent quality while still encoding quickly
+                    ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
                     if not ret:
                         continue  # Skip bad frames without delay
                     

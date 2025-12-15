@@ -431,7 +431,18 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
   // Update refs with latest values without triggering re-setup
   useEffect(() => {
     latestDetectionsRef.current = detections;
-  }, [detections]);
+  }, [detections, camera.id]);
+
+  // Immediately clear overlay when detections become empty, even if animation pauses
+  useEffect(() => {
+    if (detections.length === 0) {
+      const canvas = overlayRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (canvas && ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  }, [detections.length]);
   
   useEffect(() => {
     latestTaskInfoRef.current = taskInfo;
@@ -469,7 +480,16 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
 
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+      
+      // Clear canvas before drawing
       ctx.clearRect(0, 0, cw, ch);
+      
+      if (typeof window !== 'undefined') {
+        const frameCounter = (window as any).__detectionFrameCount = ((window as any).__detectionFrameCount ?? 0) + 1;
+        if (frameCounter % 30 === 0) {  // Log every 30 frames (~1 second at 30fps)
+          console.debug(`[Canvas ${camera.id}] Frame ${frameCounter}: Cleared ${cw}×${ch}, drawing ${latestDetectionsRef.current.length} detections`);
+        }
+      }
 
       // Compute object-contain content box for the frame (match CSS)
       const frameW = frameSize.w;
@@ -557,6 +577,8 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
       // Draw detection bounding boxes (read from ref, not dependency)
       const dets = latestDetectionsRef.current;
       const hasBehavior = latestHasBehaviorDetectionRef.current;
+      
+      // Draw each detection bbox
       dets.forEach((det) => {
         if (!det.bbox || det.bbox.length !== 4) return;
         const [x1, y1, x2, y2] = det.bbox;
@@ -778,42 +800,49 @@ const CameraCard = React.memo(({ camera, onEdit, onDelete, onToggle, realtimeCou
 
     // Use a unique WebSocket URL per camera to avoid handler overwrite when multiple cameras render
     const wsUrl = buildWsUrl(`/ws/detections?token=${encodeURIComponent(token)}&camera=${camera.id}`);
+    
+    let messageCount = 0;
+
+    const handleDetectionMessage = (data: any) => {
+      if (data.type === 'detection_update' && data.camera_id === camera.id) {
+        const dets = data.detections || [];
+        messageCount++;
+        
+        // Log when detection count changes (to diagnose sticky boxes)
+        const prevCount = detections.length;
+        if (dets.length !== prevCount) {
+          const timestamp = new Date().toLocaleTimeString();
+          const trackIds = dets.map((d: any) => d.track_id).join(',');
+          console.log(
+            `[Camera ${camera.id}] Detection count changed: ${prevCount}→${dets.length} at ${timestamp}`,
+            trackIds ? `tracks: ${trackIds}` : '(empty)'
+          );
+        }
+        
+        setDetections(dets);
+        if (data.metrics) {
+          setAiMetrics(data.metrics);
+        }
+      }
+    };
 
     const ws = wsManager.getConnection({
       url: wsUrl,
       reconnect: isStreaming,
       reconnectDelay: 3000,
-      onMessage: (data) => {
-        if (data.type === 'detection_update' && data.camera_id === camera.id) {
-          const dets = data.detections || [];
-          console.log(`[Camera ${camera.id}] Received ${dets.length} detections:`, 
-            dets.map((d: any) => ({ label: d.label, in_zone: d.in_zone, conf: d.confidence }))
-          );
-          setDetections(dets);
-          if (data.metrics) {
-            setAiMetrics(data.metrics);
-          }
-        }
-      },
+      onMessage: handleDetectionMessage,
       onError: (err) => {
-        console.error('Detection websocket error:', err);
+        console.error(`[Camera ${camera.id}] Detection websocket error:`, err);
       },
       onClose: () => {
-        // Reconnection handled by manager
+        console.warn(`[Camera ${camera.id}] Detection websocket closed - will attempt reconnect`);
       },
     });
 
     // Update handlers if connection already exists
     if (ws && ws.readyState === WebSocket.OPEN) {
       wsManager.updateHandlers(wsUrl, {
-        onMessage: (data) => {
-          if (data.type === 'detection_update' && data.camera_id === camera.id) {
-            setDetections(data.detections || []);
-            if (data.metrics) {
-              setAiMetrics(data.metrics);
-            }
-          }
-        },
+        onMessage: handleDetectionMessage,
       });
     }
 
@@ -1633,12 +1662,14 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
 
   // Draw line pair for In/Out counting (Line A and Line B)
   const drawLine = useCallback((ctx: CanvasRenderingContext2D, p1: any, p2: any, color: string, lineWidth: number, isDraft = false, area?: any) => {
-    // Draw Line A (first line) - always in red/green
+    // Draw Line A (IN boundary) - red color
+    // Crossing from B→A means person entering (IN)
     if (p1 && p2) {
       drawSingleLine(ctx, p1, p2, '#ef4444', lineWidth, isDraft);
     }
     
-    // Draw Line B (second line for In/Out detection) - in blue
+    // Draw Line B (OUT boundary) - blue color
+    // Crossing from A→B means person leaving (OUT)
     if (area && area.p1_b && area.p2_b) {
       drawSingleLine(ctx, area.p1_b, area.p2_b, '#3b82f6', lineWidth, isDraft);
     } else if (area && area.p1_b && !area.p2_b) {
