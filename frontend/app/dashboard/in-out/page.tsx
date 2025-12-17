@@ -146,7 +146,12 @@ export default function InOutDashboardPage() {
     return result;
   }, [stores, selectedStore, selectedCameras]);
 
-  // Calculate totals from filtered data
+  // Stores to display (exclude Unassigned from UI but keep in totals)
+  const displayStores = useMemo(() => {
+    return filteredStores.filter(s => s.storeName.toLowerCase() !== 'unassigned');
+  }, [filteredStores]);
+
+  // Calculate totals from ALL filtered data (including Unassigned for accurate counts)
   const totalIn = filteredStores.reduce((sum, s) => sum + s.countIn, 0);
   const totalOut = filteredStores.reduce((sum, s) => sum + s.countOut, 0);
   const totalNet = filteredStores.reduce((sum, s) => sum + s.netInside, 0);
@@ -455,7 +460,11 @@ export default function InOutDashboardPage() {
       return;
     }
     fetchInOutDataLoadingRef.current = true;
-    setIsLoadingData(true); // Show skeleton loaders while fetching
+    // Only show loading state if we have no data yet (first load)
+    // Background refreshes should be silent to prevent UI flicker
+    if (stores.length === 0) {
+      setIsLoadingData(true);
+    }
     
     try {
       setError(null);
@@ -570,8 +579,8 @@ export default function InOutDashboardPage() {
       
       let newStores = Object.values(storeStatsMap);
       
-      // Filter out the "Unassigned" placeholder store from dashboard display
-      newStores = newStores.filter(store => store.storeName.toLowerCase() !== 'unassigned');
+      // Keep "Unassigned" store data for accurate totals, but mark it for conditional display
+      // (The filteredStores logic will handle whether to show it based on user's selection)
 
       // If cameras are filtered, recalc store aggregates using only selected cameras
       if (selectedCameras.length > 0) {
@@ -679,11 +688,11 @@ export default function InOutDashboardPage() {
         // Wait for initial data load, then set up interval
         dataFetchPromise.then(() => {
           setIsLoading(false);
-          interval = setInterval(fetchInOutData, 15000);
+          interval = setInterval(fetchInOutData, 5000);
         }).catch(() => {
           // Even on error, stop loading after a timeout
           setIsLoading(false);
-          interval = setInterval(fetchInOutData, 15000);
+          interval = setInterval(fetchInOutData, 5000);
         });
         return;
       }
@@ -705,7 +714,7 @@ export default function InOutDashboardPage() {
           if (!dataFetchPromise) {
             dataFetchPromise = fetchInOutData();
           }
-          interval = setInterval(fetchInOutData, 15000);
+          interval = setInterval(fetchInOutData, 5000);
         }
       } catch (error: any) {
         setHasAccess(false);
@@ -991,13 +1000,13 @@ export default function InOutDashboardPage() {
             </div>
 
             {/* Export Button */}
-            {filteredStores.length > 0 && (
+            {displayStores.length > 0 && (
               <button
                 onClick={() => {
                   // Export data as CSV
                   const csv = [
                     ['Store', 'In', 'Out', 'Inside', 'Cameras'].join(','),
-                    ...filteredStores.map(s => [
+                    ...displayStores.map(s => [
                       s.storeName,
                       s.countIn,
                       s.countOut,
@@ -1394,7 +1403,7 @@ export default function InOutDashboardPage() {
           </div>
         </div>
 
-        {filteredStores.length === 0 ? (
+        {displayStores.length === 0 ? (
           <div className="text-center py-16 bg-slate-800/50 rounded-xl border border-slate-700">
             {stores.length === 0 ? (
               <>
@@ -1423,7 +1432,7 @@ export default function InOutDashboardPage() {
           </div>
         ) : viewMode === 'cards' ? (
           <div className={`grid gap-4 ${selectedStore === 'all' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
-            {filteredStores.map((store, idx) => (
+            {displayStores.map((store, idx) => (
               <StoreAnalyticsCard
                 key={store.storeId}
                 storeId={store.storeId}
@@ -1466,7 +1475,7 @@ export default function InOutDashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700/50">
-                  {filteredStores.map(store => (
+                  {displayStores.map(store => (
                     <tr key={store.storeId} className="hover:bg-slate-700/20 transition-colors">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -1518,7 +1527,7 @@ export default function InOutDashboardPage() {
         </div>
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <Activity className="w-3 h-3" />
-          {lang === 'vi' ? 'Tự động làm mới mỗi 10 giây' : 'Auto-refreshes every 10s'}
+          {lang === 'vi' ? 'Tự động làm mới mỗi 5 giây' : 'Auto-refreshes every 5s'}
         </div>
       </div>
     </div>

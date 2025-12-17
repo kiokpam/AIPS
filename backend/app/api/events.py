@@ -19,7 +19,19 @@ from app.services.websocket_manager import inout_ws_manager
 import httpx
 
 # Clips directory (shared with AI service)
-CLIPS_DIR = Path(os.environ.get('CLIPS_DIR', '/app/clips'))
+# Smart resolution: prefer env var, then repo root with files, then fallback
+clips_env = os.getenv('CLIPS_DIR')
+if clips_env:
+    CLIPS_DIR = Path(clips_env)
+else:
+    try:
+        repo_root_clips = Path(__file__).resolve().parents[3] / 'clips'
+        if repo_root_clips.exists() and any(repo_root_clips.glob('*.mp4')):
+            CLIPS_DIR = repo_root_clips
+        else:
+            CLIPS_DIR = Path('/app/clips')
+    except Exception:
+        CLIPS_DIR = Path('/app/clips')
 
 router = APIRouter(prefix="/events", tags=["events"])
 logger = logging.getLogger(__name__)
@@ -93,10 +105,18 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
             logger.warning(f"InOut update received for non-existent camera: {event.camera_id}")
             raise HTTPException(status_code=404, detail="Camera not found")
         
+        # Use camera's CURRENT store_id from database (ignore AI's cached store_id)
+        # This ensures data is always associated with the camera's current store assignment
+        current_store_id = camera.store_id
+        
+        if not current_store_id:
+            logger.warning(f"InOut update for camera {event.camera_id} with no store assignment, skipping")
+            return {"status": "skipped", "message": "Camera not assigned to a store"}
+        
         # Verify store exists
-        store = db.query(StoreModel).filter(StoreModel.id == event.store_id).first()
+        store = db.query(StoreModel).filter(StoreModel.id == current_store_id).first()
         if not store:
-            logger.warning(f"InOut update received for non-existent store: {event.store_id}")
+            logger.warning(f"InOut update - camera {event.camera_id} assigned to non-existent store: {current_store_id}")
             raise HTTPException(status_code=404, detail="Store not found")
 
         # Parse ISO timestamp string to datetime
@@ -114,29 +134,30 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
             logger.warning(f"Failed to parse timestamp '{event.ts}', using current time")
             ts_dt = datetime.utcnow()
         
-        # Insert into inout_counts table
+        # Insert into inout_counts table using camera's CURRENT store_id
         db.execute(text("""
             INSERT INTO inout_counts (time, camera_id, store_id, count_in, count_out, org_id)
             VALUES (:time, :camera_id, :store_id, :count_in, :count_out, :org_id)
             ON CONFLICT (time, camera_id) DO UPDATE SET
                 count_in = :count_in,
-                count_out = :count_out
+                count_out = :count_out,
+                store_id = :store_id
         """), {
             "time": ts_dt,
             "camera_id": event.camera_id,
-            "store_id": event.store_id,
+            "store_id": current_store_id,  # Use current store_id, not AI's cached value
             "count_in": event.count_in,
             "count_out": event.count_out,
             "org_id": store.org_id,
         })
         db.commit()
         
-        logger.debug(f"InOut update stored: camera={event.camera_id}, in={event.count_in}, out={event.count_out}")
+        logger.debug(f"InOut update stored: camera={event.camera_id}, store={current_store_id}, in={event.count_in}, out={event.count_out}")
 
         payload = {
             "type": "inout_update",
             "camera_id": event.camera_id,
-            "store_id": event.store_id,
+            "store_id": current_store_id,  # Broadcast with current store_id
             "count_in": event.count_in,
             "count_out": event.count_out,
             "ts": ts_dt.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
@@ -352,21 +373,33 @@ def get_inout_summary(
     
     # Get the latest counts for each camera
     camera_ids_str = ",".join(f"'{cid}'" for cid in allowed_camera_ids)
+    
+    logger.info(f"InOut Summary request - store_id: {store_id}, time_range: {time_range}, allowed_cameras: {len(allowed_camera_ids)}")
+    
+    # Build WHERE clause - store_id filter must be INSIDE the subquery to get correct latest per camera per store
+    where_clauses = [f"org_id = :org_id", f"camera_id IN ({camera_ids_str})"]
+    if store_id:
+        where_clauses.append("store_id = :store_id")
+        params["store_id"] = store_id
+    if time_filter:
+        where_clauses.append(time_filter.replace(" AND ", ""))
+    
+    where_clause = " AND ".join(where_clauses)
+    
     base_query = f"""
         SELECT DISTINCT ON (camera_id) 
             camera_id, store_id, count_in, count_out, time
         FROM inout_counts 
-        WHERE org_id = :org_id AND camera_id IN ({camera_ids_str}){time_filter}
+        WHERE {where_clause}
+        ORDER BY camera_id, time DESC
     """
-    
-    if store_id:
-        base_query += " AND store_id = :store_id"
-        params["store_id"] = store_id
-    
-    base_query += " ORDER BY camera_id, time DESC"
     
     result = db.execute(text(base_query), params)
     rows = result.fetchall()
+    
+    logger.info(f"InOut Summary query returned {len(rows)} camera records")
+    if len(rows) > 0:
+        logger.debug(f"Sample row: camera={rows[0].camera_id}, store={rows[0].store_id}, in={rows[0].count_in}, out={rows[0].count_out}")
     
     total_in = sum(row.count_in for row in rows)
     total_out = sum(row.count_out for row in rows)
@@ -570,12 +603,16 @@ def get_realtime_people_counts(
         # Get allowed cameras for this user
         allowed_camera_ids = _get_allowed_camera_ids(current, db)
         
+        logger.info(f"Realtime counts request - store_id: {store_id}, allowed_cameras: {len(allowed_camera_ids)}")
+        
         if not allowed_camera_ids:
             # No camera access, return empty
             return []
         
         # Get cameras with people counts from camera manager
         cameras = [cam for cam in camera_manager.list_cameras() if cam.get("camera_id") in allowed_camera_ids]
+        
+        logger.debug(f"Camera manager has {len(cameras)} active cameras")
         
         # Build response mapping: camera_id -> store_id -> people_in_zone
         realtime_counts = {}
@@ -588,8 +625,11 @@ def get_realtime_people_counts(
             if cam:
                 cam_store_id = cam.store_id
                 
+                logger.debug(f"Camera {camera_id} belongs to store {cam_store_id}, current count: {current_count}")
+                
                 # Filter by store if requested
                 if store_id and cam_store_id != store_id:
+                    logger.debug(f"Skipping camera {camera_id} - not in requested store {store_id}")
                     continue
                 
                 realtime_counts[camera_id] = {
@@ -598,6 +638,7 @@ def get_realtime_people_counts(
                     "people_in_zone": current_count,
                 }
         
+        logger.info(f"Returning {len(realtime_counts)} realtime count records")
         return list(realtime_counts.values())
     except Exception as e:
         logger.error(f"Error fetching realtime people counts: {e}", exc_info=True)

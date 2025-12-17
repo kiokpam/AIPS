@@ -348,7 +348,20 @@ export default function VideosPage() {
                       src: video.src,
                       currentSrc: video.currentSrc
                     });
-                    toast.error(`Failed to load video: ${error?.message || 'Unknown error'}`);
+                    
+                    // Provide helpful error messages based on error code
+                    let errorMessage = 'Failed to load video';
+                    if (error?.code === 4) {
+                      // MEDIA_ERR_SRC_NOT_SUPPORTED - often auth/permission issue
+                      errorMessage = 'Video not accessible. Your session may have expired - try refreshing the page.';
+                    } else if (error?.code === 2) {
+                      // MEDIA_ERR_NETWORK - network or auth issue
+                      errorMessage = 'Network error loading video. Check your connection or refresh the page.';
+                    } else if (error?.message) {
+                      errorMessage = `Failed to load video: ${error.message}`;
+                    }
+                    
+                    toast.error(errorMessage, { duration: 6000 });
                   }}
                   onLoadStart={() => console.log('Video loading started')}
                   onLoadedMetadata={(e) => {

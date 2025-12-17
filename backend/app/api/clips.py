@@ -21,18 +21,30 @@ from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as
 router = APIRouter(prefix="/clips", tags=["clips"])
 logger = logging.getLogger(__name__)
 
-# Clips directory - resolve relative to project root
-# When running in Docker: /app/clips (mapped via docker-compose volume)
-# When running natively: ./clips (relative to project root where backend is started)
-# Try to be smart: if /app/clips exists use it (Docker), otherwise use ./clips (native)
-if Path("/app/clips").exists():
-    CLIPS_DIR = Path("/app/clips")  # Docker path
+# Clips directory - use environment variable for consistency across all services
+# Smart resolution: prefer env var, then repo root with files, then fallback
+clips_env = os.environ.get('CLIPS_DIR')
+if clips_env:
+    CLIPS_DIR = Path(clips_env)
 else:
-    CLIPS_DIR = Path("./clips").resolve()  # Windows/Linux native path
+    # Try repo root clips first (most likely location for native runs)
+    try:
+        repo_root_clips = Path(__file__).resolve().parents[3] / 'clips'
+        if repo_root_clips.exists() and any(repo_root_clips.glob('*.mp4')):
+            CLIPS_DIR = repo_root_clips
+            logger.info(f"Using repo root clips folder with {len(list(repo_root_clips.glob('*.mp4')))} files")
+        else:
+            # Fall back to relative path (Docker default)
+            CLIPS_DIR = Path('./clips').resolve()
+    except Exception as e:
+        logger.warning(f"Could not resolve repo root clips: {e}")
+        CLIPS_DIR = Path('./clips').resolve()
 
-# Ensure directory exists
+# Ensure directory exists (but don't create if we're using wrong location)
+if not CLIPS_DIR.is_absolute():
+    CLIPS_DIR = CLIPS_DIR.resolve()
 CLIPS_DIR.mkdir(parents=True, exist_ok=True)
-logger.info(f"Clips directory: {CLIPS_DIR}")
+logger.info(f"Clips directory: {CLIPS_DIR} (exists: {CLIPS_DIR.exists()}, file count: {len(list(CLIPS_DIR.glob('*.mp4')))})")
 
 
 class VideoClip(BaseModel):
@@ -87,6 +99,19 @@ def parse_clip_filename(filename: str) -> dict:
     except Exception as e:
         logger.debug(f"Could not parse filename {filename}: {e}")
     return {"behavior": "unknown", "confidence": None, "camera_id": None}
+
+
+@router.get("/health")
+def clips_health():
+    """Health check endpoint showing clips directory status"""
+    clip_files = list(CLIPS_DIR.glob('*.mp4'))
+    return {
+        "status": "ok",
+        "clips_dir": str(CLIPS_DIR),
+        "clips_dir_exists": CLIPS_DIR.exists(),
+        "clip_count": len(clip_files),
+        "sample_clips": [f.name for f in clip_files[:5]]
+    }
 
 
 @router.get("", response_model=VideoClipsResponse)
@@ -230,7 +255,9 @@ def get_video_clip(
     safe_filename = Path(filename).name
     clip_path = CLIPS_DIR / safe_filename
 
+    logger.info(f"Clip request: {safe_filename}, path: {clip_path}, exists: {clip_path.exists()}")
     if not clip_path.exists():
+        logger.warning(f"Clip not found on disk: {clip_path}")
         raise HTTPException(status_code=404, detail="Clip not found")
     
     # Get file size early (before any processing) for faster response
@@ -276,10 +303,13 @@ def get_video_clip(
                     break
 
     # Authorization: clip must belong to this org, and members must have store permission
-    if not store_id_clip and not matched_alert and (not camera_id or camera_id not in cameras):
-        raise HTTPException(status_code=404, detail="Clip not found")
+    # Managers are allowed to access any clip on disk for operational debugging.
+    logger.info(f"Auth check - role: {current.role}, camera_id: {camera_id}, store_id: {store_id_clip}, alert: {matched_alert is not None}")
+    if current.role != MembershipRole.manager:
+        if not store_id_clip and not matched_alert and (not camera_id or camera_id not in cameras):
+            logger.warning(f"Member denied access - no store/alert/camera match for {safe_filename}")
+            raise HTTPException(status_code=404, detail="Clip not found")
 
-    if current.role == MembershipRole.member:
         store_permissions = db.query(MemberPermission.store_id).filter(
             MemberPermission.membership_id == current.membership.id,
             MemberPermission.store_id.isnot(None)

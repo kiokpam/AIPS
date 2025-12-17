@@ -353,7 +353,15 @@ class DetectionWebSocketManager:
             logger.info(f"Alert broadcasted to frontend clients for org {org_id}: {anomaly_type} (Alert ID: {alert.id})")
             
             # Also forward to notification service so it can broadcast via its websocket
-            notification_url = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification:8004")
+            # Choose URL based on environment: in Docker use service name, otherwise localhost
+            notification_url_env = os.getenv("NOTIFICATION_SERVICE_URL")
+            if notification_url_env:
+                notification_url = notification_url_env
+            else:
+                in_docker = os.path.exists("/.dockerenv") or os.getenv("DOCKER_ENV") == "1"
+                notification_url = "http://notification:8004" if in_docker else os.getenv(
+                    "NOTIFICATION_SERVICE_FALLBACK_URL", "http://localhost:8004"
+                )
             clip_path = None
             if clip_filename:
                 clips_dir = os.getenv("CLIPS_DIR", "/app/clips")
@@ -387,7 +395,7 @@ class DetectionWebSocketManager:
                     }
                 }
                 
-                # Call notification service asynchronously (non-blocking)
+                # Call notification service asynchronously (non-blocking) with basic fallback
                 def send_notification():
                     try:
                         httpx.post(
@@ -398,6 +406,27 @@ class DetectionWebSocketManager:
                         logger.debug(f"Alert forwarded to notification service: {alert.id}")
                     except Exception as e:
                         logger.warning(f"Failed to forward alert to notification service: {e}")
+                        # Fallback: if default docker hostname fails, try localhost; if localhost fails, try 127.0.0.1
+                        try:
+                            if "notification:8004" in notification_url:
+                                fallback_url = "http://localhost:8004"
+                            elif "localhost:8004" in notification_url:
+                                fallback_url = "http://127.0.0.1:8004"
+                            else:
+                                fallback_url = None
+                            if fallback_url:
+                                httpx.post(
+                                    f"{fallback_url}/notifications/send",
+                                    json=notification_payload,
+                                    timeout=5.0
+                                )
+                                logger.debug(
+                                    f"Alert forwarded to notification service via fallback {fallback_url}: {alert.id}"
+                                )
+                        except Exception as e2:
+                            logger.warning(
+                                f"Fallback forwarding to notification service also failed: {e2}"
+                            )
                 
                 thread = threading.Thread(target=send_notification, daemon=True)
                 thread.start()
