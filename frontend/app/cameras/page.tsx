@@ -2107,9 +2107,9 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           </button>
         </div>
 
-        <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
+        <div className="flex flex-1 min-h-0 overflow-hidden">
           {/* Left Panel - Configuration */}
-          <div className="w-full lg:w-1/3 p-6 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200 flex-shrink-0 max-h-96 lg:max-h-none">
+          <div className="w-full lg:w-1/3 p-6 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200 flex-shrink-0">
             <form onSubmit={handleSubmit} className="space-y-6">
               {/* Camera Name */}
             <div>
@@ -2318,7 +2318,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
           </div>
 
           {/* Right Panel - Video Preview */}
-          <div className="w-full lg:w-2/3 p-6 flex flex-col min-h-0 flex-1">
+          <div className="w-full lg:w-2/3 p-6 flex flex-col min-h-0 flex-1 overflow-hidden">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-medium text-slate-900">Preview</h3>
               <div className="flex space-x-2">
@@ -2342,7 +2342,7 @@ const AddCameraModal = ({ isOpen, onClose, onAdd }: {
             </div>
 
             {/* Video Preview */}
-            <div className="relative w-full h-[72vh] min-h-[480px] bg-slate-100 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center">
+            <div className="relative w-full flex-1 min-h-[400px] bg-slate-100 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center overflow-hidden z-0">
               {isLoadingPreview ? (
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
