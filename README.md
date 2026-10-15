@@ -1,44 +1,61 @@
 # AIPS – AI‑Powered Store Surveillance System
 
-End‑to‑end retail video analytics platform with real-time AI-powered behavior detection, people counting, camera management, live video streaming, and a modern web UI.
+End‑to‑end retail video analytics platform with AI-based behavior detection, people counting, camera management, live video streaming, and a web UI.
 
 This README explains the system architecture, how to run it, and key features.
 
 ---
 
+## 🎬 Demo
+
+Screenshots and a short demo video are coming soon.
+
+---
+
+## 👥 Team & Roles
+
+AIPS was built as a graduation project (September–December 2025) by a team of four.
+
+- **Mai Anh Quan ([Qcymaq](https://github.com/Qcymaq))** – Project Lead. Wrote almost all of the FastAPI backend, the Next.js frontend, the AI integration service (`ai/service_mode.py`), the notification service, the Docker/Compose files, and the tests.
+- **Gia Huy** – Core computer-vision modules: YOLO ONNX detector, DeepSORT tracker wrapper, in/out line counter, person buffer, MobileNet and VideoMAE ONNX runners, and ONNX export.
+- **Truong Quang Phat** – An early Telegram notifier and an early Flask dashboard (kept in `archive/codedash_ai/`).
+- **kiokpam** – Repository owner.
+
+---
+
 ## 🏗️ High‑level Architecture
 
-**Services (Dockerized):**
+**Services:**
 
-- **backend/** (FastAPI)
+- **backend/** (FastAPI) – runs on the host machine in the current setup (see [Quick Start](#-quick-start))
   - REST API for cameras, stores, organizations, members, tasks (zones/lines), events, alerts
   - WebSocket endpoints for real-time updates (detections, in/out counts, alerts)
   - Manages `CameraWorker` instances (OpenCV capture, overlays, AI integration)
   - TimescaleDB/Postgres via SQLAlchemy models with automatic table creation
   - File upload service for video testing
 
-- **frontend/** (Next.js 14)
-  - Modern web UI with dark theme
+- **frontend/** (Next.js 14) – Docker
+  - Web UI with dark theme
   - Camera management, live preview, zone/line drawing
   - Real-time dashboards (behavior detection, in/out counting)
   - Multi-language support (EN/VI)
   - WebSocket integration for live updates
 
-- **ai/** (Python AI Service)
-  - Unified AI service (`service_mode.py`) running YOLO detection, DeepSORT tracking
-  - MobileNet filtering for suspicious behavior screening
-  - VideoMAE analysis for detailed behavior detection (shoplifting, violence)
-  - Per-camera processing with WebSocket communication to backend
+- **ai/** (Python AI service) – Docker (NVIDIA GPU) or host
+  - Unified AI service (`service_mode.py`) running YOLO detection and DeepSORT tracking
+  - MobileNet screening of person crops for suspicious behavior (runs asynchronously in a thread pool)
+  - VideoMAE classification (shoplifting, violence) that runs only on tracks MobileNet flags as suspicious
+  - Pulls frames from the backend and pushes results back over WebSocket/HTTP
   - GPU-accelerated (CUDA) with CPU fallback
 
-- **notification-service/** (FastAPI)
+- **notification-service/** (FastAPI) – Docker
   - WebSocket server for alert broadcasting to frontend clients
   - Email notifications (SMTP)
   - Telegram bot integration (optional)
   - Receives alerts from backend and broadcasts to connected clients
 
 **Data Store:**
-- TimescaleDB/Postgres for core entities (cameras, stores, organizations, members, counting zones/lines, alerts, video clips, time‑series people counts)
+- TimescaleDB/Postgres (Docker) for core entities (cameras, stores, organizations, members, counting zones/lines, alerts, video clips, time‑series people counts)
 
 ---
 
@@ -66,12 +83,12 @@ frontend/                   # Next.js frontend application
   src/                      # Contexts, i18n, utilities
 
 ai/                         # Unified AI service
-  ai/                       # AI model runners (YOLO, MobileNet, VideoMAE)
+  ai/                       # AI model runners (MobileNet, VideoMAE)
   detectors/                # YOLO detector, DeepSORT tracker
   inout_pkg/                # In/Out counting logic
   zone/                     # Zone detection utilities
   models/                   # ONNX model files (YOLO, MobileNet)
-  videomae/                 # VideoMAE model files
+  videomae/                 # VideoMAE config and export script (weights not included)
   service_mode.py           # Main AI service loop
   main.py                   # Standalone mode (for testing)
 
@@ -81,11 +98,12 @@ notification-service/       # Notification service
     services/               # Email, Telegram, notification router
     models/                 # Notification models
 
+archive/                    # Early prototypes, not used by the current system
 clips/                      # Video clips saved by AI (anomaly detection)
 backend/uploads/            # Uploaded video files (for testing)
-docker-compose.yml          # Orchestrates all services
-start-system.sh             # Startup script (Linux/Mac)
-start-system.bat            # Startup script (Windows)
+.env.example                # Example environment variables (copy to .env)
+docker-compose.yml          # Docker services: db, frontend, notification, ai (no backend)
+docker-compose.hybrid.yml   # Same services, with live-mounted notification code
 ```
 
 ---
@@ -98,7 +116,8 @@ Multi-tenant authentication with organizations and role-based access:
 - **`member`**: Read/monitor permissions as granted by managers
 
 **Key REST endpoints:**
-- `POST /api/auth/signup` – Create organization and manager user
+- `POST /api/auth/signup/manager` – Create organization and manager user
+- `POST /api/auth/signup/member` – Join an organization as a member (invite or join code)
 - `POST /api/auth/login` – Obtain org-scoped JWT
 - `POST /api/auth/switch-org` – Switch active organization
 - `GET /api/auth/me` – Profile with memberships
@@ -108,8 +127,8 @@ Multi-tenant authentication with organizations and role-based access:
 JWT tokens include `sub`, `org_id`, and `role` claims. All endpoints enforce organization scoping.
 
 **Environment variables:**
-- `JWT_SECRET` (default: `dev-secret-change-me`)
-- `JWT_EXPIRES_SECONDS` (default: `3600`)
+- `JWT_SECRET` – secret used to sign tokens. If it is not set, the backend uses a public development secret and logs a security warning. With `ENV=production` the backend refuses to start without it.
+- `JWT_EXPIRES_SECONDS` (default: `2592000`, 30 days)
 
 ---
 
@@ -130,10 +149,10 @@ JWT tokens include `sub`, `org_id`, and `role` claims. All endpoints enforce org
 ### 3. AI-Powered Analytics
 - **People Detection**: YOLO object detection
 - **Tracking**: DeepSORT multi-object tracking
-- **Behavior Detection**: 
-  - MobileNet filtering (fast screening)
-  - VideoMAE analysis (detailed behavior classification)
-  - Detects: shoplifting, violence, normal behavior
+- **Behavior Detection**:
+  - MobileNet screening of person crops (fast, asynchronous)
+  - VideoMAE classification of a short clip, only for tracks MobileNet flags as suspicious
+  - Detects: shoplifting, violence, normal behavior (requires the VideoMAE weights, see [Models](#models))
 - **People Counting**: In/Out counting via line crossings
 - **Real-time Metrics**: FPS, inference times, processing stats
 
@@ -158,71 +177,108 @@ JWT tokens include `sub`, `org_id`, and `role` claims. All endpoints enforce org
 ## 🖥️ System Requirements
 
 **Hardware:**
-- **GPU**: NVIDIA GeForce RTX 3050 (4 GB VRAM) or better
+- **GPU**: NVIDIA GPU for the AI service in Docker (the team used a GeForce RTX 3050, 4 GB VRAM). Without a GPU, run the AI service on the host with `--device cpu` (slower).
 - **RAM**: Minimum 8GB, Recommended 16GB+
 - **Storage**: Sufficient space for video clips and models
 
 **Software:**
-- Docker Desktop + Docker Compose
-- NVIDIA Docker runtime (for GPU acceleration)
-- CUDA 12.3+ compatible drivers
+- Docker Desktop or Docker Engine with Docker Compose
+- NVIDIA Container Toolkit and CUDA 12 compatible drivers (for the GPU AI container)
+- Python 3.10+ (the backend runs on the host)
 
-**Models Required:**
-- `ai/models/yolov8n.onnx` - YOLO detection model
-- `ai/models/mobilenet.onnx` - MobileNet filtering model
-- `ai/videomae/videomae_runner.onnx` or `videomae.onnx` - VideoMAE behavior model (optional)
+### Models
+
+- `ai/models/yolov8n.onnx` – YOLO detection model (included)
+- `ai/models/mobilenet.onnx` – MobileNet screening model (included)
+- `ai/videomae/videomae_runner.onnx` or `ai/videomae/videomae.onnx` – VideoMAE behavior model (**not included**)
+
+The VideoMAE weights are not included in this repository. Without them the AI service still runs detection, tracking, in/out counting and MobileNet screening, but the shoplifting/violence feature is disabled: no behavior alerts or clips are created. To enable it, place a VideoMAE ONNX file at one of the paths above.
 
 ---
 
-## 🏃 Running the System
+## 🏃 Quick Start
 
-### Option 1: Using the Startup Script
+The current setup is **hybrid**: the database, frontend, notification service and AI service run in Docker, and the **backend runs on the host**. `docker-compose.yml` does not contain a backend service.
 
-**Linux/Mac:**
-```bash
-cd /path/to/AIPS
-chmod +x start-system.sh
-./start-system.sh
-```
-
-**Windows:**
-```powershell
-cd D:\Capstone\github\AIPS
-start-system.bat
-```
-
-**What it does:**
-- Verifies Docker and `docker-compose` availability
-- Checks for required AI model files
-- Creates necessary directories (`backend/uploads/`, `clips/`)
-- Runs `docker-compose up --build -d`
-- Performs health checks on services
-
-### Option 2: Docker Compose Directly
+### 1. Configure environment variables
 
 ```bash
-docker-compose up -d --build
+cp .env.example .env
 ```
 
-**Access points:**
-- Frontend: http://localhost:3000
+Edit `.env` and set at least `JWT_SECRET` to a long random value:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Optionally set `AI_SERVICE_TOKEN` to protect the internal AI endpoints (see [Security Notes](#-security-notes)).
+
+### 2. Start the Docker services
+
+```bash
+mkdir -p clips backend/uploads
+docker compose up -d --build        # db, frontend, notification, ai
+```
+
+The `ai` service needs an NVIDIA GPU. Without one, start the other services only and run the AI service on the host later (see [Running Services Individually](#-running-services-individually)):
+
+```bash
+docker compose up -d --build db frontend notification
+```
+
+(Older Docker installs use `docker-compose` instead of `docker compose`.)
+
+### 3. Run the backend on the host
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\Activate.ps1
+pip install -e .
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file ../.env
+```
+
+`--env-file ../.env` loads the same `.env` file, so the backend uses your `JWT_SECRET`, the local database URL and the host-side notification URL.
+
+### 4. Open the app
+
+- Frontend: http://localhost:3000 (register a manager account; this also creates your organization)
 - Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
-- Notification Service: http://localhost:8004
+- API docs (Swagger): http://localhost:8000/docs
+- Notification service: http://localhost:8004
 
-**Stop system:**
+Then create a store, add a camera, and draw lines (in/out) or a zone (behavior) on it.
+
+**Helper scripts:** `start-system.sh`, `start-system.bat`, `run-hybrid.ps1` and `start-system-no-backend.ps1` only start the Docker services. You still start the backend yourself as in step 3. [HYBRID_SETUP.md](HYBRID_SETUP.md) (Vietnamese) has more detail and troubleshooting.
+
+**Stop everything:**
 ```bash
-docker-compose down
+docker compose down        # stop Docker services
+# then press Ctrl+C in the terminal running uvicorn
 ```
 
 **View logs:**
 ```bash
-docker-compose logs -f [service-name]  # e.g., ai, backend, frontend
+docker compose logs -f [service-name]  # e.g., ai, frontend, notification, db
 ```
+
+> `docker-compose.dev.yml` and [DOCKER_SETUP.md](DOCKER_SETUP.md) describe an older all-in-Docker layout and are partly outdated.
+
+---
+
+## 🔒 Security Notes
+
+- **`JWT_SECRET`**: required for any real deployment. The built-in fallback is public and only for local development; the backend logs a warning when it is used and refuses to start when `ENV=production`.
+- **`AI_SERVICE_TOKEN`** (optional): the AI service calls internal backend endpoints that have no user login (`/api/ai/*`, the AI event endpoints under `/api/events`, and the `/api/ws/detections/ai/{camera_id}` WebSocket). When `AI_SERVICE_TOKEN` is set for both the backend and the AI service, the backend only accepts these calls with a matching `X-Service-Token` header, and the AI service sends it automatically. When it is not set, these endpoints stay open and the backend logs a warning.
+- **Database credentials**: the `aips`/`aips` Postgres user in the compose files and `.env.example` is for local development only.
+- **Camera URLs**: camera sources (RTSP URLs, which often include passwords) are not returned by the internal AI endpoints.
 
 ---
 
 ## 🔌 Key API Endpoints
+
+The full, up-to-date list is in the Swagger UI at http://localhost:8000/docs.
 
 ### Health
 - `GET /health` - Service health check
@@ -236,18 +292,19 @@ docker-compose logs -f [service-name]  # e.g., ai, backend, frontend
 - `GET /api/cameras/{id}/stream?overlay=true` - MJPEG stream
 
 ### Tasks (Zones/Lines)
-- `GET /api/tasks/camera/{id}/config` - Get camera configuration
-- `POST /api/tasks/camera/{id}/set` - Set zones/lines
-- `POST /api/tasks/camera/{id}/clear` - Clear configuration
+- `GET /api/cameras/{id}/tasks` - Get zones/lines for a camera
+- `POST /api/cameras/{id}/tasks` - Set zones/lines
+- `POST /api/cameras/{id}/tasks/clear` - Clear zones/lines
 
 ### Events & Alerts
 - `GET /api/events/alerts` - List alerts
-- `POST /api/events/anomaly-detected` - Report anomaly (AI service)
-- `POST /api/events/acknowledge/{alert_id}` - Acknowledge alert
+- `PUT /api/events/alerts/{alert_id}/acknowledge` - Acknowledge alert
+- `POST /api/events/anomaly-detected` - Report anomaly (internal, AI service)
 
 ### Video Clips
-- `GET /api/clips/` - List saved video clips
+- `GET /api/clips` - List saved video clips
 - `GET /api/clips/{filename}` - Download clip
+- `DELETE /api/clips/{filename}` - Delete clip (manager of the owning organization)
 
 ### WebSocket Endpoints
 - `WS /api/ws/detections` - Real-time detection updates (bounding boxes, metrics)
@@ -255,20 +312,20 @@ docker-compose logs -f [service-name]  # e.g., ai, backend, frontend
 - `WS /api/ws/alerts` - Real-time alert notifications
 - `WS /api/ws/detections/ai/{camera_id}` - AI service connection (internal)
 
-### AI Integration
+### AI Integration (internal, used by the AI service)
 - `GET /api/ai/cameras` - List cameras for AI processing
-- `GET /api/ai/cameras/{id}/frame` - Get camera frame (AI service)
+- `GET /api/ai/cameras/{id}/frame` - Get camera frame
 - `GET /api/ai/cameras/{id}/config` - Get camera config (zones, lines)
 
 ---
 
-## 🧪 Development Mode
+## 💻 Running Services Individually
 
 ### Backend (FastAPI)
 ```bash
 cd backend
 pip install -e .
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file ../.env
 ```
 
 ### Frontend (Next.js)
@@ -283,8 +340,10 @@ npm run dev
 ```bash
 cd ai
 pip install -r requirements.txt
-python service_mode.py --backend-url http://localhost:8000 --device cuda
+python service_mode.py --backend-url http://localhost:8000 --device cuda   # or --device cpu
 ```
+
+If you set `AI_SERVICE_TOKEN` for the backend, export the same value in this shell before starting the AI service.
 
 ### Notification Service
 ```bash
@@ -297,13 +356,14 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8004
 
 ## 📊 AI Pipeline Performance
 
-The full pipeline—including YOLO detection, DeepSORT tracking, per-identity buffer updates, lightweight MobileNet filtering, and asynchronous VideoMAE analysis—is executed on a live camera stream using an NVIDIA GeForce RTX 3050 (4 GB VRAM).
+The pipeline runs YOLO detection and DeepSORT tracking on each processed frame and keeps a short frame buffer for every tracked person. MobileNet screens person crops in a background thread pool (asynchronous). VideoMAE runs only on tracks that MobileNet flags as suspicious; it runs synchronously inside the frame-processing loop, so frame processing pauses while a VideoMAE call is running.
 
-**Performance Metrics:**
+The numbers below were measured by the team on their development machine (NVIDIA GeForce RTX 3050, 4 GB VRAM) with a live camera stream. They are approximate figures from development; no benchmark logs are committed to this repository.
+
 - YOLO Inference: ~35-45ms per frame
 - DeepSORT Tracking: ~12-20ms per frame
-- MobileNet Filtering: ~15-20ms per crop (async)
-- VideoMAE Analysis: ~280-425ms per clip (16 frames)
+- MobileNet Screening: ~15-20ms per crop (async)
+- VideoMAE Analysis: ~280-425ms per clip (16 frames), only for suspicious tracks
 - Overall Pipeline FPS: ~7-20 FPS (depending on camera count and load)
 
 ---
@@ -312,16 +372,22 @@ The full pipeline—including YOLO detection, DeepSORT tracking, per-identity bu
 
 ### Environment Variables
 
-**Backend** (`docker-compose.yml`):
+See [.env.example](.env.example) for all values with comments.
+
+**Backend** (host, loaded with `--env-file ../.env`):
+- `ENV` - `dev` (default) or `production`
+- `JWT_SECRET` - JWT signing secret (required in production)
 - `DATABASE_URL` - PostgreSQL connection string
-- `JWT_SECRET` - JWT signing secret
 - `CORS_ORIGINS` - Allowed CORS origins
 - `CLIPS_DIR` - Directory for saved video clips
+- `NOTIFICATION_SERVICE_URL` - Notification service URL (use `http://localhost:8004` when the backend runs on the host)
+- `AI_SERVICE_TOKEN` - Optional shared token for internal AI endpoints
 
 **AI Service** (`docker-compose.yml`):
 - `BACKEND_URL` - Backend API URL
 - `AI_DEVICE` - `cuda` or `cpu`
 - `CLIPS_DIR` - Directory for saving clips
+- `AI_SERVICE_TOKEN` - Must match the backend value when used
 
 **Frontend** (`docker-compose.yml`):
 - `NEXT_PUBLIC_API_URL` - Backend API URL
@@ -342,9 +408,13 @@ The full pipeline—including YOLO detection, DeepSORT tracking, per-identity bu
 - Test with: `curl "http://localhost:8000/api/preview/test?source=<RTSP_URL>"`
 
 **AI Service not detecting behaviors**
+- Check that the VideoMAE weights are present (see [Models](#models)); without them no behavior alerts are created
 - Check GPU availability: `nvidia-smi`
-- Verify models are present: `ls ai/models/`
-- Check AI service logs: `docker-compose logs -f ai`
+- Verify models are present: `ls ai/models/ ai/videomae/`
+- Check AI service logs: `docker compose logs -f ai`
+
+**AI Service gets 401 errors**
+- `AI_SERVICE_TOKEN` must have the same value for the backend and the AI service (or be unset for both)
 
 **WebSocket connection issues**
 - Verify backend/notification service is running
@@ -352,46 +422,38 @@ The full pipeline—including YOLO detection, DeepSORT tracking, per-identity bu
 - Ensure JWT token is valid
 
 **Database connection errors**
-- Verify PostgreSQL container is running: `docker-compose ps db`
-- Check database logs: `docker-compose logs db`
+- Verify PostgreSQL container is running: `docker compose ps db`
+- Check database logs: `docker compose logs db`
 - Ensure `DATABASE_URL` is correct
 
 ---
 
 ## 🧪 Testing
 
-The project includes comprehensive test suites for all components. See [TESTING.md](TESTING.md) for detailed testing documentation.
+The repository has unit, integration and end-to-end tests for the backend, unit tests for the AI modules, and a few frontend tests. Tests do not need the running system. See [TESTING.md](TESTING.md) for details.
 
-### Quick Start
-
-**Backend Tests:**
+**Backend tests:**
 ```bash
 cd backend
 pip install -e ".[test]"
 pytest
 ```
 
-**Frontend Tests:**
+**Frontend tests:**
 ```bash
 cd frontend
 npm install
 npm test
 ```
 
-**AI Service Tests:**
+**AI service tests:**
 ```bash
 cd ai
-pip install pytest numpy
+pip install -r requirements.txt pytest
 pytest tests/
 ```
 
-### Test Coverage
-
-- **Unit Tests**: Core services and utilities (>80% coverage goal)
-- **Integration Tests**: API endpoints and database interactions
-- **End-to-End Tests**: Complete user workflows
-
-Run tests with coverage:
+**Coverage reports:**
 ```bash
 # Backend
 pytest --cov=app --cov-report=html
@@ -399,46 +461,6 @@ pytest --cov=app --cov-report=html
 # Frontend
 npm run test:coverage
 ```
-
----
-
-## 🧪 Testing
-
-The project includes comprehensive test suites. **Tests run independently** of your running system and don't interfere with it.
-
-### Quick Start
-
-**First time setup:**
-```bash
-# Install python3-venv if needed (Ubuntu/Debian)
-sudo apt install python3.10-venv
-
-# Run setup script
-./setup-testing.sh
-```
-
-**Run tests:**
-```bash
-# Activate virtual environment
-source venv/bin/activate
-
-# Run all tests
-./run-all-tests.sh
-```
-
-**Run individual service tests:**
-```bash
-# Backend
-cd backend && pytest
-
-# Frontend  
-cd frontend && npm test
-
-# AI Service
-cd ai && pytest tests/
-```
-
-See [QUICK_START_TESTING.md](QUICK_START_TESTING.md) for quick setup guide and [TESTING.md](TESTING.md) for detailed documentation.
 
 ---
 
@@ -463,4 +485,4 @@ See [QUICK_START_TESTING.md](QUICK_START_TESTING.md) for quick setup guide and [
 
 ## 📄 License
 
-MIT
+No license has been chosen yet. Please contact the repository owner before reusing this code.
