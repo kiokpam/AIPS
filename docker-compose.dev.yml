@@ -17,6 +17,11 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips='*'
     environment:
       - DATABASE_URL=postgresql+psycopg://aips:aips@db:5432/aips
+      # JWT signing secret. Set it in .env (see .env.example). If it is empty the
+      # backend falls back to a public dev secret and logs a warning; with
+      # ENV=production it refuses to start.
+      - ENV=${ENV:-dev}
+      - JWT_SECRET=${JWT_SECRET:-}
       - CORS_ORIGINS=*
       - PEOPLE_COUNTING_URL=http://people-counting:8001
       - BEHAVIOR_DETECTION_URL=http://behavior-detection:8002
