@@ -2,6 +2,8 @@ services:
   db:
     image: timescale/timescaledb-ha:pg15-latest
     environment:
+      # DEV-ONLY credentials for a local database. Change them (and the backend's
+      # DATABASE_URL) before running anywhere other than your own machine.
       - POSTGRES_USER=aips
       - POSTGRES_PASSWORD=aips
       - POSTGRES_DB=aips
