@@ -414,7 +414,7 @@ See [.env.example](.env.example) for all values with comments.
 - Check AI service logs: `docker compose logs -f ai`
 
 **AI Service gets 401 errors**
-- `AI_SERVICE_TOKEN` must have the same value for the backend and the AI service (or be unset for both)
+- `AI_SERVICE_TOKEN` must have the same value for the backend and the AI service (or be unset for both). A mismatch shows up as 401 responses and an HTTP 403 WebSocket handshake error in the AI service log
 
 **WebSocket connection issues**
 - Verify backend/notification service is running

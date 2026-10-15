@@ -60,6 +60,7 @@ async def websocket_detections_ai(websocket: WebSocket, camera_id: str):
     )
     if not is_valid_service_token(provided_token):
         logger.warning(f"Rejected AI service WebSocket for camera {camera_id}: invalid or missing service token")
+        # Closing before accept() rejects the handshake, so the client sees HTTP 403
         await websocket.close(code=4401, reason="Invalid or missing service token")
         return
 
