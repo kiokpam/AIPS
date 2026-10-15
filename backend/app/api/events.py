@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 
 from app.api.deps import CurrentMembership, get_current_membership, get_db, MembershipRole
+from app.api.service_auth import require_service_token
 from app.models.core import Alert as AlertModel, Camera as CameraModel, Store as StoreModel, MemberPermission, CountingZone
 from app.schemas.events import CounterUpdateEvent, InOutUpdateEvent, AnomalyDetectedEvent, AlertResponse, AlertsResponse, DetectionUpdateEvent
 from app.services.camera_manager import camera_manager
@@ -55,7 +56,8 @@ def _get_allowed_camera_ids(current: CurrentMembership, db: Session) -> List[str
         return [perm.camera_id for perm in permissions]
 
 
-@router.post("/counter-update")
+# Internal endpoint for the AI service (protected by AI_SERVICE_TOKEN when set)
+@router.post("/counter-update", dependencies=[Depends(require_service_token)])
 def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_db)):
     """Receive counter update events from People Counting AI (zone-based counts)"""
     try:
@@ -89,7 +91,8 @@ def receive_counter_update(event: CounterUpdateEvent, db: Session = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/inout-update")
+# Internal endpoint for the AI service (protected by AI_SERVICE_TOKEN when set)
+@router.post("/inout-update", dependencies=[Depends(require_service_token)])
 def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db)):
     """
     Receive In/Out counting updates from AI service.
@@ -177,7 +180,8 @@ def receive_inout_update(event: InOutUpdateEvent, db: Session = Depends(get_db))
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/detection-update")
+# Internal endpoint for the AI service (protected by AI_SERVICE_TOKEN when set)
+@router.post("/detection-update", dependencies=[Depends(require_service_token)])
 def receive_detection_update(event: DetectionUpdateEvent, db: Session = Depends(get_db)):
     """
     Receive real-time detection data from AI service.
@@ -420,7 +424,8 @@ def get_inout_summary(
         ]
     }
 
-@router.post("/anomaly-detected")
+# Internal endpoint for the AI service (protected by AI_SERVICE_TOKEN when set)
+@router.post("/anomaly-detected", dependencies=[Depends(require_service_token)])
 def receive_anomaly_detected(event: AnomalyDetectedEvent, db: Session = Depends(get_db)):
     """Receive anomaly detection events from Behavior Detection AI"""
     try:

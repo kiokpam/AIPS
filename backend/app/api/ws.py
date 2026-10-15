@@ -3,6 +3,7 @@ import json
 import logging
 
 from app.api.deps import authenticate_token
+from app.api.service_auth import SERVICE_TOKEN_HEADER, SERVICE_TOKEN_QUERY_PARAM, is_valid_service_token
 from app.db.session import SessionLocal
 from app.services.websocket_manager import inout_ws_manager, detection_ws_manager, alerts_ws_manager
 
@@ -50,8 +51,18 @@ async def websocket_detections_ai(websocket: WebSocket, camera_id: str):
     WebSocket endpoint for AI service to send detection updates.
     
     AI service connects here and sends detection updates in real-time.
-    No authentication required (internal service).
+    No user login (internal service). When AI_SERVICE_TOKEN is set, the AI service
+    must send it in the X-Service-Token header (or the service_token query parameter).
     """
+    provided_token = (
+        websocket.headers.get(SERVICE_TOKEN_HEADER)
+        or websocket.query_params.get(SERVICE_TOKEN_QUERY_PARAM)
+    )
+    if not is_valid_service_token(provided_token):
+        logger.warning(f"Rejected AI service WebSocket for camera {camera_id}: invalid or missing service token")
+        await websocket.close(code=4401, reason="Invalid or missing service token")
+        return
+
     # Accept WebSocket connection first (required before any operations)
     await websocket.accept()
     logger.info(f"AI service WebSocket connection accepted for camera {camera_id}")

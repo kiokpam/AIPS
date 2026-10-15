@@ -24,6 +24,9 @@ Usage:
 Environment Variables:
     BACKEND_URL: Backend API URL (default: http://backend:8000)
     AI_DEVICE: Inference device - 'cuda' for GPU or 'cpu' for CPU (default: cuda)
+    AI_SERVICE_TOKEN: Optional shared token. When set, it is sent as the
+        X-Service-Token header on every backend call (must match the backend's
+        AI_SERVICE_TOKEN).
 
 Author: AIPS Development Team
 License: See project LICENSE file
@@ -68,6 +71,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 LOGGER = logging.getLogger("ai-service")
+
+# Optional shared token for the backend's internal AI endpoints. Must match the
+# backend's AI_SERVICE_TOKEN. Empty means no header is sent (previous behavior).
+AI_SERVICE_TOKEN = os.environ.get('AI_SERVICE_TOKEN', '').strip()
+SERVICE_AUTH_HEADERS: Dict[str, str] = {'X-Service-Token': AI_SERVICE_TOKEN} if AI_SERVICE_TOKEN else {}
 
 
 class AIModels:
@@ -264,6 +272,17 @@ class CameraProcessor:
         self.ws_thread = threading.Thread(target=ws_thread_worker, daemon=True)
         self.ws_thread.start()
     
+    async def _connect_websocket(self, ws_uri: str):
+        """Open the backend WebSocket, sending the service token header when configured."""
+        if not SERVICE_AUTH_HEADERS:
+            return await websockets.connect(ws_uri)
+        try:
+            # websockets >= 14 (new asyncio client)
+            return await websockets.connect(ws_uri, additional_headers=SERVICE_AUTH_HEADERS)
+        except TypeError:
+            # websockets < 14 (legacy client) names the argument extra_headers
+            return await websockets.connect(ws_uri, extra_headers=SERVICE_AUTH_HEADERS)
+    
     async def _websocket_handler(self):
         """Main WebSocket handler running in dedicated event loop."""
         ws_url = self.backend_url.replace('http://', 'ws://').replace('https://', 'wss://')
@@ -273,7 +292,7 @@ class CameraProcessor:
             try:
                 # Connect to WebSocket
                 try:
-                    self.ws_connection = await websockets.connect(ws_uri)
+                    self.ws_connection = await self._connect_websocket(ws_uri)
                     with self.ws_lock:
                         self.ws_connected = True
                     self.last_ws_error = None
@@ -351,6 +370,7 @@ class CameraProcessor:
         try:
             resp = requests.get(
                 f"{self.backend_url}/api/ai/cameras/{self.camera_id}/health",
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=2
             )
             if resp.status_code == 200:
@@ -451,7 +471,7 @@ class CameraProcessor:
         """Pull latest frame from backend API."""
         try:
             url = f"{self.backend_url}/api/ai/cameras/{self.camera_id}/frame"
-            resp = requests.get(url, timeout=0.5)  # Reduced from 2s to 0.5s for faster response
+            resp = requests.get(url, headers=SERVICE_AUTH_HEADERS, timeout=0.5)  # Reduced from 2s to 0.5s for faster response
             
             if resp.status_code == 200:
                 # Success - reset failure counter
@@ -1182,6 +1202,7 @@ class CameraProcessor:
             resp = requests.post(
                 f"{self.backend_url}/api/events/detection-update",
                 json=payload,
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=1  # Short timeout
             )
             if resp.status_code != 200 and self.frame_idx % 100 == 0:
@@ -1229,6 +1250,7 @@ class CameraProcessor:
                     'count_out': count_out,
                     'ts': timestamp,
                 },
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=1
             )
             if resp.status_code == 200:
@@ -1280,6 +1302,7 @@ class CameraProcessor:
                     'clip_ref': clip_ref,
                     'ts': timestamp,
                 },
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=1
             )
             if resp.status_code == 200:
@@ -1462,6 +1485,7 @@ class AIService:
             resp = requests.get(
                 f"{self.backend_url}/api/ai/cameras",
                 params={'active_only': True},
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=10
             )
             if resp.status_code == 200:
@@ -1475,6 +1499,7 @@ class AIService:
         try:
             resp = requests.get(
                 f"{self.backend_url}/api/ai/cameras/{camera_id}/config",
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=5
             )
             if resp.status_code == 200:

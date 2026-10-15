@@ -79,6 +79,9 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       # Performance: Disable per-frame DB writes for real-time bounding boxes
       - ENABLE_DETECTION_DB_PERSIST=false
+      # Optional shared token for the backend's internal AI endpoints. Set the
+      # same AI_SERVICE_TOKEN in .env for the backend (see .env.example).
+      - AI_SERVICE_TOKEN=${AI_SERVICE_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
