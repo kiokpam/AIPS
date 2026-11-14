@@ -8,7 +8,20 @@ This README explains the system architecture, how to run it, and key features.
 
 ## 🎬 Demo
 
-Screenshots and a short demo video are coming soon.
+Screenshots of the web app connected to two cameras in a café (December 2025). Faces are blurred.
+
+![Cameras page: live view of two cameras with detected people, a counting zone and an in/out line](docs/media/aips-cameras.jpg)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/aips-counting.jpg" alt="Counting analytics page with people in and out over time"></td>
+    <td width="50%"><img src="docs/media/aips-behavior.jpg" alt="Behavior monitoring page with shoplifting and violence alert counters"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Counting analytics:</b> people in and out over time</td>
+    <td align="center"><b>Behavior monitoring:</b> shoplifting and violence alerts by store (no alerts at the time of the screenshot)</td>
+  </tr>
+</table>
 
 ---
 
