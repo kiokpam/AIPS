@@ -25,7 +25,7 @@ Hướng dẫn chạy hệ thống AIPS ở chế độ Hybrid:
 
 ### Bước 1: Chạy script
 ```powershell
-cd "c:\Users\quang\OneDrive\Desktop\AIPS-master (1)\AIPS-master"
+cd path\to\AIPS
 .\run-hybrid.ps1
 ```
 
@@ -39,7 +39,7 @@ Script sẽ tự động:
 ### Bước 2: Chạy Backend (terminal mới)
 ```powershell
 # Vào thư mục backend
-cd "c:\Users\quang\OneDrive\Desktop\AIPS-master (1)\AIPS-master\backend"
+cd path\to\AIPS\backend
 
 # Cài đặt dependencies (chỉ cần làm 1 lần)
 pip install -e .
@@ -55,7 +55,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### Bước 1: Start Docker Services
 
 ```powershell
-cd "c:\Users\quang\OneDrive\Desktop\AIPS-master (1)\AIPS-master"
+cd path\to\AIPS
 
 # Tạo thư mục
 New-Item -ItemType Directory -Force -Path "backend\uploads"

@@ -77,7 +77,7 @@ Write-Host ""
 Write-Host "Mo terminal moi va chay cac lenh sau:" -ForegroundColor White
 Write-Host ""
 Write-Host "# Buoc 1: Vao thu muc backend" -ForegroundColor Yellow
-Write-Host 'cd "c:\Users\quang\OneDrive\Desktop\AIPS-master (1)\AIPS-master\backend"' -ForegroundColor Green
+Write-Host "cd `"$PSScriptRoot\backend`"" -ForegroundColor Green
 Write-Host ""
 Write-Host "# Buoc 2: Cai dat dependencies (chi can lam 1 lan)" -ForegroundColor Yellow
 Write-Host "pip install -e ." -ForegroundColor Green

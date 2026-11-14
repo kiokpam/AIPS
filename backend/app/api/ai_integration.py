@@ -8,6 +8,13 @@ This API is designed for AI services to:
 3. Report health status
 
 AI services should poll this API and push results to /api/events/*.
+
+These endpoints have no user login. When AI_SERVICE_TOKEN is set they require
+the X-Service-Token header (see app/api/service_auth.py).
+
+Camera "source" values (RTSP URLs, which often contain camera passwords) are
+not returned here: the AI service pulls frames through the backend and never
+connects to cameras directly.
 """
 
 import base64
@@ -19,10 +26,15 @@ import cv2
 import numpy as np
 
 from app.api.deps import get_db, get_current_membership_optional
+from app.api.service_auth import require_service_token
 from app.models.core import Camera as CameraModel, CountingZone, CountingLine
 from app.services.camera_manager import camera_manager
 
-router = APIRouter(prefix="/ai", tags=["ai-integration"])
+router = APIRouter(
+    prefix="/ai",
+    tags=["ai-integration"],
+    dependencies=[Depends(require_service_token)],
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +48,7 @@ def get_camera_frame_for_ai(
     """
     Get latest frame from a camera for AI processing.
     This endpoint is designed for AI services to pull frames.
-    No authentication required (AI services run in trusted network).
+    No user login; protected by AI_SERVICE_TOKEN when it is set.
     """
     # Verify camera exists
     camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
@@ -199,7 +211,6 @@ def get_camera_config_for_ai(
         "camera_id": camera_id,
         "store_id": camera.store_id,
         "name": camera.name,
-        "source": camera.source,
         "ai_services": camera.ai_services,
         "skip_frame": camera.skip_frame,
         "is_active": camera.is_active,
@@ -316,7 +327,6 @@ def list_cameras_for_ai(
             "camera_id": cam.id,
             "store_id": cam.store_id,
             "name": cam.name,
-            "source": cam.source,
             "ai_services": cam.ai_services,
             "is_active": cam.is_active,
         }

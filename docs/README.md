@@ -111,7 +111,7 @@ User → Frontend (Next.js:3000)
 
 ```bash
 # Chạy hệ thống
-cd "c:\Users\quang\OneDrive\Desktop\AIPS-master (1)\AIPS-master"
+cd path\to\AIPS
 docker-compose up -d --build
 
 # Xem logs

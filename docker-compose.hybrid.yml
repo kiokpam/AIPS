@@ -9,6 +9,8 @@ services:
     container_name: aips-db
     restart: unless-stopped
     environment:
+      # DEV-ONLY credentials for a local database. Change them (and the backend's
+      # DATABASE_URL) before running anywhere other than your own machine.
       - POSTGRES_USER=aips
       - POSTGRES_PASSWORD=aips
       - POSTGRES_DB=aips
@@ -86,6 +88,9 @@ services:
       - PYTHONUNBUFFERED=1
       - NVIDIA_VISIBLE_DEVICES=all
       - ENABLE_DETECTION_DB_PERSIST=false
+      # Optional shared token for the backend's internal AI endpoints. Set the
+      # same AI_SERVICE_TOKEN in .env for the backend (see .env.example).
+      - AI_SERVICE_TOKEN=${AI_SERVICE_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

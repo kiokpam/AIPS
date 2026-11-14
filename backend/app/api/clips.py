@@ -372,11 +372,40 @@ def get_video_clip(
     )
 
 
+def _clip_belongs_to_org(safe_filename: str, org_id: str, db: Session) -> bool:
+    """Return True if a clip file can be attributed to the given organization.
+
+    A clip belongs to an organization when the camera id encoded in its filename
+    is one of the organization's cameras, or when one of the organization's
+    alerts references the file.
+    """
+    camera_id = parse_clip_filename(safe_filename).get("camera_id")
+    if camera_id:
+        camera = db.query(CameraModel.id).filter(
+            CameraModel.id == camera_id,
+            CameraModel.org_id == org_id,
+        ).first()
+        if camera:
+            return True
+
+    alert = db.query(AlertModel.id).filter(
+        AlertModel.org_id == org_id,
+        AlertModel.clip_ref == safe_filename,
+    ).first()
+    return alert is not None
+
+
 @router.delete("/{filename}")
 def delete_video_clip(
     filename: str,
-    current: CurrentMembership = Depends(get_current_membership_optional),
+    current: CurrentMembership = Depends(get_current_membership_flexible),
+    db: Session = Depends(get_db),
 ):
+    """Delete a clip. Requires a manager of the organization that owns the clip.
+
+    Returns 401 without a valid token, 403 for non-managers and 404 when the
+    clip does not exist or belongs to another organization.
+    """
     if current.role != MembershipRole.manager:
         raise HTTPException(status_code=403, detail="Only managers can delete clips")
 
@@ -384,6 +413,10 @@ def delete_video_clip(
     clip_path = CLIPS_DIR / safe_filename
 
     if not clip_path.exists():
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    if not _clip_belongs_to_org(safe_filename, current.organization.id, db):
+        logger.warning(f"Clip delete denied: {safe_filename} does not belong to org {current.organization.id}")
         raise HTTPException(status_code=404, detail="Clip not found")
 
     try:

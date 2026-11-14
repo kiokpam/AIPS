@@ -8,7 +8,7 @@ Tôi đã tạo **2 tài liệu chi tiết** để giúp bạn hiểu rõ hệ t
 
 ## 📚 Tài Liệu Đã Tạo
 
-### 1. [Hướng Dẫn Hệ Thống AIPS](file:///C:/Users/quang/.gemini/antigravity/brain/c9add566-1786-408e-a795-4bd04a39c5e2/aips_system_guide.md)
+### 1. [Hướng Dẫn Hệ Thống AIPS](aips_system_guide.md)
 
 **Nội dung chính**:
 - ✅ **Kiến trúc tổng thể**: Sơ đồ Mermaid minh họa 5 services và cách chúng kết nối
@@ -23,7 +23,7 @@ Tôi đã tạo **2 tài liệu chi tiết** để giúp bạn hiểu rõ hệ t
 - ✅ **Monitoring**: Logs, health checks, resource monitoring
 - ✅ **Roadmap học tập**: Lộ trình 8-12 tháng để trở thành Full-Stack AI Developer
 
-### 2. [Ví Dụ Code Thực Tế](file:///C:/Users/quang/.gemini/antigravity/brain/c9add566-1786-408e-a795-4bd04a39c5e2/code_examples.md)
+### 2. [Ví Dụ Code Thực Tế](code_examples.md)
 
 **Nội dung chính**:
 - ✅ **Frontend → Backend**: REST API calls với TypeScript
@@ -155,7 +155,7 @@ DevOps:    Docker + Docker Compose + Nginx
 
 ### Để Chạy Hệ Thống:
 ```bash
-cd "c:\Users\quang\OneDrive\Desktop\AIPS-master (1)\AIPS-master"
+cd path\to\AIPS
 docker-compose up -d --build
 ```
 
@@ -179,13 +179,13 @@ docker exec aips-backend ping aips-db
 ## ❓ Câu Hỏi Thường Gặp
 
 ### Q: Tôi nên bắt đầu từ đâu?
-**A**: Đọc [Hướng Dẫn Hệ Thống](file:///C:/Users/quang/.gemini/antigravity/brain/c9add566-1786-408e-a795-4bd04a39c5e2/aips_system_guide.md) phần "Kiến Trúc Hệ Thống" trước, sau đó chạy thử hệ thống local.
+**A**: Đọc [Hướng Dẫn Hệ Thống](aips_system_guide.md) phần "Kiến Trúc Hệ Thống" trước, sau đó chạy thử hệ thống local.
 
 ### Q: Tôi chưa biết Docker, có sao không?
 **A**: Không sao! Đọc phần "Docker và Docker Compose" trong tài liệu, có giải thích chi tiết từng khái niệm.
 
 ### Q: Làm sao để hiểu luồng dữ liệu?
-**A**: Xem phần "Ví Dụ Thực Tế: Phát Hiện Trộm Cắp" trong guide, và sequence diagram trong [Code Examples](file:///C:/Users/quang/.gemini/antigravity/brain/c9add566-1786-408e-a795-4bd04a39c5e2/code_examples.md).
+**A**: Xem phần "Ví Dụ Thực Tế: Phát Hiện Trộm Cắp" trong guide, và sequence diagram trong [Code Examples](code_examples.md).
 
 ### Q: Deploy production khác gì development?
 **A**: Xem phần "Deploy Thực Tế: Tách Service Ra Nhiều Server" có hướng dẫn chi tiết với sơ đồ.
@@ -207,6 +207,5 @@ Bạn đã có **2 tài liệu hoàn chỉnh** để:
 
 ## 📁 File Tham Khảo
 
-- [aips_system_guide.md](file:///C:/Users/quang/.gemini/antigravity/brain/c9add566-1786-408e-a795-4bd04a39c5e2/aips_system_guide.md) - Hướng dẫn chi tiết (13,000+ từ)
-- [code_examples.md](file:///C:/Users/quang/.gemini/antigravity/brain/c9add566-1786-408e-a795-4bd04a39c5e2/code_examples.md) - Ví dụ code thực tế (8,000+ từ)
-- [task.md](file:///C:/Users/quang/.gemini/antigravity/brain/c9add566-1786-408e-a795-4bd04a39c5e2/task.md) - Task checklist
+- [aips_system_guide.md](aips_system_guide.md) - Hướng dẫn chi tiết (13,000+ từ)
+- [code_examples.md](code_examples.md) - Ví dụ code thực tế (8,000+ từ)

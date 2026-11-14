@@ -24,6 +24,9 @@ Usage:
 Environment Variables:
     BACKEND_URL: Backend API URL (default: http://backend:8000)
     AI_DEVICE: Inference device - 'cuda' for GPU or 'cpu' for CPU (default: cuda)
+    AI_SERVICE_TOKEN: Optional shared token. When set, it is sent as the
+        X-Service-Token header on every backend call (must match the backend's
+        AI_SERVICE_TOKEN).
 
 Author: AIPS Development Team
 License: See project LICENSE file
@@ -68,6 +71,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 LOGGER = logging.getLogger("ai-service")
+
+# Optional shared token for the backend's internal AI endpoints. Must match the
+# backend's AI_SERVICE_TOKEN. Empty means no header is sent (previous behavior).
+AI_SERVICE_TOKEN = os.environ.get('AI_SERVICE_TOKEN', '').strip()
+SERVICE_AUTH_HEADERS: Dict[str, str] = {'X-Service-Token': AI_SERVICE_TOKEN} if AI_SERVICE_TOKEN else {}
 
 
 class AIModels:
@@ -264,6 +272,17 @@ class CameraProcessor:
         self.ws_thread = threading.Thread(target=ws_thread_worker, daemon=True)
         self.ws_thread.start()
     
+    async def _connect_websocket(self, ws_uri: str):
+        """Open the backend WebSocket, sending the service token header when configured."""
+        if not SERVICE_AUTH_HEADERS:
+            return await websockets.connect(ws_uri)
+        try:
+            # websockets >= 14 (new asyncio client)
+            return await websockets.connect(ws_uri, additional_headers=SERVICE_AUTH_HEADERS)
+        except TypeError:
+            # websockets < 14 (legacy client) names the argument extra_headers
+            return await websockets.connect(ws_uri, extra_headers=SERVICE_AUTH_HEADERS)
+    
     async def _websocket_handler(self):
         """Main WebSocket handler running in dedicated event loop."""
         ws_url = self.backend_url.replace('http://', 'ws://').replace('https://', 'wss://')
@@ -273,7 +292,7 @@ class CameraProcessor:
             try:
                 # Connect to WebSocket
                 try:
-                    self.ws_connection = await websockets.connect(ws_uri)
+                    self.ws_connection = await self._connect_websocket(ws_uri)
                     with self.ws_lock:
                         self.ws_connected = True
                     self.last_ws_error = None
@@ -351,6 +370,7 @@ class CameraProcessor:
         try:
             resp = requests.get(
                 f"{self.backend_url}/api/ai/cameras/{self.camera_id}/health",
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=2
             )
             if resp.status_code == 200:
@@ -451,7 +471,7 @@ class CameraProcessor:
         """Pull latest frame from backend API."""
         try:
             url = f"{self.backend_url}/api/ai/cameras/{self.camera_id}/frame"
-            resp = requests.get(url, timeout=0.5)  # Reduced from 2s to 0.5s for faster response
+            resp = requests.get(url, headers=SERVICE_AUTH_HEADERS, timeout=0.5)  # Reduced from 2s to 0.5s for faster response
             
             if resp.status_code == 200:
                 # Success - reset failure counter
@@ -1044,77 +1064,6 @@ class CameraProcessor:
             },
             'total_frame_time_ms': round(avg_frame_time * 1000, 2),
         }
-        # Cleanup old buffers
-        active_tids = set(tid for tid, _ in tracks)
-        for tid in list(self.buffers.keys()):
-            if tid not in active_tids:
-                # Process lost tracks with VideoMAE if they were awaiting
-                if tid in self.awaiting_vmae and tid not in self.vmae_processing:
-                    if self.models.videomae:
-                        frames = self.buffers[tid].get_clip_frames()
-                        if frames:
-                            try:
-                                videomae_start = time.perf_counter()
-                                vres = self.models.videomae.predict_buffer(frames, num_frames=16, fps=self.fps)
-                                videomae_time = time.perf_counter() - videomae_start
-                                self.model_timings['videomae'].append(videomae_time)
-                                
-                                # Check if VideoMAE returned a valid result
-                                if vres is None or not isinstance(vres, dict):
-                                    LOGGER.warning(f"Lost track {tid}: VideoMAE returned invalid result: {vres}, skipping")
-                                    continue
-                                
-                                vmae_label = vres.get('label', 'normal')
-                                vmae_score = vres.get('score', 0.0)
-                                
-                                label_lower = vmae_label.lower()
-                                if label_lower != 'normal' and vmae_score > 0.5:
-                                    clip_name = f"{self.camera_id}_{tid}_{vmae_label.replace(' ', '_')}_{int(vmae_score*100)}_lost.mp4"
-                                    clip_path = self.clip_dir / clip_name
-                                    
-                                    if not frames or len(frames) == 0:
-                                        LOGGER.warning(f"Lost track {tid}: No frames to save for {vmae_label} clip")
-                                    else:
-                                        try:
-                                            # Prefer camera FPS when actual_fps is too low to avoid slow playback
-                                            save_fps = self.actual_fps if (self.actual_fps > 0 and self.actual_fps >= 0.8 * self.fps) else self.fps
-                                            clip_duration = len(frames) / save_fps if save_fps > 0 else 0
-                                            
-                                            # Minimum clip duration check: require at least 1 second of footage
-                                            min_frames_required = int(round(save_fps * 1.0))  # At least 1 second
-                                            if len(frames) < min_frames_required:
-                                                LOGGER.warning(f"Lost track {tid}: Skipping clip save - only {len(frames)} frames (need {min_frames_required} for 1s at {save_fps:.1f} FPS)")
-                                            else:
-                                                LOGGER.info(f"Lost track {tid}: Saving {len(frames)} frames to {clip_path} at {save_fps:.2f} FPS (duration: {clip_duration:.2f}s, camera: {self.fps:.2f}, actual: {self.actual_fps:.2f})")
-                                                save_frames_as_video(frames, save_fps, str(clip_path))
-                                                
-                                                # Verify file was actually created
-                                                if clip_path.exists() and clip_path.stat().st_size > 0:
-                                                    LOGGER.info(f"🎥 Lost track {tid}: Saved {vmae_label} clip: {clip_path.name} ({clip_path.stat().st_size} bytes)")
-                                                    # Add behavior so alerts can be pushed (even on lost tracks)
-                                                    results['behaviors'].append({
-                                                        'track_id': tid,
-                                                        'label': vmae_label,
-                                                        'confidence': vmae_score,
-                                                        'bbox': None,
-                                                        'source': 'videomae',
-                                                        'clip_path': str(clip_path),
-                                                    })
-                                                else:
-                                                    LOGGER.error(f"Lost track {tid}: File {clip_path} was not created or is empty after save_frames_as_video")
-                                        except Exception as e:
-                                            LOGGER.error(f"Failed to save lost track clip for {tid}: {e}", exc_info=True)
-                            except Exception as e:
-                                LOGGER.debug(f"Failed to process lost track {tid}: {e}")
-                
-                # Cleanup
-                del self.buffers[tid]
-                self.mobi_labels.pop(tid, None)
-                self.last_mobi_frame.pop(tid, None)
-                self.awaiting_vmae.pop(tid, None)
-                self.vmae_processing.discard(tid)
-                self.base_max_frames.pop(tid, None)
-                self.vmae_results.pop(tid, None)
     
     def _push_detections_websocket(self, detections: List[Dict], people_in_zone: int, timestamp: str, metrics: Optional[Dict] = None):
         """Push detection updates via WebSocket (non-blocking) with HTTP fallback."""
@@ -1182,6 +1131,7 @@ class CameraProcessor:
             resp = requests.post(
                 f"{self.backend_url}/api/events/detection-update",
                 json=payload,
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=1  # Short timeout
             )
             if resp.status_code != 200 and self.frame_idx % 100 == 0:
@@ -1229,6 +1179,7 @@ class CameraProcessor:
                     'count_out': count_out,
                     'ts': timestamp,
                 },
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=1
             )
             if resp.status_code == 200:
@@ -1280,6 +1231,7 @@ class CameraProcessor:
                     'clip_ref': clip_ref,
                     'ts': timestamp,
                 },
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=1
             )
             if resp.status_code == 200:
@@ -1462,6 +1414,7 @@ class AIService:
             resp = requests.get(
                 f"{self.backend_url}/api/ai/cameras",
                 params={'active_only': True},
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=10
             )
             if resp.status_code == 200:
@@ -1475,6 +1428,7 @@ class AIService:
         try:
             resp = requests.get(
                 f"{self.backend_url}/api/ai/cameras/{camera_id}/config",
+                headers=SERVICE_AUTH_HEADERS,
                 timeout=5
             )
             if resp.status_code == 200:
